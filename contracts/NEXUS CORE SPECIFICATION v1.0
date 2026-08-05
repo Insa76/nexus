@@ -1,0 +1,163 @@
+# NEXUS CORE SPECIFICATION v1.0
+
+**Estado:** Aprobado (Sprint 1)
+**Versión:** 1.0
+**Documento:** Fundacional
+
+---
+
+# 1. Propósito
+
+NEXUS es una plataforma diseñada para reducir la fricción operativa dentro de las organizaciones.
+
+Su misión no es responder preguntas ni reemplazar personas. Su misión es transformar objetivos de negocio en trabajo ejecutado de forma segura, auditable y eficiente.
+
+NEXUS coordina personas, sistemas y capacidades para ejecutar procesos de trabajo independientemente de la tecnología utilizada en cada momento.
+
+La inteligencia artificial es un medio. Nunca es el producto.
+
+---
+
+# 2. Visión
+
+Toda empresa posee conocimiento distribuido entre personas, documentos y sistemas.
+
+Ese conocimiento suele estar fragmentado, generando pérdidas de tiempo, errores, duplicación de tareas y dependencia de personas específicas.
+
+NEXUS existe para convertir ese conocimiento distribuido en una operación coordinada.
+
+El éxito de NEXUS no se mide por la cantidad de conversaciones con la IA, sino por el tiempo recuperado para las personas.
+
+---
+
+# 3. Principios Fundamentales
+
+## Principio 1 — El Core es independiente de la tecnología
+
+El Core nunca depende de un modelo de IA, un proveedor, un sistema operativo o un framework específico.
+
+Toda tecnología utilizada debe poder reemplazarse sin modificar el Core.
+
+---
+
+## Principio 2 — El sistema trabaja sobre Objetivos
+
+Las interfaces pueden recibir voz, texto, eventos o llamadas API.
+
+Todo ingreso debe transformarse en un Objetivo normalizado antes de ingresar al Core.
+
+---
+
+## Principio 3 — Las capacidades son reemplazables
+
+El Core nunca conoce implementaciones concretas.
+
+Solo conoce contratos funcionales.
+
+Una misma capacidad puede poseer múltiples implementaciones.
+
+---
+
+## Principio 4 — Las decisiones son auditables
+
+Toda decisión relevante tomada por el sistema debe quedar registrada.
+
+Debe ser posible reconstruir posteriormente:
+
+* qué ocurrió;
+* por qué ocurrió;
+* qué políticas fueron aplicadas;
+* qué capacidades participaron;
+* cuál fue el resultado.
+
+---
+
+## Principio 5 — Las políticas gobiernan la ejecución
+
+Ninguna capacidad puede ejecutarse sin respetar las políticas definidas por la organización.
+
+Las políticas pertenecen al negocio, no a la implementación técnica.
+
+---
+
+## Principio 6 — El Core coordina, no ejecuta
+
+El Core nunca realiza trabajo especializado.
+
+Su responsabilidad consiste exclusivamente en coordinar la ejecución del trabajo.
+
+---
+
+## Principio 7 — El aprendizaje mejora procesos
+
+El conocimiento acumulado tiene como finalidad mejorar futuras ejecuciones.
+
+NEXUS no aprende para conversar mejor.
+
+Aprende para ejecutar mejor.
+
+---
+
+# 4. Pipeline Universal
+
+Todo objetivo debe atravesar exactamente el mismo ciclo.
+
+1. Observar
+2. Interpretar
+3. Decidir
+4. Planificar
+5. Ejecutar
+6. Validar
+7. Aprender
+
+Ningún flujo de negocio puede omitir este pipeline sin una decisión arquitectónica explícita.
+
+---
+
+# 5. Responsabilidades del Core
+
+El Core únicamente garantiza:
+
+* recibir entradas;
+* normalizarlas como Objetivos;
+* coordinar el pipeline;
+* solicitar planificación;
+* coordinar capacidades;
+* registrar decisiones;
+* actualizar la memoria operativa.
+
+Todo comportamiento adicional pertenece a componentes externos.
+
+---
+
+# 6. Lo que el Core nunca hará
+
+El Core nunca:
+
+* leerá PDFs;
+* enviará correos;
+* llamará directamente a un LLM;
+* accederá a un ERP;
+* conocerá Windows o Linux;
+* contendrá lógica específica de proveedores;
+* implementará reglas particulares de una empresa.
+
+Estas responsabilidades pertenecen a las capacidades o a sus implementaciones.
+
+---
+
+# 7. Definición de Éxito
+
+Una funcionalidad solo será considerada exitosa si demuestra una reducción medible de la fricción operativa.
+
+La métrica principal del producto es:
+
+**Minutos recuperados por persona por día.**
+
+Toda decisión futura deberá poder justificar cómo contribuye a mejorar esa métrica.
+
+---
+
+# 8. Lema del Proyecto
+
+**Cada línea de código debe devolver tiempo a alguien.**
