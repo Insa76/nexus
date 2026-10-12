@@ -21,6 +21,15 @@ class StepStatus(str, Enum):
 class PlanStep(BaseModel):
     """
     Representa un paso del plan.
+
+    Un paso puede declarar:
+
+    - depends_on: pasos que deben completarse antes
+    - consumes: artifacts que necesita como entrada
+    - produces: artifacts que genera como salida
+
+    Estas relaciones forman el contrato de ejecución
+    del paso.
     """
 
     id: str
@@ -33,20 +42,41 @@ class PlanStep(BaseModel):
 
     status: StepStatus = StepStatus.PENDING
 
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict = Field(
+        default_factory=dict
+    )
+
+    depends_on: list[str] = Field(
+        default_factory=list
+    )
+
+    consumes: list[str] = Field(
+        default_factory=list
+    )
+
+    produces: list[str] = Field(
+        default_factory=list
+    )
 
 
 class ExecutionPlan(BaseModel):
     """
     Plan generado para cumplir un Objective.
+
+    Los pasos forman una estructura de ejecución
+    basada en dependencias.
     """
 
     objective_id: str
 
-    steps: list[PlanStep] = Field(default_factory=list)
+    steps: list[PlanStep] = Field(
+        default_factory=list
+    )
 
     current_step: int = 0
 
     completed: bool = False
 
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict = Field(
+        default_factory=dict
+    )

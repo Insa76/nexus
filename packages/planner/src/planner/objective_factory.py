@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from packages.planner.src.planner.intent import Intent
-from packages.planner.src.planner.objective import Objective
+from planner.intent import Intent
+from planner.objective import Objective
 
 
 class ObjectiveFactory:
@@ -19,10 +19,13 @@ class ObjectiveFactory:
 
         return Objective(
 
-            id=str(uuid4()),
+    id=str(uuid4()),
 
-            title=intent.action,
+    title=intent.action,
 
-            metadata=intent.parameters.copy(),
+    metadata={
+        **intent.parameters,
+        "original_text": intent.original_text,
+    },
 
-        )
+)

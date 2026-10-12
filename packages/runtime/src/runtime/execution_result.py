@@ -16,8 +16,12 @@ class ExecutionResult(BaseModel):
 
     output: Any = None
 
-    artifacts: dict[str, Any] = Field(default_factory=dict)
+    artifacts: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )
 
     execution_time: float = 0.0

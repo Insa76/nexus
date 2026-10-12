@@ -1,0 +1,946 @@
+from pathlib import Path
+
+import pytest
+
+from documents import (
+    Document,
+    ArtifactStore,
+    ContentStore,
+    DocumentArtifact,
+    DocumentContentVersionStore,
+    DocumentIngestionRecordStore,
+    DocumentIngestionService,
+    DocumentContentVersion,
+    DocumentService,
+    DocumentStore,
+    DocumentContent,
+    IngestionRegistry,
+    LocalArtifactReader,
+    TextIngestor,
+    build_document_services,
+)
+
+
+def build_service() -> DocumentService:
+    document_store = DocumentStore()
+    artifact_store = ArtifactStore()
+    content_store = ContentStore()
+
+    registry = IngestionRegistry()
+    registry.register(
+        "text/plain",
+        TextIngestor(LocalArtifactReader()),
+    )
+
+    ingestion_service = DocumentIngestionService(registry)
+    ingestion_record_store = DocumentIngestionRecordStore()
+    content_version_store = DocumentContentVersionStore()
+
+    return DocumentService(
+        document_store=document_store,
+        artifact_store=artifact_store,
+        content_store=content_store,
+        ingestion_service=ingestion_service,
+        ingestion_record_store=ingestion_record_store,
+        content_version_store=content_version_store,
+    )
+
+
+def test_create_document():
+    service = build_service()
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        metadata={"category": "legal"},
+    )
+
+    assert document.id
+    assert document.name == "Contrato.txt"
+    assert document.metadata == {"category": "legal"}
+    assert service.document_store.get(document.id) is document
+
+
+def test_add_artifact():
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.txt",
+    )
+
+    result = service.add_artifact(artifact)
+
+    assert result is artifact
+    assert service.artifact_store.get(artifact.id) is artifact
+
+
+def test_ingest_document_end_to_end(tmp_path: Path):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido del contrato.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    result = service.ingest(document)
+
+    assert result is not None
+    assert result.document.id == document.id
+    assert result.artifact is artifact
+    assert result.content is not None
+    assert result.content.text == "Contenido del contrato."
+
+    stored_document = service.document_store.get(document.id)
+
+    assert stored_document is not None
+    assert stored_document.content_id == result.content.id
+
+
+def test_ingest_requires_artifact():
+    service = build_service()
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=f"Document has no artifact: {document.id}",
+    ):
+        service.ingest(document)
+
+
+def test_ingest_requires_existing_artifact():
+    service = build_service()
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id="missing-artifact",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Artifact not found: missing-artifact",
+    ):
+        service.ingest(document)
+
+
+def test_resolve_document():
+    service = build_service()
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+    )
+
+    result = service.resolve(document.id)
+
+    assert result is not None
+    assert result.document is document
+    assert result.artifact is None
+    assert result.content is None
+
+
+def test_resolve_unknown_document():
+    service = build_service()
+
+    assert service.resolve("missing-document") is None
+
+
+def test_document_services_register_text_ingestor():
+    services = build_document_services()
+
+    assert services.ingestion_registry.supports(
+        "text/plain"
+    )
+
+
+def test_document_services_expose_text_ingestor():
+    services = build_document_services()
+
+    ingestor = services.ingestion_registry.get(
+        "text/plain"
+    )
+
+    assert ingestor is not None
+    assert type(ingestor).__name__ == "TextIngestor"
+
+
+def test_document_services_report_text_plain_as_supported():
+    services = build_document_services()
+
+    assert services.access.supported_content_types() == [
+        "text/plain"
+    ]
+
+
+def test_document_services_can_ingest_local_text_document(
+    tmp_path,
+):
+    source = tmp_path / "nexus.txt"
+    source.write_text(
+        "Contenido generado por NEXUS.",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.document_service.add_artifact(
+        artifact
+    )
+
+    document = services.document_service.create_document(
+        name="nexus.txt",
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    resolution = services.document_service.ingest(
+        document
+    )
+
+    assert resolution is not None
+    assert resolution.document.content_id is not None
+    assert resolution.content is not None
+    assert resolution.content.text == (
+        "Contenido generado por NEXUS."
+    )
+
+
+def test_ingest_document_persists_ingestion_history(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido del contrato.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    result = service.ingest_with_validation(document)
+
+    history = service.list_ingestion_history(
+        document.id
+    )
+
+    assert result.content is not None
+
+    assert len(history) == 1
+
+    record = history[0]
+
+    assert record.document_id == document.id
+    assert record.artifact_id == artifact.id
+    assert record.content_id == result.content.id
+
+    assert record.declared_type.mime_type == "text/plain"
+    assert record.detected_type is None
+    assert record.detection_strategy is None
+    assert record.type_matches is None
+    assert record.type_mismatch is None
+
+
+def test_ingest_document_accumulates_ingestion_history(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    first_result = service.ingest_with_validation(document)
+
+    first_history = service.list_ingestion_history(
+        document.id
+    )
+
+    file_path.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    current_document = (
+        service.document_store.get(document.id)
+    )
+
+    assert current_document is not None
+
+    second_result = service.ingest_with_validation(
+        current_document
+    )
+
+    history = service.list_ingestion_history(
+        document.id
+    )
+
+    assert first_result.content is not None
+    assert second_result.content is not None
+
+    assert len(first_history) == 1
+    assert len(history) == 2
+
+    assert history[0].content_id == first_result.content.id
+    assert history[1].content_id == second_result.content.id
+
+    assert (
+        history[0].content_id
+        != history[1].content_id
+    )
+
+
+def test_ingest_document_creates_first_content_version(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    result = service.ingest_with_validation(
+        document
+    )
+
+    versions = (
+        service.content_version_store
+        .list_for_document(document.id)
+    )
+
+    assert result.content is not None
+    assert len(versions) == 1
+
+    version = versions[0]
+
+    assert version.version == 1
+    assert version.document_id == document.id
+    assert version.content_id == result.content.id
+    assert version.content_type.mime_type == "text/plain"
+
+
+def test_ingest_document_creates_next_content_version(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    first_result = service.ingest_with_validation(
+        document
+    )
+
+    file_path.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    current_document = service.document_store.get(
+        document.id
+    )
+
+    assert current_document is not None
+
+    second_result = service.ingest_with_validation(
+        current_document
+    )
+
+    versions = (
+        service.content_version_store
+        .list_for_document(document.id)
+    )
+
+    assert first_result.content is not None
+    assert second_result.content is not None
+
+    assert len(versions) == 2
+
+    assert versions[0].version == 1
+    assert versions[0].content_id == first_result.content.id
+
+    assert versions[1].version == 2
+    assert versions[1].content_id == second_result.content.id
+
+
+def test_ingest_document_preserves_previous_content_version(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service.add_artifact(artifact)
+
+    document = service.create_document(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    first_result = service.ingest_with_validation(
+        document
+    )
+
+    first_version = (
+        service.content_version_store
+        .list_for_document(document.id)[0]
+    )
+
+    file_path.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    current_document = service.document_store.get(
+        document.id
+    )
+
+    assert current_document is not None
+
+    second_result = service.ingest_with_validation(
+        current_document
+    )
+
+    versions = (
+        service.content_version_store
+        .list_for_document(document.id)
+    )
+
+    assert first_result.content is not None
+    assert second_result.content is not None
+
+    assert len(versions) == 2
+
+    assert versions[0] is first_version
+    assert versions[0].version == 1
+    assert versions[0].content_id == first_result.content.id
+
+    assert versions[1].version == 2
+    assert versions[1].content_id == second_result.content.id
+
+def test_remove_document_cleans_associated_records(
+    tmp_path: Path,
+):
+    source = tmp_path / "contract.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+    service = services.document_service
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.artifact_store.add(artifact)
+
+    document = service.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    service.ingest(document)
+
+    source.write_text(
+        "Vigencia: 24 meses.",
+        encoding="utf-8",
+    )
+
+    current_document = services.document_store.get(
+        document.id
+    )
+
+    assert current_document is not None
+
+    service.ingest(current_document)
+
+    versions = (
+        services.content_version_store.list_for_document(
+            document.id
+        )
+    )
+
+    ingestion_history = (
+        services.ingestion_record_store.list_for_document(
+            document.id
+        )
+    )
+
+    assert len(versions) == 2
+    assert len(ingestion_history) == 2
+
+    removed = service.remove_document(
+        document.id
+    )
+
+    assert removed is not None
+    assert removed.id == document.id
+
+    assert services.document_store.get(
+        document.id
+    ) is None
+
+    assert (
+        services.content_version_store.list_for_document(
+            document.id
+        )
+        == []
+    )
+
+    assert (
+        services.ingestion_record_store.list_for_document(
+            document.id
+        )
+        == []
+    )
+
+    assert services.artifact_store.get(
+        artifact.id
+    ) is artifact
+
+    assert services.content_store.get(
+        removed.content_id
+    ) is not None
+
+def test_remove_document_returns_none_when_missing():
+    service = build_service()
+
+    result = service.remove_document(
+        "missing-document"
+    )
+
+    assert result is None
+
+def test_list_documents_for_user_delegates_to_store():
+    service = build_service()
+
+    document = service.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    result = service.list_documents_for_user("user-a")
+
+    assert result == [document]
+
+
+def test_list_documents_for_organization_delegates_to_store():
+    service = build_service()
+
+    document = service.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        organization_id="organization-a",
+    )
+
+    result = service.list_documents_for_organization(
+        "organization-a"
+    )
+
+    assert result == [document]
+
+
+def test_list_documents_for_project_delegates_to_store():
+    service = build_service()
+
+    document = service.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        project_id="project-a",
+    )
+
+    result = service.list_documents_for_project(
+        "project-a"
+    )
+
+    assert result == [document]
+
+def test_list_documents_for_context_delegates_to_store():
+    service = build_service()
+
+    document = service.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    result = service.list_documents_for_context(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    assert result == [document]
+
+def test_document_service_get_document_returns_existing_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Contrato",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+    )
+
+    result = services.access.get_document(
+        document.id,
+    )
+
+    assert result == document
+
+
+def test_document_service_get_document_returns_none_for_unknown_document():
+    services = build_document_services()
+
+    result = services.access.get_document(
+        "missing-document",
+    )
+
+    assert result is None
+
+def test_document_service_update_document_replaces_existing_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Contrato",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+    )
+
+    updated = Document(
+        id=document.id,
+        name="Contrato actualizado",
+        mime_type=document.mime_type,
+        source=document.source,
+        description=document.description,
+        user_id=document.user_id,
+        organization_id=document.organization_id,
+        project_id=document.project_id,
+        artifact_id=document.artifact_id,
+        content_id=document.content_id,
+        metadata=document.metadata,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+        ingestion_evidence=document.ingestion_evidence,
+    )
+
+    result = services.access.update_document(updated)
+
+    assert result == updated
+    assert services.access.get_document(document.id) == updated
+
+def test_document_service_update_document_rejects_unknown_document():
+    services = build_document_services()
+
+    document = Document.create(
+        name="Contrato",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+    )
+
+    try:
+        services.access.update_document(document)
+    except KeyError:
+        pass
+    else:
+        raise AssertionError("Expected KeyError")
+
+def test_document_service_count_documents_returns_number_of_documents():
+    services = build_document_services()
+
+    assert services.access.count_documents() == 0
+
+    services.access.create_document(
+        name="Documento 1",
+        mime_type="text/plain",
+        source="documento-1.txt",
+    )
+
+    services.access.create_document(
+        name="Documento 2",
+        mime_type="text/plain",
+        source="documento-2.txt",
+    )
+
+    assert services.access.count_documents() == 2
+
+def test_document_service_list_documents_returns_all_documents():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Documento 1",
+        mime_type="text/plain",
+        source="documento-1.txt",
+    )
+
+    second = services.access.create_document(
+        name="Documento 2",
+        mime_type="text/plain",
+        source="documento-2.txt",
+    )
+
+    result = services.access.list_documents()
+
+    assert result == [first, second]
+
+def test_document_service_get_artifact_returns_existing_artifact():
+    services = build_document_services()
+
+    artifact = DocumentArtifact.create(
+        location="local:contrato.pdf",
+    )
+
+    services.access.add_artifact(artifact)
+
+    result = services.access.get_artifact(
+        artifact.id,
+    )
+
+    assert result == artifact
+
+
+def test_document_service_get_artifact_returns_none_for_unknown_artifact():
+    services = build_document_services()
+
+    result = services.access.get_artifact(
+        "missing-artifact",
+    )
+
+    assert result is None
+
+def test_document_service_get_content_returns_existing_content():
+    services = build_document_services()
+
+    content = DocumentContent.create(
+        text="Contenido del documento.",
+        content_type="text/plain",
+    )
+
+    services.content_store.add(content)
+
+    result = services.access.get_content(
+        content.id,
+    )
+
+    assert result == content
+
+
+def test_document_service_get_content_returns_none_for_unknown_content():
+    services = build_document_services()
+
+    result = services.access.get_content(
+        "missing-content",
+    )
+
+    assert result is None
+
+def test_document_service_list_versions_returns_document_versions():
+    services = build_document_services()
+
+    first = DocumentContentVersion.create(
+        document_id="document-a",
+        content_id="content-1",
+        content_type="text/plain",
+        version=1,
+    )
+
+    second = DocumentContentVersion.create(
+        document_id="document-a",
+        content_id="content-2",
+        content_type="text/plain",
+        version=2,
+    )
+
+    unrelated = DocumentContentVersion.create(
+        document_id="document-b",
+        content_id="content-3",
+        content_type="text/plain",
+        version=1,
+    )
+
+    services.content_version_store.add(first)
+    services.content_version_store.add(second)
+    services.content_version_store.add(unrelated)
+
+    result = services.access.list_versions(
+        "document-a",
+    )
+
+    assert result == [first, second]
+
+
+def test_document_service_list_versions_returns_empty_for_unknown_document():
+    services = build_document_services()
+
+    result = services.access.list_versions(
+        "missing-document",
+    )
+
+    assert result == []
+
+def test_document_service_get_version_returns_existing_version():
+    services = build_document_services()
+
+    version = DocumentContentVersion.create(
+        document_id="document-a",
+        content_id="content-1",
+        content_type="text/plain",
+        version=1,
+    )
+
+    services.content_version_store.add(version)
+
+    result = services.access.get_version(
+        version.id,
+    )
+
+    assert result == version
+
+
+def test_document_service_get_version_returns_none_for_unknown_version():
+    services = build_document_services()
+
+    result = services.access.get_version(
+        "missing-version",
+    )
+
+    assert result is None
+
+def test_document_service_get_latest_version_returns_latest_document_version():
+    services = build_document_services()
+
+    first = DocumentContentVersion.create(
+        document_id="document-a",
+        content_id="content-1",
+        content_type="text/plain",
+        version=1,
+    )
+
+    latest = DocumentContentVersion.create(
+        document_id="document-a",
+        content_id="content-2",
+        content_type="text/plain",
+        version=2,
+    )
+
+    services.content_version_store.add(first)
+    services.content_version_store.add(latest)
+
+    result = services.access.get_latest_version(
+        "document-a",
+    )
+
+    assert result == latest
+
+
+def test_document_service_get_latest_version_returns_none_for_unknown_document():
+    services = build_document_services()
+
+    result = services.access.get_latest_version(
+        "missing-document",
+    )
+
+    assert result is None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from actions.base import Action
+from providers.tool import Tool
 
 
 class ActionRegistry:
@@ -53,6 +54,54 @@ class ActionRegistry:
 
         return sorted(
             self._actions.keys()
+        )
+
+    def describe(self) -> list[Tool]:
+        """
+        Devuelve una descripción de las Actions
+        internas de NEXUS.
+
+        La descripción incluye los artifacts que
+        cada Action consume y produce.
+        """
+
+        tools: list[Tool] = []
+
+        for action in self._actions.values():
+
+            if not action.internal:
+                continue
+
+            description = (
+                action.description
+                if action.description
+                else (
+                    f"Capacidad interna: "
+                    f"{action.name}"
+                )
+            )
+
+            tools.append(
+                Tool(
+                    name=f"nexus.{action.name}",
+                    description=description,
+                    provider="nexus",
+                    action=action.name,
+                    parameters=dict(
+                        action.parameters
+                    ),
+                    produces=list(
+                        action.produces
+                    ),
+                    consumes=list(
+                        action.consumes
+                    ),
+                )
+            )
+
+        return sorted(
+            tools,
+            key=lambda tool: tool.name,
         )
 
     def clear(self) -> None:

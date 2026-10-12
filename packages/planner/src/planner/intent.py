@@ -9,6 +9,14 @@ class Intent(BaseModel):
     """
     Representa una intención detectada
     a partir de una solicitud del usuario.
+
+    Una Intent puede representar:
+
+    - una acción simple
+    - una secuencia de sub-intenciones
+
+    Las intenciones simples mantienen exactamente
+    el comportamiento anterior.
     """
 
     action: str
@@ -20,3 +28,16 @@ class Intent(BaseModel):
     )
 
     original_text: str
+
+    sub_intents: list["Intent"] = Field(
+        default_factory=list
+    )
+
+    @property
+    def is_compound(self) -> bool:
+        """
+        Indica si la intención contiene
+        múltiples intenciones ejecutables.
+        """
+
+        return len(self.sub_intents) > 0

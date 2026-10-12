@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from packages.planner.src.planner.objective import Objective
-from packages.planner.src.planner.plan import ExecutionPlan
-from packages.planner.src.planner.planner import Planner
+from planner.objective import Objective
+from planner.plan import ExecutionPlan
+from planner.planner import Planner
 
 
 class PlannerService:

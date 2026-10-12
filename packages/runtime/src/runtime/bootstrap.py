@@ -1,26 +1,36 @@
 from __future__ import annotations
 
-from packages.core.src.core.kernel import Kernel
+from core.kernel import Kernel
 
-from packages.runtime.src.runtime.runtime import Runtime
+from runtime.runtime import Runtime
+from runtime.executor import Executor
 
-from packages.actions.src.actions.registry import CapabilityRegistry
-from packages.actions.src.actions.manager import CapabilityManager
+from actions.registry import CapabilityRegistry
+from actions.manager import CapabilityManager
 
-from packages.actions.src.actions.echo import EchoCapability
-from packages.actions.src.actions.open_app import OpenAppCapability
-from packages.runtime.src.runtime.executor import Executor
+from actions.echo import EchoCapability
+from actions.open_app import OpenAppCapability
+
+from providers.tool_registry import ToolRegistry
 
 
 class Bootstrap:
     """
     Inicializa todos los componentes principales
-    del Runtime.
+    de NEXUS.
     """
 
     def build(self) -> Runtime:
 
+        #
+        # Kernel
+        #
+
         kernel = Kernel()
+
+        #
+        # Runtime
+        #
 
         runtime = Runtime(
             kernel=kernel,
@@ -40,20 +50,33 @@ class Bootstrap:
             OpenAppCapability()
         )
 
+        #
+        # Capability Manager
+        #
+
         manager = CapabilityManager(
             registry
         )
 
+        #
+        # Configure Runtime
+        #
+
+        runtime.configure_capabilities(
+            registry,
+            manager,
+        )
+
+        #
+        # Executor
+        #
+
         executor = Executor(
-          manager
+            manager
         )
 
         runtime.configure_executor(
-          executor
+            executor
         )
-
-        runtime.capability_registry = registry
-
-        runtime.capability_manager = manager
 
         return runtime

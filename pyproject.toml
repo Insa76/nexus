@@ -8,4 +8,25 @@ members = [
     "packages/runtime",
     "packages/bootstrap",
     "packages/engine",
+    "packages/providers",
+    "packages/memory",
+    "packages/response",
+    "packages/presence",
+    "packages/context",
+    "packages/tasks",
+    "packages/documents",
+    "packages/processes",
+    "packages/rules",
+    "packages/security",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+python_classes = ["Test*"]
+python_files = ["test_*.py"]

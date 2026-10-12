@@ -14,6 +14,8 @@ from runtime.execution_result import ExecutionResult
 from actions.registry import ActionRegistry
 from actions.manager import ActionManager
 
+from providers.tool_registry import ToolRegistry
+
 
 class Runtime:
     """
@@ -50,12 +52,40 @@ class Runtime:
 
         self.action_manager: ActionManager | None = None
 
+        self.tool_registry: ToolRegistry | None = None
+
         self.executor: Executor | None = None
+
+    def configure_actions(
+        self,
+        registry: ActionRegistry,
+        manager: ActionManager,
+    ) -> None:
+        """
+        Configura el sistema de Actions.
+        """
+
+        self.action_registry = registry
+
+        self.action_manager = manager
+
+    def configure_tools(
+        self,
+        registry: ToolRegistry,
+    ) -> None:
+        """
+        Configura el registro de herramientas.
+        """
+
+        self.tool_registry = registry
 
     def configure_executor(
         self,
         executor: Executor,
     ) -> None:
+        """
+        Configura el Executor.
+        """
 
         self.executor = executor
 
@@ -68,6 +98,7 @@ class Runtime:
         """
 
         if self.executor is None:
+
             raise RuntimeError(
                 "Runtime executor has not been configured."
             )
@@ -97,15 +128,3 @@ class Runtime:
             name,
             service,
         )
-
-    def configure_actions(
-        self,
-        registry: ActionRegistry,
-        manager: ActionManager,
-    ) -> None:
-        """
-        Registra el sistema de Actions del Runtime.
-        """
-
-        self.action_registry = registry
-        self.action_manager = manager

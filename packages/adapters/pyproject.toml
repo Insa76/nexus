@@ -5,15 +5,13 @@ description = "NEXUS Adapters"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "comtypes>=1.4.16",
+    "mss>=10.2.0",
+    "pillow>=12.3.0",
     "psutil>=7.2.2",
+    "pycaw>=20251023",
 ]
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
 build-backend = "uv_build"
-
-dependencies = [
-    "mss",
-    "pillow",
-    "psutil",
-]
