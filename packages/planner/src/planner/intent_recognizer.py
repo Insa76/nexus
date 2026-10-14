@@ -501,6 +501,7 @@ class IntentRecognizer:
 
         unmute_patterns = (
             r"\bactiv[aá]\s+el\s+sonido\b",
+            r"\bactiv[aá]\s+nuevamente\s+el\s+sonido\b",
             r"\bquit[aá]\s+el\s+silencio\b",
             r"\bquit[aá]le\s+el\s+mute\b",
             r"\bsac[aá]le\s+el\s+mute\b",

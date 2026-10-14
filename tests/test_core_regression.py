@@ -644,3 +644,36 @@ async def test_process_list(engine):
     )
 
     print("      OK")
+
+
+async def test_unmute_windows(engine):
+    print("Regresión: restaurar sonido de Windows")
+
+    result = await execute(
+        engine,
+        "Activa nuevamente el sonido de Windows.",
+    )
+
+    check(
+        result.success,
+        f"Falló restaurar el sonido: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        f"El output de restaurar sonido no es un diccionario: {output}",
+    )
+
+    check(
+        output.get("status") == "unmuted",
+        f"El sonido no quedó activado: {output}",
+    )
+
+    check(
+        output.get("muted") is False,
+        f"Windows continúa silenciado: {output}",
+    )
+
+    print("      OK")
