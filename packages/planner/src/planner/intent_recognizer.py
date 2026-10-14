@@ -903,6 +903,8 @@ class IntentRecognizer:
             r"\bque procesos se estan ejecutando\b",
             r"\bqué procesos están ejecutándose\b",
             r"\bque procesos estan ejecutandose\b",
+            r"\blista los procesos\b",
+            r"\blista los procesos que están ejecutándose actualmente\b",
 
             # Programas
             r"\bqué programas están abiertos\b",

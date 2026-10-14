@@ -606,3 +606,41 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+async def test_process_list(engine):
+    print("Regresión: listar procesos de Windows")
+
+    result = await execute(
+        engine,
+        "Lista los procesos que están ejecutándose actualmente en Windows.",
+    )
+
+    check(
+        result.success,
+        f"Falló listar procesos: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        f"El output de procesos no es un diccionario: {output}",
+    )
+
+    check(
+        output.get("status") == "ok",
+        f"La acción de listar procesos no terminó correctamente: {output}",
+    )
+
+    check(
+        isinstance(output.get("processes"), list),
+        f"No se recibió una lista de procesos: {output}",
+    )
+
+    check(
+        output.get("count") == len(output["processes"]),
+        f"El contador no coincide con la lista de procesos: {output}",
+    )
+
+    print("      OK")
