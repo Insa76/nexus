@@ -34,7 +34,8 @@ def test_router_invokes_process_cognitive_capability():
 
     result = router.invoke(
         invocation,
-        context=context,
+        context={},
+        assistant_context=context,
     )
 
     assert result is process_access.find_relevant.return_value

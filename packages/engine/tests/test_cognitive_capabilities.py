@@ -1,3 +1,4 @@
+
 from unittest.mock import MagicMock
 
 from documents.cognitive import DocumentCognitiveAccess
@@ -10,6 +11,7 @@ def test_cognitive_capability_router_uses_document_access():
     )
 
     expected = MagicMock()
+    context = MagicMock()
     document_access.find_relevant.return_value = expected
 
     router = CognitiveCapabilityRouter(
@@ -17,7 +19,7 @@ def test_cognitive_capability_router_uses_document_access():
     )
 
     result = router.find_relevant_documents(
-        context=MagicMock(),
+        context=context,
         name="manual.pdf",
         mime_type="application/pdf",
         offset=0,
@@ -27,9 +29,7 @@ def test_cognitive_capability_router_uses_document_access():
     assert result is expected
 
     document_access.find_relevant.assert_called_once_with(
-        context=router.find_relevant_documents.call_args
-        if False
-        else document_access.find_relevant.call_args.kwargs["context"],
+        context=context,
         name="manual.pdf",
         mime_type="application/pdf",
         offset=0,

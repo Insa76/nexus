@@ -453,6 +453,7 @@ class CognitiveCapabilityRouter:
         invocation: CognitiveCapabilityInvocation,
         *,
         context: object,
+        assistant_context: object | None = None,
     ) -> (
         DocumentCognitiveResult
         | ProcessCognitiveResult
@@ -497,8 +498,13 @@ class CognitiveCapabilityRouter:
                 )
 
             if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.find_relevant requires 'assistant_context'."
+                    )
+
                 return self._process_access.find_relevant(
-                    context=context,
+                    context=assistant_context,
                 )
 
             if invocation.operation == "get":
@@ -526,8 +532,13 @@ class CognitiveCapabilityRouter:
                 )
 
             if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.find_relevant requires 'assistant_context'."
+                    )
+
                 return self._rule_access.find_relevant(
-                    context=context,
+                    context=assistant_context,
                 )
 
             if invocation.operation == "get":

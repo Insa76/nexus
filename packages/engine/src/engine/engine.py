@@ -98,6 +98,8 @@ class Engine:
         self._cognitive_capability_router = cognitive_capability_router
         self._process_capability = process_capability
         self._process_cognitive_access = process_cognitive_access
+        self._rule_capability = rule_capability
+        self._rule_cognitive_access = rule_cognitive_access
         self._default_actor_id = default_actor_id
         self._default_actor_type = default_actor_type
         self._objective_factory = ObjectiveFactory()
@@ -487,22 +489,24 @@ class Engine:
                 self._cognitive_capability_router.invoke(
                     cognitive_capability,
                     context=memory_context,
+                    assistant_context=self._assistant_context,
                 )
             )
 
             self._memory.add(
-    "cognitive_capability_result",
-    {
-        "operation": cognitive_capability.operation,
-        "result": cognitive_capability_result,
-    },
-)
+                "cognitive_capability_result",
+                {
+                    "operation": cognitive_capability.operation,
+                    "result": cognitive_capability_result,
+                },
+            )
 
             cognitive_capability_summary = (
-    self._cognitive_capability_router.summarize_operation_result(
-        result=cognitive_capability_result,
-    )
-)
+                self._cognitive_capability_router.summarize_operation_result(
+                    result=cognitive_capability_result,
+                    operation=cognitive_capability.operation,
+                )
+            )
 
             memory_context = {
     **memory_context,

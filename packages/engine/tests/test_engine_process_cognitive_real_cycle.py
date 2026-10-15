@@ -1,10 +1,10 @@
-import pytest
 
 from context import AssistantContext
-from processes.capability import ProcessCapability
-from processes.cognitive import ProcessCognitiveAccess
-from processes.resolver import ProcessResolver
-from processes.store import ProcessStore
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from rules.capability import RuleCapability
+from rules.cognitive import RuleCognitiveAccess
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
 
 
 class User:
@@ -12,30 +12,55 @@ class User:
         self.id = user_id
 
 
-@pytest.mark.asyncio
-async def test_engine_executes_real_process_cognitive_cycle():
-    store = ProcessStore()
-    resolver = ProcessResolver(store)
-    capability = ProcessCapability(
+def test_router_executes_real_rule_cognitive_cycle():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+    capability = RuleCapability(
         store=store,
         resolver=resolver,
     )
-    cognitive_access = ProcessCognitiveAccess(capability)
+    cognitive_access = RuleCognitiveAccess(capability)
+    router = CognitiveCapabilityRouter(
+        rule_access=cognitive_access,
+    )
 
-    process = capability.create(
-        name="Proceso de prueba",
-        description="Proceso relevante para el contexto actual.",
+    rule = capability.create(
+        name="Regla de prueba",
+        description="Regla relevante para el contexto actual.",
         user_id="user-1",
     )
 
     context = AssistantContext(
         user=User("user-1"),
         organization=None,
-        projects=[],
+        projects=(),
     )
 
-    result = cognitive_access.find_relevant(context=context)
+    invocation = router.select(
+        action="rules.find_relevant",
+        parameters={},
+    )
 
-    assert result.processes == (process,)
-    assert result.metadata["operation"] == "processes.find_relevant"
+    assert invocation is not None
+    assert invocation.capability == "rules"
+    assert invocation.operation == "find_relevant"
+
+    result = router.invoke(
+        invocation,
+        context=context,
+         assistant_context=context,
+    )
+
+    assert result.rules == (rule,)
+    assert result.metadata["operation"] == "rules.find_relevant"
     assert result.metadata["count"] == 1
+
+    summary = router.summarize_operation_result(
+        result,
+        operation=invocation.operation,
+    )
+
+    assert summary["operation"] == "rules.find_relevant"
+    assert summary["result_count"] == 1
+    assert summary["has_results"] is True
+    assert summary["status"] == "found"
