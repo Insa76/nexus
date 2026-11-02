@@ -33,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 # Serializamos las ejecuciones para evitar que
 # dos solicitudes modifiquen la memoria simultáneamente.
 engine_lock = threading.Lock()
+assistant_loop: asyncio.AbstractEventLoop | None = None
 
 
 print()
@@ -347,8 +348,8 @@ class NexusHandler(BaseHTTPRequestHandler):
         )
 
         message = (
-            f"event: {event}\\n"
-            f"data: {payload}\\n\\n"
+            f"event: {event}\n"
+            f"data: {payload}\n\n"
         ).encode("utf-8")
 
         self.wfile.write(message)
@@ -391,7 +392,7 @@ class NexusHandler(BaseHTTPRequestHandler):
                     # Keep-alive para mantener abierta
                     # la conexión SSE.
                     self.wfile.write(
-                        b": keep-alive\\n\\n"
+                        b": keep-alive\n\n"
                     )
                     self.wfile.flush()
 
@@ -755,37 +756,75 @@ class NexusHandler(BaseHTTPRequestHandler):
             return
 
         try:
-
             # -------------------------------------------------
             # BODY
             # -------------------------------------------------
 
-            content_length = int(
-                self.headers.get(
-                    "Content-Length",
-                    "0",
+            try:
+                content_length = int(
+                    self.headers.get(
+                        "Content-Length",
+                        "0",
+                    )
                 )
-            )
-            if content_length <= 0:
+            except (TypeError, ValueError):
                 self._send_json(
-                    {"success": False, "message": "El cuerpo JSON es obligatorio."},
+                    {
+                        "success": False,
+                        "message": "Content-Length inválido.",
+                    },
                     status=400,
                 )
                 return
+
+            if content_length <= 0:
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": "El cuerpo JSON es obligatorio.",
+                    },
+                    status=400,
+                )
+                return
+
             if content_length > MAX_REQUEST_BODY_BYTES:
                 self._send_json(
-                    {"success": False, "message": "El cuerpo supera el límite de 1 MiB."},
+                    {
+                        "success": False,
+                        "message": "El cuerpo supera el límite de 1 MiB.",
+                    },
                     status=413,
                 )
                 return
 
-            body = self.rfile.read(
-                content_length
-            )
+            body = self.rfile.read(content_length)
 
-            payload = json.loads(
-                body.decode("utf-8")
-            )
+            try:
+                payload = json.loads(
+                    body.decode("utf-8")
+                )
+            except (
+                json.JSONDecodeError,
+                UnicodeDecodeError,
+            ):
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": "El cuerpo debe contener JSON válido.",
+                    },
+                    status=400,
+                )
+                return
+
+            if not isinstance(payload, dict):
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": "El cuerpo debe ser un objeto JSON.",
+                    },
+                    status=400,
+                )
+                return
 
             text = payload.get("text")
 
@@ -793,55 +832,65 @@ class NexusHandler(BaseHTTPRequestHandler):
             # VALIDATION
             # -------------------------------------------------
 
-            if not isinstance(
-                text,
-                str,
-            ):
-
+            if not isinstance(text, str):
                 self._send_json(
                     {
                         "success": False,
-                        "message": (
-                            "El campo 'text' "
-                            "es obligatorio."
-                        ),
+                        "message": "El campo 'text' es obligatorio.",
                     },
-                    400,
+                    status=400,
                 )
-
                 return
 
             text = text.strip()
 
             if not text:
-
                 self._send_json(
                     {
                         "success": False,
-                        "message": (
-                            "La instrucción "
-                            "no puede estar vacía."
-                        ),
+                        "message": "La instrucción no puede estar vacía.",
                     },
-                    400,
+                    status=400,
                 )
-
                 return
 
             # -------------------------------------------------
             # EXECUTION
             # -------------------------------------------------
 
-            with engine_lock:
+            if (
+                assistant_loop is None
+                or not assistant_loop.is_running()
+            ):
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": "El runtime asíncrono no está disponible.",
+                    },
+                    status=503,
+                )
+                return
 
-                # Memoria antes
-                memory_before = (
-                    engine.memory.count()
+            with engine_lock:
+                memory_before = engine.memory.count()
+
+                future = asyncio.run_coroutine_threadsafe(
+                    engine.execute(text),
+                    assistant_loop,
                 )
 
-                # Ejecutar NEXUS
-                result = asyncio.run(
-                    engine.execute(text)
+                result = future.result()
+
+                memory_after = engine.memory.count()
+
+                all_entries = engine.memory.all()
+
+                execution_entries = all_entries[
+                    memory_before:memory_after
+                ]
+
+                trace = self._build_trace(
+                    execution_entries
                 )
 
                 # Memoria después
@@ -1010,12 +1059,13 @@ class NexusHandler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    global assistant_loop
+
     server = ThreadingHTTPServer(
         (HOST, PORT),
         NexusHandler,
     )
 
-    # Bucle asyncio persistente para los servicios del asistente.
     assistant_loop = asyncio.new_event_loop()
 
     def run_assistant_loop() -> None:

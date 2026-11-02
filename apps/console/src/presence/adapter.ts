@@ -1,4 +1,4 @@
-import { mockPresence } from "./mockPresence";
+
 import type {
   NexusPresenceEvent,
   NexusPresenceState,
@@ -21,8 +21,23 @@ const PRESENCE_EVENTS_URL =
 
 const POLL_INTERVAL_MS = 1000;
 
+const initialPresence: NexusPresenceStateModel = {
+  state: "idle",
+  request: null,
+  context: null,
+  intent: null,
+  decision: null,
+  objective: null,
+  plan: null,
+  execution: null,
+  verification: null,
+  memory: null,
+  learning: null,
+  events: [],
+};
+
 class HttpPresenceAdapter implements PresenceAdapter {
-  private state: NexusPresenceStateModel = mockPresence;
+  private state: NexusPresenceStateModel = initialPresence;
 
   private listeners = new Set<
     (state: NexusPresenceStateModel) => void
@@ -37,16 +52,8 @@ class HttpPresenceAdapter implements PresenceAdapter {
 
   private sseConnected = false;
 
-  /*
-   * Timestamp of the first presence event of the current
-   * cognitive cycle.
-   */
   private currentCycleStartedAt: string | null = null;
 
-  /*
-   * Presence events belonging exclusively to the current
-   * cognitive cycle.
-   */
   private currentCycleEvents: NexusPresenceEvent[] = [];
 
   getCurrentState(): NexusPresenceStateModel {
@@ -99,18 +106,14 @@ class HttpPresenceAdapter implements PresenceAdapter {
       eventSource.addEventListener(
         "presence",
         (event) => {
-          this.handlePresenceEvent(event);
+          this.handlePresenceEvent(
+            event as MessageEvent<string>,
+          );
         },
       );
 
       eventSource.onerror = () => {
         this.sseConnected = false;
-
-        /*
-         * EventSource automatically attempts to reconnect.
-         *
-         * HTTP snapshot polling remains available as fallback.
-         */
       };
     } catch {
       this.sseConnected = false;
@@ -158,13 +161,6 @@ class HttpPresenceAdapter implements PresenceAdapter {
         payload.timestamp ??
         new Date().toISOString();
 
-      /*
-       * LISTENING marks the beginning of a new cognitive
-       * cycle.
-       *
-       * Everything that was previously visible in the
-       * timeline belongs to an older cycle.
-       */
       if (state === "listening") {
         this.startNewCycle(timestamp);
       }
@@ -175,15 +171,11 @@ class HttpPresenceAdapter implements PresenceAdapter {
           .slice(2, 8)}`,
         type: state,
         timestamp,
-        message:
-          payload.message ??
-          undefined,
+        message: payload.message ?? undefined,
         data: payload.data,
       };
 
-      this.addCurrentCycleEvent(
-        presenceEvent,
-      );
+      this.addCurrentCycleEvent(presenceEvent);
 
       this.state = {
         ...this.state,
@@ -193,13 +185,6 @@ class HttpPresenceAdapter implements PresenceAdapter {
 
       this.emit();
 
-      /*
-       * Terminal states trigger a complete snapshot refresh.
-       *
-       * The snapshot supplies objective, plan, execution,
-       * verification, memory and learning details while the
-       * current-cycle SSE events remain the timeline source.
-       */
       if (
         state === "completed" ||
         state === "failed"
@@ -207,15 +192,11 @@ class HttpPresenceAdapter implements PresenceAdapter {
         void this.refresh();
       }
     } catch {
-      /*
-       * Invalid SSE payloads must never break the adapter.
-       */
+      // Un evento SSE inválido no debe interrumpir el adapter.
     }
   }
 
-  private startNewCycle(
-    timestamp: string,
-  ): void {
+  private startNewCycle(timestamp: string): void {
     this.currentCycleStartedAt = timestamp;
     this.currentCycleEvents = [];
   }
@@ -223,15 +204,12 @@ class HttpPresenceAdapter implements PresenceAdapter {
   private addCurrentCycleEvent(
     event: NexusPresenceEvent,
   ): void {
-    const exists =
-      this.currentCycleEvents.some(
-        (existing) =>
-          existing.timestamp ===
-            event.timestamp &&
-          existing.type === event.type &&
-          existing.message ===
-            event.message,
-      );
+    const exists = this.currentCycleEvents.some(
+      (existing) =>
+        existing.timestamp === event.timestamp &&
+        existing.type === event.type &&
+        existing.message === event.message,
+    );
 
     if (exists) {
       return;
@@ -260,11 +238,7 @@ class HttpPresenceAdapter implements PresenceAdapter {
       "recovering",
     ];
 
-    if (
-      states.includes(
-        value as NexusPresenceState,
-      )
-    ) {
+    if (states.includes(value as NexusPresenceState)) {
       return value as NexusPresenceState;
     }
 
@@ -319,24 +293,15 @@ class HttpPresenceAdapter implements PresenceAdapter {
         (await response.json()) as NexusPresenceStateModel;
 
       if (
-        !this.shouldAcceptSnapshot(
-          nextState,
-        )
+        !this.isValidSnapshot(nextState) ||
+        !this.shouldAcceptSnapshot(nextState)
       ) {
         return;
       }
 
-      /*
-       * Preserve the SSE event timeline whenever a current
-       * cycle exists.
-       *
-       * The snapshot is still responsible for all the richer
-       * cognitive data.
-       */
-      const events =
-        this.resolveSnapshotEvents(
-          nextState,
-        );
+      const events = this.resolveSnapshotEvents(
+        nextState,
+      );
 
       this.state = {
         ...nextState,
@@ -345,118 +310,82 @@ class HttpPresenceAdapter implements PresenceAdapter {
 
       this.emit();
     } catch {
-      /*
-       * Preserve the last known state.
-       */
+      // Conservamos el último estado real recibido.
+      // Nunca inventamos una ejecución exitosa.
     } finally {
       this.refreshing = false;
     }
   }
 
-  private resolveSnapshotEvents(
-    nextState: NexusPresenceStateModel,
-  ): NexusPresenceEvent[] {
-    /*
-     * Once an SSE cycle has started, Presence events are the
-     * authoritative source for the live/current timeline.
-     */
-    if (
-      this.currentCycleStartedAt !== null
-    ) {
-      return this.currentCycleEvents;
+  private isValidSnapshot(
+    value: unknown,
+  ): value is NexusPresenceStateModel {
+    if (!value || typeof value !== "object") {
+      return false;
     }
 
-    /*
-     * Before the first live cycle exists, use the snapshot.
-     *
-     * The snapshot may contain multiple historical cognitive
-     * cycles. Keep only the latest one so the console timeline
-     * represents the current cognitive cycle rather than
-     * historical runtime activity.
-     */
-    return this.filterToLatestSnapshotCycle(
-      nextState,
+    const snapshot = value as Record<string, unknown>;
+
+    return (
+      typeof snapshot.state === "string" &&
+      Array.isArray(snapshot.events)
     );
   }
 
-  private filterToLatestSnapshotCycle(
-  presence: NexusPresenceStateModel,
-): NexusPresenceEvent[] {
-  if (presence.events.length === 0) {
-    return [];
+  private resolveSnapshotEvents(
+    nextState: NexusPresenceStateModel,
+  ): NexusPresenceEvent[] {
+    if (this.currentCycleStartedAt !== null) {
+      return this.currentCycleEvents;
+    }
+
+    return this.filterToLatestSnapshotCycle(nextState);
   }
 
-  /*
-   * Preferred boundary:
-   *
-   * The runtime stores the user request timestamp.
-   * When available, it represents the beginning of the
-   * latest request/cognitive cycle.
-   */
-  const requestTimestamp =
-    presence.request?.timestamp;
+  private filterToLatestSnapshotCycle(
+    presence: NexusPresenceStateModel,
+  ): NexusPresenceEvent[] {
+    if (presence.events.length === 0) {
+      return [];
+    }
 
-  if (requestTimestamp) {
-    const requestTime =
-      Date.parse(requestTimestamp);
+    const requestTimestamp =
+      presence.request?.timestamp;
 
-    if (!Number.isNaN(requestTime)) {
-      return presence.events.filter(
-        (event) => {
-          const eventTime =
-            Date.parse(event.timestamp);
+    if (requestTimestamp) {
+      const requestTime = Date.parse(requestTimestamp);
+
+      if (!Number.isNaN(requestTime)) {
+        return presence.events.filter((event) => {
+          const eventTime = Date.parse(event.timestamp);
 
           if (Number.isNaN(eventTime)) {
             return true;
           }
 
           return eventTime >= requestTime;
-        },
-      );
+        });
+      }
     }
-  }
 
-  /*
-   * Snapshot fallback:
-   *
-   * Historical runtime snapshots use semantic event types
-   * such as:
-   *
-   * request → context → intent → decision → objective
-   * → plan → execution → verification → memory → learning
-   *
-   * Therefore REQUEST is the cycle boundary for snapshot
-   * events.
-   *
-   * Find the LAST request event so only the newest cognitive
-   * cycle remains visible in the console.
-   */
-  let latestRequestIndex = -1;
+    let latestRequestIndex = -1;
 
-  for (
-    let index = 0;
-    index < presence.events.length;
-    index += 1
-  ) {
-    const event = presence.events[index];
-
-    if (event.type === "request") {
-      latestRequestIndex = index;
+    for (
+      let index = 0;
+      index < presence.events.length;
+      index += 1
+    ) {
+      if (presence.events[index].type === "request") {
+        latestRequestIndex = index;
+      }
     }
-  }
 
-  if (latestRequestIndex >= 0) {
-    return presence.events.slice(
-      latestRequestIndex,
-    );
-  }
+    if (latestRequestIndex >= 0) {
+      return presence.events.slice(latestRequestIndex);
+    }
 
-  /*
-   * If the snapshot contains no recognizable request
-   * boundary, preserve the snapshot rather than guessing.
-   */
-  return presence.events;
-}
+    return presence.events;
+  }
 
   private shouldAcceptSnapshot(
     nextState: NexusPresenceStateModel,
@@ -465,10 +394,6 @@ class HttpPresenceAdapter implements PresenceAdapter {
       return true;
     }
 
-    /*
-     * Terminal snapshots are always accepted because they
-     * contain the complete final execution information.
-     */
     if (
       nextState.state === "completed" ||
       nextState.state === "failed"
@@ -499,9 +424,7 @@ class HttpPresenceAdapter implements PresenceAdapter {
       return true;
     }
 
-    return (
-      nextTimestamp >= currentTimestamp
-    );
+    return nextTimestamp >= currentTimestamp;
   }
 
   private getLatestTimestamp(
@@ -520,9 +443,7 @@ class HttpPresenceAdapter implements PresenceAdapter {
     }
 
     for (const event of state.events) {
-      const value = Date.parse(
-        event.timestamp,
-      );
+      const value = Date.parse(event.timestamp);
 
       if (!Number.isNaN(value)) {
         timestamps.push(value);

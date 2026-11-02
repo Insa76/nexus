@@ -2197,7 +2197,7 @@ function App() {
     selectedHistoryCycleId,
   ]);
 
-  const online = true;
+  const online = presence.state !== "idle";
 
   const requestText =
     presence.request?.text ?? "No active request";
@@ -2290,14 +2290,19 @@ function App() {
         payload = null;
       }
 
-      if (!response.ok) {
+            if (!response.ok) {
+        const data =
+          payload &&
+          typeof payload === "object"
+            ? payload as Record<string, unknown>
+            : null;
+
         const message =
-          typeof payload === "object" &&
-          payload !== null &&
-          "error" in payload &&
-          typeof payload.error === "string"
-            ? payload.error
-            : `NEXUS returned HTTP ${response.status}`;
+          typeof data?.message === "string"
+            ? data.message
+            : typeof data?.error === "string"
+              ? data.error
+              : `NEXUS returned HTTP ${response.status}`;
 
         throw new Error(message);
       }
