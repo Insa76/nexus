@@ -1,0 +1,8 @@
+{
+  "name": "Hotel Edition",
+  "slug": "hotel",
+  "color": "#5b8cff",
+  "logo": "hotel",
+  "workflows": "workflows.json",
+  "plugins": []
+}

@@ -150,3 +150,34 @@ if __name__ == "__main__":
         test()
 
     print(f"PASS: {len(tests)}/{len(tests)}")
+from runtime.execution_result import ExecutionResult
+from response.formatter import ResponseFormatter
+
+
+def test_format_current_time() -> None:
+    formatter = ResponseFormatter()
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "read",
+            "time": "14:35",
+        },
+    )
+
+    assert formatter.format(result) == "Son las 14:35."
+
+def test_format_current_date_and_time() -> None:
+    formatter = ResponseFormatter()
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "read",
+            "date": "28/10/2026",
+            "time": "14:35",
+        },
+    )
+
+    assert formatter.format(result) == "Hoy es 28/10/2026 y son las 14:35."
+

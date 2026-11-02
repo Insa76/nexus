@@ -1,0 +1,1904 @@
+﻿
+================================================================================
+ARCHIVO: packages\rules\tests\test_rules.py
+================================================================================
+
+from context import AssistantContext
+
+from rules.models import Rule, RuleStatus
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
+from rules import RuleCapability
+from rules import RuleCognitiveAccess
+
+
+
+def test_rule_create():
+    rule = Rule.create(
+        name="Regla de aprobación",
+        description="Requiere aprobación antes de continuar",
+    )
+
+    assert rule.id
+    assert rule.name == "Regla de aprobación"
+    assert rule.description == (
+        "Requiere aprobación antes de continuar"
+    )
+    assert rule.status == RuleStatus.ACTIVE
+
+
+def test_rule_store():
+    store = RuleStore()
+
+    rule = Rule.create(
+        name="Regla operativa",
+    )
+
+    store.add(rule)
+
+    assert store.get(rule.id) == rule
+    assert store.list() == [rule]
+    assert store.count() == 1
+
+    updated = Rule(
+        id=rule.id,
+        name=rule.name,
+        description=rule.description,
+        status=RuleStatus.INACTIVE,
+        user_id=rule.user_id,
+        organization_id=rule.organization_id,
+        project_id=rule.project_id,
+        created_at=rule.created_at,
+    )
+
+    store.update(updated)
+
+    assert store.get(rule.id).status == RuleStatus.INACTIVE
+
+    removed = store.remove(rule.id)
+
+    assert removed == updated
+    assert store.count() == 0
+
+
+def test_rule_resolver_by_user():
+    store = RuleStore()
+
+    rule = Rule.create(
+        name="Regla personal",
+        user_id="user-1",
+    )
+
+    store.add(rule)
+
+    context = AssistantContext(
+        user=type("User", (), {"id": "user-1"})(),
+        organization=None,
+        projects=[],
+    )
+
+    resolver = RuleResolver(store)
+
+    resolved = resolver.resolve(context)
+
+    assert resolved == [rule]
+
+def test_rule_capability():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+
+    capability = RuleCapability(
+        store=store,
+        resolver=resolver,
+    )
+
+    rule = capability.create(
+        name="Regla operativa",
+        description="Regla creada mediante capability",
+    )
+
+    assert rule.name == "Regla operativa"
+    assert capability.get(rule.id) == rule
+    assert capability.list() == [rule]
+
+    removed = capability.remove(rule.id)
+
+    assert removed == rule
+    assert capability.list() == []
+
+def test_rule_cognitive_access():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+
+    capability = RuleCapability(
+        store=store,
+        resolver=resolver,
+    )
+
+    rule = capability.create(
+        name="Regla contextual",
+        user_id="user-1",
+    )
+
+    access = RuleCognitiveAccess(capability)
+
+    context = AssistantContext(
+        user=type("User", (), {"id": "user-1"})(),
+        organization=None,
+        projects=[],
+    )
+
+    result = access.find_relevant(
+        context=context,
+    )
+
+    assert result.rules == (rule,)
+    assert result.metadata["operation"] == "rules.find_relevant"
+    assert result.metadata["count"] == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\pyproject.toml
+================================================================================
+
+[project]
+name = "runtime"
+version = "0.1.0"
+description = "NEXUS Runtime"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\__init__.py
+================================================================================
+
+from .runtime import Runtime
+
+__all__ = [
+    "Runtime",
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\bootstrap.py
+================================================================================
+
+from __future__ import annotations
+
+from core.kernel import Kernel
+
+from runtime.runtime import Runtime
+from runtime.executor import Executor
+
+from actions.registry import CapabilityRegistry
+from actions.manager import CapabilityManager
+
+from actions.echo import EchoCapability
+from actions.open_app import OpenAppCapability
+
+from providers.tool_registry import ToolRegistry
+
+
+class Bootstrap:
+    """
+    Inicializa todos los componentes principales
+    de NEXUS.
+    """
+
+    def build(self) -> Runtime:
+
+        #
+        # Kernel
+        #
+
+        kernel = Kernel()
+
+        #
+        # Runtime
+        #
+
+        runtime = Runtime(
+            kernel=kernel,
+        )
+
+        #
+        # Capability Registry
+        #
+
+        registry = CapabilityRegistry()
+
+        registry.register(
+            EchoCapability()
+        )
+
+        registry.register(
+            OpenAppCapability()
+        )
+
+        #
+        # Capability Manager
+        #
+
+        manager = CapabilityManager(
+            registry
+        )
+
+        #
+        # Configure Runtime
+        #
+
+        runtime.configure_capabilities(
+            registry,
+            manager,
+        )
+
+        #
+        # Executor
+        #
+
+        executor = Executor(
+            manager
+        )
+
+        runtime.configure_executor(
+            executor
+        )
+
+        return runtime
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\dispatcher.py
+================================================================================
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+
+EventHandler = Callable[[Any], Awaitable[None]]
+
+
+class Dispatcher:
+    """
+    Despachador de eventos del Runtime.
+
+    Su única responsabilidad es encontrar el
+    handler registrado para un evento y ejecutarlo.
+
+    No conoce IA.
+    No conoce Planner.
+    No conoce Memory.
+    No conoce Providers.
+    """
+
+    def __init__(self) -> None:
+
+        self._handlers: dict[str, EventHandler] = {}
+
+    def register(
+        self,
+        event_type: str,
+        handler: EventHandler,
+    ) -> None:
+        """
+        Registra un handler para un tipo de evento.
+        """
+
+        self._handlers[event_type] = handler
+
+    def unregister(
+        self,
+        event_type: str,
+    ) -> None:
+
+        self._handlers.pop(
+            event_type,
+            None,
+        )
+
+    def has(
+        self,
+        event_type: str,
+    ) -> bool:
+
+        return event_type in self._handlers
+
+    async def dispatch(
+        self,
+        event: Any,
+    ) -> None:
+        """
+        Envía el evento al handler correspondiente.
+        """
+
+        handler = self._handlers.get(
+            event.type
+        )
+
+        if handler is None:
+            return
+
+        await handler(event)
+
+    def clear(self) -> None:
+
+        self._handlers.clear()
+
+    def handlers(self) -> list[str]:
+
+        return sorted(
+            self._handlers.keys()
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\execution_result.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class ExecutionResult(BaseModel):
+    """
+    Resultado final de la ejecución de un Objective.
+    """
+
+    success: bool = True
+
+    message: str = ""
+
+    output: Any = None
+
+    artifacts: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    execution_time: float = 0.0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\executor.py
+================================================================================
+
+from __future__ import annotations
+
+import time
+
+from planner.execution_context import ExecutionContext
+from planner.objective import ObjectiveStatus
+from planner.plan import StepStatus
+from runtime.execution_result import ExecutionResult
+
+
+class Executor:
+    """
+    Ejecuta un ExecutionPlan respetando sus dependencias.
+
+    El Executor es responsable de determinar el estado
+    global del Plan. El ActionManager solamente ejecuta
+    y actualiza el estado de cada Step.
+    """
+
+    def __init__(self, runtime):
+        self.runtime = runtime
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> ExecutionResult:
+
+        start = time.perf_counter()
+
+        result = ExecutionResult()
+
+        #
+        # Verificar infraestructura de ejecución.
+        #
+
+        if self.runtime.action_manager is None:
+
+            result.success = False
+
+            result.message = (
+                "ActionManager has not been configured."
+            )
+
+            result.metadata = (
+                self._build_metadata(context)
+            )
+
+            result.execution_time = (
+                time.perf_counter() - start
+            )
+
+            return result
+
+        #
+        # Ejecución del grafo.
+        #
+
+        while not context.finished:
+
+            #
+            # Si todos los steps terminaron,
+            # el Plan terminó correctamente.
+            #
+
+            if self._all_steps_completed(
+                context
+            ):
+
+                context.plan.completed = True
+
+                context.objective.status = (
+                    ObjectiveStatus.COMPLETED
+                )
+
+                context.finished = True
+
+                break
+
+            #
+            # Buscar cualquier step pendiente
+            # cuyas dependencias estén satisfechas.
+            #
+
+            step_index = (
+                self._find_next_executable_step(
+                    context
+                )
+            )
+
+            #
+            # No existe ningún step ejecutable.
+            #
+
+            if step_index is None:
+
+                pending_steps = [
+                    step
+                    for step in context.plan.steps
+                    if step.status
+                    == StepStatus.PENDING
+                ]
+
+                #
+                # Si todavía hay steps pendientes,
+                # el grafo está bloqueado.
+                #
+
+                if pending_steps:
+
+                    blocked = []
+
+                    for step in pending_steps:
+
+                        (
+                            dependencies_ok,
+                            missing_dependencies,
+                        ) = (
+                            context.validate_step_dependencies(
+                                step
+                            )
+                        )
+
+                        if not dependencies_ok:
+
+                            blocked.append(
+                                {
+                                    "step": step.id,
+                                    "missing_dependencies": (
+                                        missing_dependencies
+                                    ),
+                                }
+                            )
+
+                    error = (
+                        "Execution plan is blocked: "
+                        f"{blocked}"
+                    )
+
+                    context.add_error(
+                        error
+                    )
+
+                    context.objective.status = (
+                        ObjectiveStatus.FAILED
+                    )
+
+                    context.finished = True
+
+                    context.plan.completed = False
+
+                break
+
+            #
+            # El Executor selecciona el step.
+            #
+            # current_step es solamente un puntero
+            # operativo hacia el step seleccionado.
+            #
+
+            context.current_step = step_index
+
+            #
+            # ActionManager ejecuta el step.
+            #
+
+            await self.runtime.action_manager.execute(
+                context
+            )
+
+            #
+            # Si la ejecución produjo un error,
+            # el plan y el objetivo fallaron.
+            #
+
+            if context.has_errors():
+
+                context.plan.completed = False
+
+                context.objective.status = (
+                    ObjectiveStatus.FAILED
+                )
+
+                context.finished = True
+
+                break
+
+            #
+            # El ActionManager actualizó el estado
+            # del step. Volvemos a evaluar el grafo
+            # completo en la siguiente iteración.
+            #
+
+            completed_count = sum(
+                1
+                for step in context.plan.steps
+                if step.status
+                == StepStatus.COMPLETED
+            )
+
+            #
+            # current_step representa ahora la cantidad
+            # de steps completados, no una condición
+            # de finalización del Plan.
+            #
+
+            context.current_step = (
+                completed_count
+            )
+
+            #
+            # Comprobar nuevamente si todo el grafo
+            # terminó.
+            #
+
+            if self._all_steps_completed(
+                context
+            ):
+
+                context.plan.completed = True
+
+                context.objective.status = (
+                    ObjectiveStatus.COMPLETED
+                )
+
+                context.finished = True
+
+        #
+        # Resultado final.
+        #
+
+        result.success = (
+            not context.has_errors()
+            and context.plan.completed
+            and self._all_steps_completed(
+                context
+            )
+        )
+
+        result.output = dict(
+            context.results
+        )
+
+        result.artifacts = dict(
+            context.artifacts
+        )
+
+        if context.errors:
+
+            result.message = (
+                "\n".join(
+                    context.errors
+                )
+            )
+
+        else:
+
+            result.message = (
+                "Execution completed successfully."
+            )
+
+        result.metadata = (
+            self._build_metadata(context)
+        )
+
+        result.execution_time = (
+            time.perf_counter() - start
+        )
+
+        return result
+
+    @staticmethod
+    def _find_next_executable_step(
+        context: ExecutionContext,
+    ) -> int | None:
+
+        for index, step in enumerate(
+            context.plan.steps
+        ):
+
+            if step.status != StepStatus.PENDING:
+                continue
+
+            (
+                dependencies_ok,
+                _,
+            ) = context.validate_step_dependencies(
+                step
+            )
+
+            if dependencies_ok:
+                return index
+
+        return None
+
+    @staticmethod
+    def _all_steps_completed(
+        context: ExecutionContext,
+    ) -> bool:
+
+        if not context.plan.steps:
+            return False
+
+        return all(
+            step.status
+            == StepStatus.COMPLETED
+            for step in context.plan.steps
+        )
+
+    @staticmethod
+    def _build_metadata(
+        context: ExecutionContext,
+    ) -> dict:
+
+        metadata = {
+            "objective_id": context.objective.id,
+            "objective_status": (
+                context.objective.status.value
+            ),
+            "plan_completed": (
+                context.plan.completed
+            ),
+            "current_step": (
+                context.current_step
+            ),
+            "step_count": (
+                len(context.plan.steps)
+            ),
+            "errors": list(
+                context.errors
+            ),
+            "step_evidence": (
+                context.all_step_evidence()
+            ),
+        }
+
+        if context.variables:
+
+            metadata["variables"] = dict(
+                context.variables
+            )
+
+        return metadata
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\lifecycle.py
+================================================================================
+
+from __future__ import annotations
+
+from packages.runtime.src.runtime.runtime import Runtime
+
+
+class Lifecycle:
+    """
+    Controla el ciclo de vida del Runtime.
+
+    Este componente únicamente administra el
+    inicio y la detención del sistema.
+    """
+
+    def __init__(self, runtime: Runtime) -> None:
+
+        self.runtime = runtime
+
+        self.running = False
+
+    async def start(self) -> None:
+        """
+        Inicia el Runtime.
+        """
+
+        if self.running:
+            return
+
+        self.running = True
+
+        self.runtime.kernel.start()
+
+    async def stop(self) -> None:
+        """
+        Detiene el Runtime.
+        """
+
+        if not self.running:
+            return
+
+        self.running = False
+
+        self.runtime.kernel.stop()
+
+    async def restart(self) -> None:
+        """
+        Reinicia el Runtime.
+        """
+
+        await self.stop()
+
+        await self.start()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\registry.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class Registry:
+    """
+    Registro de módulos del Runtime.
+
+    Mantiene un catálogo de todos los módulos
+    cargados en el sistema.
+
+    No crea módulos.
+    No ejecuta módulos.
+    No conoce implementaciones.
+    """
+
+    def __init__(self) -> None:
+
+        self._modules: dict[str, Any] = {}
+
+    def register(
+        self,
+        name: str,
+        module: Any,
+    ) -> None:
+        """
+        Registra un módulo.
+        """
+
+        self._modules[name] = module
+
+    def get(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Devuelve un módulo registrado.
+        """
+
+        if name not in self._modules:
+
+            raise KeyError(
+                f"Module '{name}' not registered."
+            )
+
+        return self._modules[name]
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._modules
+
+    def unregister(
+        self,
+        name: str,
+    ) -> None:
+
+        self._modules.pop(
+            name,
+            None,
+        )
+
+    def clear(self) -> None:
+
+        self._modules.clear()
+
+    def modules(self) -> list[str]:
+
+        return sorted(
+            self._modules.keys()
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\runtime.py
+================================================================================
+
+from __future__ import annotations
+
+from core.kernel import Kernel
+
+from planner.execution_context import ExecutionContext
+
+from runtime.dispatcher import Dispatcher
+from runtime.executor import Executor
+from runtime.registry import Registry
+from runtime.scheduler import Scheduler
+from runtime.service_container import ServiceContainer
+from runtime.execution_result import ExecutionResult
+
+from actions.registry import ActionRegistry
+from actions.manager import ActionManager
+
+from providers.tool_registry import ToolRegistry
+
+
+class Runtime:
+    """
+    Runtime principal de NEXUS.
+
+    Es el orquestador del sistema.
+
+    Su responsabilidad es coordinar los distintos
+    componentes sin conocer sus implementaciones.
+
+    Nunca contiene lógica de negocio.
+    """
+
+    def __init__(
+        self,
+        kernel: Kernel,
+    ) -> None:
+
+        self.kernel = kernel
+
+        self.registry = Registry()
+
+        self.container = ServiceContainer()
+
+        self.scheduler = Scheduler()
+
+        self.dispatcher = Dispatcher()
+
+        #
+        # Se inicializan en Bootstrap
+        #
+
+        self.action_registry: ActionRegistry | None = None
+
+        self.action_manager: ActionManager | None = None
+
+        self.tool_registry: ToolRegistry | None = None
+
+        self.executor: Executor | None = None
+
+    def configure_actions(
+        self,
+        registry: ActionRegistry,
+        manager: ActionManager,
+    ) -> None:
+        """
+        Configura el sistema de Actions.
+        """
+
+        self.action_registry = registry
+
+        self.action_manager = manager
+
+    def configure_tools(
+        self,
+        registry: ToolRegistry,
+    ) -> None:
+        """
+        Configura el registro de herramientas.
+        """
+
+        self.tool_registry = registry
+
+    def configure_executor(
+        self,
+        executor: Executor,
+    ) -> None:
+        """
+        Configura el Executor.
+        """
+
+        self.executor = executor
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> ExecutionResult:
+        """
+        Ejecuta un plan completo.
+        """
+
+        if self.executor is None:
+
+            raise RuntimeError(
+                "Runtime executor has not been configured."
+            )
+
+        return await self.executor.execute(
+            context
+        )
+
+    def register_module(
+        self,
+        name: str,
+        module,
+    ) -> None:
+
+        self.registry.register(
+            name,
+            module,
+        )
+
+    def register_service(
+        self,
+        name: str,
+        service,
+    ) -> None:
+
+        self.container.register(
+            name,
+            service,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\scheduler.py
+================================================================================
+
+
+from __future__ import annotations
+
+import asyncio
+import threading
+from concurrent.futures import Future
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Awaitable, Callable
+
+
+TaskCallback = Callable[[], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class ScheduledTask:
+    name: str
+    interval: float
+    callback: TaskCallback
+
+
+@dataclass(slots=True)
+class ScheduledOneShot:
+    name: str
+    execute_at: datetime
+    callback: TaskCallback
+
+
+class Scheduler:
+    def __init__(self):
+        self._tasks: list[ScheduledTask] = []
+        self._one_shots: list[ScheduledOneShot] = []
+        self._one_shot_tasks: dict[str, set[asyncio.Task[None]]] = {}
+        self._periodic_tasks: set[asyncio.Task[None]] = set()
+        self._running = False
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stop_event: asyncio.Event | None = None
+        self._state_lock = threading.RLock()
+
+    def register(self, name, interval, callback):
+        if interval <= 0:
+            raise ValueError("interval must be greater than zero")
+
+        with self._state_lock:
+            self._tasks.append(
+                ScheduledTask(
+                    name=name,
+                    interval=interval,
+                    callback=callback,
+                )
+            )
+
+    def register_at(self, name, execute_at, callback):
+        one_shot = ScheduledOneShot(
+            name=name,
+            execute_at=execute_at,
+            callback=callback,
+        )
+
+        with self._state_lock:
+            self._one_shots.append(one_shot)
+            loop = self._loop if self._running else None
+
+        # Si el scheduler ya está activo, delegar la creación
+        # de la tarea al hilo propietario del event loop.
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self._start_one_shot, one_shot)
+
+    def cancel_one_shot(self, name):
+        with self._state_lock:
+            original_count = len(self._one_shots)
+            self._one_shots = [
+                item for item in self._one_shots
+                if item.name != name
+            ]
+            found_pending = len(self._one_shots) < original_count
+            loop = self._loop if self._running else None
+
+        if loop is None or loop.is_closed():
+            return found_pending
+
+        # Si se llama desde el propio event loop, no bloquearlo.
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is loop:
+            return self._cancel_active_one_shot(name) or found_pending
+
+        # Desde otro hilo, pedir la cancelación al event loop
+        # y esperar su resultado para preservar el retorno bool.
+        result: Future[bool] = Future()
+
+        def cancel_on_loop():
+            try:
+                active = self._cancel_active_one_shot(name)
+                result.set_result(active or found_pending)
+            except Exception as exc:
+                result.set_exception(exc)
+
+        loop.call_soon_threadsafe(cancel_on_loop)
+        return result.result(timeout=5)
+
+    def _cancel_active_one_shot(self, name) -> bool:
+        active_tasks = self._one_shot_tasks.pop(name, set())
+        found_active = bool(active_tasks)
+
+        for task in active_tasks:
+            task.cancel()
+
+        return found_active
+
+    def _start_one_shot(self, one_shot):
+        if self._loop is None:
+            return
+
+        if not self._running:
+            return
+
+        task = self._loop.create_task(self._run_one_shot(one_shot))
+        self._one_shot_tasks.setdefault(one_shot.name, set()).add(task)
+        return task
+
+    async def start(self, *, keep_alive: bool = False) -> None:
+        with self._state_lock:
+            if self._running:
+                return
+
+            self._running = True
+            self._loop = asyncio.get_running_loop()
+            self._stop_event = asyncio.Event()
+            initial_one_shots = list(self._one_shots)
+            periodic_tasks = list(self._tasks)
+
+        try:
+            for scheduled in periodic_tasks:
+                task = self._loop.create_task(self._run_task(scheduled))
+                self._periodic_tasks.add(task)
+
+            for one_shot in initial_one_shots:
+                self._start_one_shot(one_shot)
+
+            if keep_alive:
+                assert self._stop_event is not None
+                await self._stop_event.wait()
+            elif self._periodic_tasks:
+                await asyncio.gather(
+                    *list(self._periodic_tasks),
+                    return_exceptions=True,
+                )
+            else:
+                while self._running:
+                    active_tasks = {
+                        task
+                        for tasks in self._one_shot_tasks.values()
+                        for task in tasks
+                        if not task.done()
+                    }
+
+                    if not active_tasks:
+                        break
+
+                    await asyncio.gather(
+                        *active_tasks,
+                        return_exceptions=True,
+                    )
+        finally:
+            with self._state_lock:
+                self._running = False
+
+            active_tasks = set(self._periodic_tasks)
+
+            for tasks in self._one_shot_tasks.values():
+                active_tasks.update(tasks)
+
+            current = asyncio.current_task()
+            if current is not None:
+                active_tasks.discard(current)
+
+            for task in active_tasks:
+                if not task.done():
+                    task.cancel()
+
+            if active_tasks:
+                await asyncio.gather(
+                    *active_tasks,
+                    return_exceptions=True,
+                )
+
+            self._periodic_tasks.difference_update(active_tasks)
+            self._one_shot_tasks.clear()
+
+            with self._state_lock:
+                self._loop = None
+                self._stop_event = None
+
+    async def stop(self) -> None:
+        with self._state_lock:
+            self._running = False
+            stop_event = self._stop_event
+
+        if stop_event is not None:
+            stop_event.set()
+
+        active_tasks = set(self._periodic_tasks)
+
+        for tasks in self._one_shot_tasks.values():
+            active_tasks.update(tasks)
+
+        current = asyncio.current_task()
+        if current is not None:
+            active_tasks.discard(current)
+
+        for task in active_tasks:
+            if not task.done():
+                task.cancel()
+
+        if active_tasks:
+            await asyncio.gather(
+                *active_tasks,
+                return_exceptions=True,
+            )
+
+        self._periodic_tasks.difference_update(active_tasks)
+
+    async def _run_task(self, task: ScheduledTask) -> None:
+        try:
+            while self._running:
+                try:
+                    await task.callback()
+                except asyncio.CancelledError:
+                    return
+                except Exception as ex:
+                    print(f"[Scheduler] {task.name}: {ex}")
+
+                if self._running:
+                    try:
+                        await asyncio.sleep(task.interval)
+                    except asyncio.CancelledError:
+                        return
+        finally:
+            current = asyncio.current_task()
+            if current is not None:
+                self._periodic_tasks.discard(current)
+
+    async def _run_one_shot(self, one_shot: ScheduledOneShot) -> None:
+        try:
+            now = datetime.now(timezone.utc)
+            execute_at = one_shot.execute_at
+
+            if execute_at.tzinfo is None:
+                execute_at = execute_at.replace(tzinfo=timezone.utc)
+
+            delay = (execute_at - now).total_seconds()
+
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            if not self._running:
+                return
+
+            await one_shot.callback()
+
+        except asyncio.CancelledError:
+            return
+        except Exception as ex:
+            print(f"[Scheduler] {one_shot.name}: {ex}")
+        finally:
+            current = asyncio.current_task()
+            active_tasks = self._one_shot_tasks.get(one_shot.name)
+
+            if active_tasks is not None and current is not None:
+                active_tasks.discard(current)
+
+                if not active_tasks:
+                    self._one_shot_tasks.pop(one_shot.name, None)
+
+    def clear(self) -> None:
+        with self._state_lock:
+            self._tasks.clear()
+            self._one_shots.clear()
+            loop = self._loop if self._running else None
+
+        def clear_active_tasks():
+            for task in self._periodic_tasks:
+                task.cancel()
+
+            for active_tasks in self._one_shot_tasks.values():
+                for task in active_tasks:
+                    task.cancel()
+
+            self._periodic_tasks.clear()
+            self._one_shot_tasks.clear()
+
+        if loop is not None and not loop.is_closed():
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            if current_loop is loop:
+                clear_active_tasks()
+            else:
+                loop.call_soon_threadsafe(clear_active_tasks)
+        else:
+            clear_active_tasks()
+
+    def tasks(self) -> list[str]:
+        with self._state_lock:
+            return [task.name for task in self._tasks]
+
+    def one_shots(self) -> list[str]:
+        with self._state_lock:
+            return [one_shot.name for one_shot in self._one_shots]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\src\runtime\service_container.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class ServiceContainer:
+    """
+    Contenedor de dependencias del Runtime.
+
+    Es el único responsable de almacenar y entregar
+    servicios compartidos entre los distintos módulos.
+
+    No crea objetos.
+    No conoce implementaciones.
+    No contiene lógica de negocio.
+    """
+
+    def __init__(self) -> None:
+
+        self._services: dict[str, Any] = {}
+
+    def register(
+        self,
+        name: str,
+        service: Any,
+    ) -> None:
+        """
+        Registra un servicio.
+        """
+
+        self._services[name] = service
+
+    def get(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Obtiene un servicio previamente registrado.
+        """
+
+        if name not in self._services:
+
+            raise KeyError(
+                f"Service '{name}' not registered."
+            )
+
+        return self._services[name]
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._services
+
+    def remove(
+        self,
+        name: str,
+    ) -> None:
+
+        self._services.pop(
+            name,
+            None,
+        )
+
+    def clear(self) -> None:
+
+        self._services.clear()
+
+    def services(self) -> list[str]:
+
+        return sorted(
+            self._services.keys()
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\runtime\tests\test_executor_authorization.py
+================================================================================
+
+
+from types import SimpleNamespace
+
+import pytest
+
+from actions.base import Action
+from actions.manager import ActionManager
+from actions.registry import ActionRegistry
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective, ObjectiveStatus
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+from runtime.executor import Executor
+from security import (
+    ActionAuthorization,
+    ActionPolicy,
+    ActionPolicyStore,
+    AssignmentStore,
+    AuthorizationService,
+    Permission,
+    PermissionAction,
+)
+
+
+class ProtectedAction(Action):
+    name = "test.protected_action"
+
+    def __init__(self):
+        self.executions = 0
+
+    async def execute(self, context, step):
+        self.executions += 1
+        context.add_result("protected_action", "executed")
+
+
+@pytest.mark.asyncio
+async def test_denied_action_stops_execution_plan():
+    action = ProtectedAction()
+
+    registry = ActionRegistry()
+    registry.register(action)
+
+    policy_store = ActionPolicyStore()
+    policy_store.register(
+        ActionPolicy(
+            action_name=action.name,
+            permission=Permission(
+                resource=action.name,
+                action=PermissionAction.EXECUTE,
+            ),
+        )
+    )
+
+    authorization = ActionAuthorization(
+        policy_store=policy_store,
+        authorization=AuthorizationService(
+            AssignmentStore()
+        ),
+    )
+
+    manager = ActionManager(
+        registry,
+        action_authorization=authorization,
+    )
+
+    runtime = SimpleNamespace(
+        action_manager=manager,
+    )
+    executor = Executor(runtime)
+
+    objective = Objective(
+        id="objective-security-test",
+        title="Test de autorización",
+        status=ObjectiveStatus.READY,
+        priority=1,
+        metadata={},
+    )
+
+    first_step = PlanStep(
+        id="step-protected",
+        name="Acción protegida",
+        description="Debe ser rechazada",
+        action=action.name,
+    )
+
+    second_step = PlanStep(
+        id="step-after",
+        name="Paso posterior",
+        description="No debe ejecutarse",
+        action=action.name,
+    )
+
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=[first_step, second_step],
+    )
+
+    context = ExecutionContext(
+        objective=objective,
+        plan=plan,
+        actor_id="unassigned-user",
+        actor_type="user",
+    )
+
+    result = await executor.execute(context)
+
+    assert result.success is False
+    assert action.executions == 0
+
+    assert first_step.status == StepStatus.FAILED
+    assert second_step.status == StepStatus.PENDING
+
+    assert objective.status == ObjectiveStatus.FAILED
+    assert context.finished is True
+    assert plan.completed is False
+
+    assert any(
+        "Authorization denied" in error
+        for error in context.errors
+    )
+
+    assert context.step_evidence["step-protected"][
+        "authorization"
+    ]["allowed"] is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\pyproject.toml
+================================================================================
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nexus-security"
+version = "0.1.0"
+description = "NEXUS Security and Permissions subsystem"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\nexus_security.egg-info\dependency_links.txt
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\nexus_security.egg-info\PKG-INFO
+================================================================================
+
+Metadata-Version: 2.4
+Name: nexus-security
+Version: 0.1.0
+Summary: NEXUS Security and Permissions subsystem
+Requires-Python: >=3.12
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\nexus_security.egg-info\SOURCES.txt
+================================================================================
+
+pyproject.toml
+src/nexus_security.egg-info/PKG-INFO
+src/nexus_security.egg-info/SOURCES.txt
+src/nexus_security.egg-info/dependency_links.txt
+src/nexus_security.egg-info/top_level.txt
+src/security/__init__.py
+src/security/action_authorization.py
+src/security/action_policy.py
+src/security/action_policy_store.py
+src/security/assignment_capability.py
+src/security/assignment_store.py
+src/security/assignments.py
+src/security/authorization.py
+src/security/models.py
+src/security/permissions.py
+src/security/role_capability.py
+src/security/role_store.py
+src/security/roles.py
+src/security/sqlite_security_store.py
+src/security/sqlite_stores.py
+tests/test_action_authorization.py
+tests/test_action_policy.py
+tests/test_action_policy_store.py
+tests/test_assignment_capability.py
+tests/test_assignment_store.py
+tests/test_assignments.py
+tests/test_authorization.py
+tests/test_models.py
+tests/test_permissions.py
+tests/test_role_capability.py
+tests/test_role_store.py
+tests/test_roles.py
+tests/test_sqlite_security_store.py
+tests/test_sqlite_stores.py
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\nexus_security.egg-info\top_level.txt
+================================================================================
+
+security
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\__init__.py
+================================================================================
+
+from security.action_authorization import ActionAuthorization
+from security.action_policy import ActionPolicy
+from security.action_policy_store import ActionPolicyStore
+from security.assignment_capability import AssignmentCapability
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.authorization import AuthorizationService
+from security.models import Actor, ActorType
+from security.permissions import Permission, PermissionAction
+from security.role_capability import RoleCapability
+from security.role_store import RoleStore
+from security.roles import Role
+
+__all__ = [
+    "ActionAuthorization",
+    "ActionPolicy",
+    "ActionPolicyStore",
+    "Actor",
+    "ActorRoleAssignment",
+    "ActorType",
+    "AssignmentCapability",
+    "AssignmentStore",
+    "AuthorizationService",
+    "Permission",
+    "PermissionAction",
+    "Role",
+    "RoleCapability",
+    "RoleStore",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\action_authorization.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.action_policy_store import ActionPolicyStore
+from security.authorization import AuthorizationService
+from security.models import Actor
+
+
+@dataclass(slots=True)
+class ActionAuthorization:
+    """Evalúa si un actor puede ejecutar una acción registrada."""
+
+    policy_store: ActionPolicyStore
+    authorization: AuthorizationService
+
+    def is_allowed(
+        self,
+        actor: Actor,
+        action_name: str,
+    ) -> bool:
+        policy = self.policy_store.get(action_name)
+
+        if policy is None:
+            return False
+
+        return self.authorization.is_allowed(
+            actor,
+            policy.permission,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\action_policy.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.permissions import Permission
+
+
+@dataclass(frozen=True, slots=True)
+class ActionPolicy:
+    """Declara el permiso requerido para ejecutar una acción."""
+
+    action_name: str
+    permission: Permission
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\action_policy_store.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from security.action_policy import ActionPolicy
+
+
+@dataclass(slots=True)
+class ActionPolicyStore:
+    """Registro de políticas de autorización por acción."""
+
+    _policies: dict[str, ActionPolicy] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+
+    def register(self, policy: ActionPolicy) -> None:
+        if policy.action_name in self._policies:
+            raise ValueError(
+                f"Action policy already registered: {policy.action_name}"
+            )
+
+        self._policies[policy.action_name] = policy
+
+    def get(self, action_name: str) -> ActionPolicy | None:
+        return self._policies.get(action_name)
+
+    def list(self) -> tuple[ActionPolicy, ...]:
+        return tuple(self._policies.values())
+
+    def remove(self, action_name: str) -> bool:
+        return self._policies.pop(action_name, None) is not None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\assignment_capability.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+
+
+@dataclass(slots=True)
+class AssignmentCapability:
+    """Gestiona las asignaciones de roles a actores."""
+
+    store: AssignmentStore
+
+    def assign(self, assignment: ActorRoleAssignment) -> None:
+        self.store.add(assignment)
+
+    def list(self) -> tuple[ActorRoleAssignment, ...]:
+        return self.store.list()
+
+    def revoke(self, assignment: ActorRoleAssignment) -> bool:
+        return self.store.remove(assignment)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\assignment_store.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from security.assignments import ActorRoleAssignment
+
+
+@dataclass(slots=True)
+class AssignmentStore:
+    """Almacena asignaciones de roles durante la ejecución."""
+
+    _assignments: list[ActorRoleAssignment] = field(
+        default_factory=list,
+        init=False,
+        repr=False,
+    )
+
+    def add(self, assignment: ActorRoleAssignment) -> None:
+        if assignment not in self._assignments:
+            self._assignments.append(assignment)
+
+    def list(self) -> tuple[ActorRoleAssignment, ...]:
+        return tuple(self._assignments)
+
+    def remove(self, assignment: ActorRoleAssignment) -> bool:
+        try:
+            self._assignments.remove(assignment)
+        except ValueError:
+            return False
+
+        return True
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

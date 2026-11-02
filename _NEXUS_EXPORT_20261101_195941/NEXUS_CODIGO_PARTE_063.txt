@@ -1,0 +1,1904 @@
+﻿
+================================================================================
+ARCHIVO: packages\memory\src\memory\semantic_knowledge_extractor.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from memory.episode_memory import Episode
+from memory.semantic_memory import SemanticFact, SemanticMemory
+
+
+class SemanticKnowledgeExtractor:
+    """
+    Extrae conocimiento semántico reutilizable a partir
+    de episodios exitosos.
+
+    Esta primera versión es deliberadamente conservadora.
+
+    Responsabilidades:
+    - analizar un episodio ya ejecutado
+    - determinar si contiene conocimiento estable
+    - convertirlo en hechos semánticos
+    - almacenar esos hechos en SemanticMemory
+
+    No:
+    - ejecuta acciones
+    - consulta el sistema operativo
+    - interpreta lenguaje natural
+    - modifica EpisodeMemory
+    - decide el estado real del sistema
+    """
+
+    def __init__(
+        self,
+        semantic_memory: SemanticMemory,
+    ) -> None:
+        self._semantic_memory = semantic_memory
+
+    def extract(
+        self,
+        episode: Episode,
+    ) -> list[SemanticFact]:
+        """
+        Extrae y almacena los hechos semánticos
+        que puedan derivarse inequívocamente del episodio.
+        """
+
+        if not episode.success:
+            return []
+
+        facts: list[SemanticFact] = []
+
+        action = episode.action
+
+        if action == "system.open_app":
+            fact = self._extract_open_app(episode)
+
+            if fact is not None:
+                facts.append(fact)
+
+        elif action == "system.close_app":
+            fact = self._extract_close_app(episode)
+
+            if fact is not None:
+                facts.append(fact)
+
+        elif action == "system.set_volume":
+            fact = self._extract_volume(episode)
+
+            if fact is not None:
+                facts.append(fact)
+
+        return facts
+
+    def _extract_open_app(
+        self,
+        episode: Episode,
+    ) -> SemanticFact | None:
+        application = self._extract_application(
+            episode
+        )
+
+        if not application:
+            return None
+
+        return self._semantic_memory.learn(
+            application,
+            "es una aplicación",
+            True,
+            confidence=1.0,
+            source="episode",
+            metadata={
+                "episode_action": episode.action,
+                "original_text": episode.original_text,
+            },
+        )
+
+    def _extract_close_app(
+        self,
+        episode: Episode,
+    ) -> SemanticFact | None:
+        application = self._extract_application(
+            episode
+        )
+
+        if not application:
+            return None
+
+        return self._semantic_memory.learn(
+            application,
+            "es una aplicación",
+            True,
+            confidence=1.0,
+            source="episode",
+            metadata={
+                "episode_action": episode.action,
+                "original_text": episode.original_text,
+            },
+        )
+
+    def _extract_volume(
+        self,
+        episode: Episode,
+    ) -> SemanticFact | None:
+        parameters = episode.parameters
+
+        if not isinstance(parameters, dict):
+            parameters = {}
+
+        level = parameters.get("level")
+
+        if level is None:
+            output = episode.output
+
+            if isinstance(output, dict):
+                level = output.get("level")
+
+        if level is None:
+            return None
+
+        try:
+            level = float(level)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+        if level.is_integer():
+            level = int(level)
+
+        return self._semantic_memory.learn(
+            "system",
+            "último volumen conocido",
+            level,
+            confidence=1.0,
+            source="episode",
+            metadata={
+                "episode_action": episode.action,
+                "original_text": episode.original_text,
+            },
+        )
+
+    @staticmethod
+    def _extract_application(
+        episode: Episode,
+    ) -> str | None:
+        parameters = episode.parameters
+
+        if isinstance(parameters, dict):
+            for key in (
+                "application",
+                "app",
+                "name",
+            ):
+                value = parameters.get(key)
+
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        output = episode.output
+
+        if isinstance(output, dict):
+            for key in (
+                "application",
+                "app",
+                "name",
+            ):
+                value = output.get(key)
+
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+
+        return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\semantic_memory.py
+================================================================================
+
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from functools import wraps
+from pathlib import Path
+from typing import Any
+
+
+def _thread_safe(method):
+    """Serializa el acceso a la conexión SQLite compartida."""
+
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
+@dataclass
+class SemanticFact:
+    """Representa una unidad de conocimiento semántico reutilizable."""
+
+    subject: str
+    predicate: str
+    value: Any
+    confidence: float = 1.0
+    source: str = "system"
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class SemanticMemory:
+    """Memoria semántica con persistencia SQLite opcional.
+
+    Si db_path es None, usa una base SQLite en memoria.
+    Para persistencia entre reinicios, se debe proporcionar una ruta.
+    """
+
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self._lock = threading.RLock()
+        self._fact_cache: dict[tuple[str, str], SemanticFact] = {}
+
+        if db_path is None or str(db_path) == ":memory:":
+            resolved_path = ":memory:"
+        else:
+            path = Path(db_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path = str(path)
+
+        self._connection = sqlite3.connect(
+            resolved_path,
+            timeout=10.0,
+            check_same_thread=False,
+        )
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+
+        if resolved_path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode = WAL")
+
+        self._initialize_schema()
+
+    @_thread_safe
+    def _initialize_schema(self) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semantic_facts (
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    PRIMARY KEY (subject, predicate)
+                )
+                """
+            )
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("SemanticMemory values must be strings.")
+        return " ".join(value.strip().lower().split())
+
+    @staticmethod
+    def _normalize_confidence(confidence: float) -> float:
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "SemanticFact confidence must be numeric."
+            ) from exc
+
+        return max(0.0, min(1.0, confidence))
+
+    def _to_fact(
+        self,
+        row: sqlite3.Row | None,
+    ) -> SemanticFact | None:
+        """Convierte una fila SQLite y conserva la identidad del objeto."""
+
+        if row is None:
+            return None
+
+        key = (row["subject"], row["predicate"])
+
+        value = json.loads(row["value_json"])
+        confidence = float(row["confidence"])
+        source = row["source"]
+        created_at = datetime.fromisoformat(row["created_at"])
+        updated_at = datetime.fromisoformat(row["updated_at"])
+        metadata = json.loads(row["metadata_json"])
+
+        fact = self._fact_cache.get(key)
+
+        if fact is None:
+            fact = SemanticFact(
+                subject=row["subject"],
+                predicate=row["predicate"],
+                value=value,
+                confidence=confidence,
+                source=source,
+                created_at=created_at,
+                updated_at=updated_at,
+                metadata=metadata,
+            )
+            self._fact_cache[key] = fact
+            return fact
+
+        # Actualizar el objeto existente conserva su identidad en memoria.
+        fact.value = value
+        fact.confidence = confidence
+        fact.source = source
+        fact.created_at = created_at
+        fact.updated_at = updated_at
+        fact.metadata = metadata
+
+        return fact
+
+    @_thread_safe
+    def learn(
+        self,
+        subject: str,
+        predicate: str,
+        value: Any,
+        *,
+        confidence: float = 1.0,
+        source: str = "system",
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticFact:
+        subject = self._normalize(subject)
+        predicate = self._normalize(predicate)
+
+        if not subject:
+            raise ValueError("SemanticFact subject cannot be empty.")
+        if not predicate:
+            raise ValueError("SemanticFact predicate cannot be empty.")
+
+        confidence = self._normalize_confidence(confidence)
+        now = datetime.now(timezone.utc).isoformat()
+
+        current = self.get(subject, predicate)
+        created_at = current.created_at.isoformat() if current else now
+
+        metadata_value = (
+            dict(metadata)
+            if metadata is not None
+            else (current.metadata.copy() if current else {})
+        )
+
+        value_json = json.dumps(value, ensure_ascii=False)
+        metadata_json = json.dumps(metadata_value, ensure_ascii=False)
+
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO semantic_facts
+                    (
+                        subject,
+                        predicate,
+                        value_json,
+                        confidence,
+                        source,
+                        created_at,
+                        updated_at,
+                        metadata_json
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subject, predicate) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                (
+                    subject,
+                    predicate,
+                    value_json,
+                    confidence,
+                    source,
+                    created_at,
+                    now,
+                    metadata_json,
+                ),
+            )
+
+        fact = self.get(subject, predicate)
+        assert fact is not None
+        return fact
+
+    @_thread_safe
+    def get(
+        self,
+        subject: str,
+        predicate: str,
+    ) -> SemanticFact | None:
+        row = self._connection.execute(
+            """
+            SELECT *
+            FROM semantic_facts
+            WHERE subject = ? AND predicate = ?
+            """,
+            (
+                self._normalize(subject),
+                self._normalize(predicate),
+            ),
+        ).fetchone()
+
+        return self._to_fact(row)
+
+    def get_value(
+        self,
+        subject: str,
+        predicate: str,
+        default: Any = None,
+    ) -> Any:
+        fact = self.get(subject, predicate)
+        return default if fact is None else fact.value
+
+    @_thread_safe
+    def find_by_subject(self, subject: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            """
+            SELECT *
+            FROM semantic_facts
+            WHERE subject = ?
+            ORDER BY created_at
+            """,
+            (self._normalize(subject),),
+        ).fetchall()
+
+        return [
+            fact
+            for row in rows
+            if (fact := self._to_fact(row)) is not None
+        ]
+
+    @_thread_safe
+    def find_by_predicate(self, predicate: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            """
+            SELECT *
+            FROM semantic_facts
+            WHERE predicate = ?
+            ORDER BY created_at
+            """,
+            (self._normalize(predicate),),
+        ).fetchall()
+
+        return [
+            fact
+            for row in rows
+            if (fact := self._to_fact(row)) is not None
+        ]
+
+    @_thread_safe
+    def all(self) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            """
+            SELECT *
+            FROM semantic_facts
+            ORDER BY created_at, subject, predicate
+            """
+        ).fetchall()
+
+        return [
+            fact
+            for row in rows
+            if (fact := self._to_fact(row)) is not None
+        ]
+
+    @_thread_safe
+    def count(self) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS total FROM semantic_facts"
+        ).fetchone()
+
+        return int(row["total"])
+
+    @_thread_safe
+    def forget(self, subject: str, predicate: str) -> bool:
+        normalized_subject = self._normalize(subject)
+        normalized_predicate = self._normalize(predicate)
+
+        with self._connection:
+            cursor = self._connection.execute(
+                """
+                DELETE FROM semantic_facts
+                WHERE subject = ? AND predicate = ?
+                """,
+                (normalized_subject, normalized_predicate),
+            )
+
+        deleted = cursor.rowcount > 0
+
+        if deleted:
+            self._fact_cache.pop(
+                (normalized_subject, normalized_predicate),
+                None,
+            )
+
+        return deleted
+
+    @_thread_safe
+    def clear(self) -> None:
+        with self._connection:
+            self._connection.execute("DELETE FROM semantic_facts")
+            self._fact_cache.clear()
+
+    @_thread_safe
+    def close(self) -> None:
+        """Cierra la conexión SQLite asociada a esta instancia."""
+        self._connection.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\semantic_memory.py.bak-semantic-persistence-20261020-195006
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+
+@dataclass
+class SemanticFact:
+    """
+    Representa una unidad de conocimiento semántico.
+
+    Un hecho semántico no representa una ejecución concreta.
+    Representa conocimiento que puede reutilizarse posteriormente.
+    """
+
+    subject: str
+    predicate: str
+    value: Any
+
+    confidence: float = 1.0
+
+    source: str = "system"
+
+    created_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    updated_at: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+
+class SemanticMemory:
+    """
+    Memoria semántica de NEXUS.
+
+    Responsabilidades:
+
+    - almacenar conocimiento estructurado
+    - recuperar conocimiento por sujeto
+    - recuperar conocimiento por sujeto y predicado
+    - actualizar hechos existentes
+    - eliminar conocimiento
+    - consultar todos los hechos
+
+    Esta capa NO:
+
+    - interpreta lenguaje natural
+    - consulta WorkingMemory
+    - ejecuta acciones
+    - decide si un hecho debe aprenderse
+    - modifica el estado real del sistema
+    """
+
+    def __init__(self) -> None:
+        self._facts: dict[
+            tuple[str, str],
+            SemanticFact,
+        ] = {}
+
+    #
+    # ---------------------------------------------------------
+    # WRITE
+    # ---------------------------------------------------------
+    #
+
+    def learn(
+        self,
+        subject: str,
+        predicate: str,
+        value: Any,
+        *,
+        confidence: float = 1.0,
+        source: str = "system",
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticFact:
+        """
+        Aprende un hecho semántico.
+
+        Si ya existe un hecho para el mismo
+        subject + predicate, se actualiza su valor.
+        """
+
+        subject = self._normalize(subject)
+        predicate = self._normalize(predicate)
+
+        if not subject:
+            raise ValueError(
+                "SemanticFact subject cannot be empty."
+            )
+
+        if not predicate:
+            raise ValueError(
+                "SemanticFact predicate cannot be empty."
+            )
+
+        confidence = self._normalize_confidence(
+            confidence
+        )
+
+        key = (
+            subject,
+            predicate,
+        )
+
+        now = datetime.now(timezone.utc)
+
+        existing = self._facts.get(key)
+
+        if existing is not None:
+            existing.value = value
+            existing.confidence = confidence
+            existing.source = source
+
+            if metadata is not None:
+                existing.metadata = dict(metadata)
+
+            existing.updated_at = now
+
+            return existing
+
+        fact = SemanticFact(
+            subject=subject,
+            predicate=predicate,
+            value=value,
+            confidence=confidence,
+            source=source,
+            created_at=now,
+            updated_at=now,
+            metadata=dict(metadata or {}),
+        )
+
+        self._facts[key] = fact
+
+        return fact
+
+    #
+    # ---------------------------------------------------------
+    # READ
+    # ---------------------------------------------------------
+    #
+
+    def get(
+        self,
+        subject: str,
+        predicate: str,
+    ) -> SemanticFact | None:
+        """
+        Recupera un hecho específico.
+        """
+
+        key = (
+            self._normalize(subject),
+            self._normalize(predicate),
+        )
+
+        return self._facts.get(key)
+
+    def get_value(
+        self,
+        subject: str,
+        predicate: str,
+        default: Any = None,
+    ) -> Any:
+        """
+        Recupera directamente el valor de un hecho.
+        """
+
+        fact = self.get(
+            subject,
+            predicate,
+        )
+
+        if fact is None:
+            return default
+
+        return fact.value
+
+    def find_by_subject(
+        self,
+        subject: str,
+    ) -> list[SemanticFact]:
+        """
+        Recupera todos los hechos asociados a un sujeto.
+        """
+
+        normalized_subject = self._normalize(
+            subject
+        )
+
+        return [
+            fact
+            for fact in self._facts.values()
+            if fact.subject == normalized_subject
+        ]
+
+    def find_by_predicate(
+        self,
+        predicate: str,
+    ) -> list[SemanticFact]:
+        """
+        Recupera todos los hechos que utilizan
+        un determinado predicado.
+        """
+
+        normalized_predicate = self._normalize(
+            predicate
+        )
+
+        return [
+            fact
+            for fact in self._facts.values()
+            if fact.predicate == normalized_predicate
+        ]
+
+    def all(self) -> list[SemanticFact]:
+        """
+        Devuelve todos los hechos conocidos.
+        """
+
+        return list(
+            self._facts.values()
+        )
+
+    def count(self) -> int:
+        """
+        Devuelve la cantidad de hechos almacenados.
+        """
+
+        return len(self._facts)
+
+    #
+    # ---------------------------------------------------------
+    # DELETE
+    # ---------------------------------------------------------
+    #
+
+    def forget(
+        self,
+        subject: str,
+        predicate: str,
+    ) -> bool:
+        """
+        Elimina un hecho específico.
+
+        Devuelve True si existía.
+        """
+
+        key = (
+            self._normalize(subject),
+            self._normalize(predicate),
+        )
+
+        if key not in self._facts:
+            return False
+
+        del self._facts[key]
+
+        return True
+
+    def clear(self) -> None:
+        """
+        Elimina todo el conocimiento semántico.
+        """
+
+        self._facts.clear()
+
+    #
+    # ---------------------------------------------------------
+    # INTERNAL
+    # ---------------------------------------------------------
+    #
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError(
+                "SemanticMemory values must be strings."
+            )
+
+        return " ".join(
+            value.strip().lower().split()
+        )
+
+    @staticmethod
+    def _normalize_confidence(
+        confidence: float,
+    ) -> float:
+        try:
+            confidence = float(
+                confidence
+            )
+        except (
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise ValueError(
+                "SemanticFact confidence must be numeric."
+            ) from exc
+
+        return max(
+            0.0,
+            min(
+                1.0,
+                confidence,
+            ),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\semantic_memory.py.bak-thread-fix-20261020-200045
+================================================================================
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+@dataclass
+class SemanticFact:
+    """Representa una unidad de conocimiento semántico reutilizable."""
+
+    subject: str
+    predicate: str
+    value: Any
+    confidence: float = 1.0
+    source: str = "system"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class SemanticMemory:
+    """Memoria semántica con persistencia SQLite opcional.
+
+    Si db_path es None, usa una base SQLite en memoria (apropiada para tests).
+    Para persistencia entre reinicios, se debe proporcionar una ruta de archivo.
+    """
+
+    # NEXUS_SEMANTIC_MEMORY_PATCH_V1
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        if db_path is None or str(db_path) == ":memory:":
+            resolved_path = ":memory:"
+        else:
+            path = Path(db_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path = str(path)
+
+        self._connection = sqlite3.connect(resolved_path, timeout=10.0)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        if resolved_path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode = WAL")
+        self._initialize_schema()
+
+    def _initialize_schema(self) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semantic_facts (
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    PRIMARY KEY (subject, predicate)
+                )
+                """
+            )
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("SemanticMemory values must be strings.")
+        return " ".join(value.strip().lower().split())
+
+    @staticmethod
+    def _normalize_confidence(confidence: float) -> float:
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SemanticFact confidence must be numeric.") from exc
+        return max(0.0, min(1.0, confidence))
+
+    @staticmethod
+    def _to_fact(row: sqlite3.Row | None) -> SemanticFact | None:
+        if row is None:
+            return None
+        return SemanticFact(
+            subject=row["subject"],
+            predicate=row["predicate"],
+            value=json.loads(row["value_json"]),
+            confidence=float(row["confidence"]),
+            source=row["source"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            metadata=json.loads(row["metadata_json"]),
+        )
+
+    def learn(
+        self,
+        subject: str,
+        predicate: str,
+        value: Any,
+        *,
+        confidence: float = 1.0,
+        source: str = "system",
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticFact:
+        subject = self._normalize(subject)
+        predicate = self._normalize(predicate)
+        if not subject:
+            raise ValueError("SemanticFact subject cannot be empty.")
+        if not predicate:
+            raise ValueError("SemanticFact predicate cannot be empty.")
+
+        confidence = self._normalize_confidence(confidence)
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(subject, predicate)
+        created_at = current.created_at.isoformat() if current else now
+        metadata_value = dict(metadata) if metadata is not None else (current.metadata if current else {})
+
+        value_json = json.dumps(value, ensure_ascii=False)
+        metadata_json = json.dumps(metadata_value, ensure_ascii=False)
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO semantic_facts
+                    (subject, predicate, value_json, confidence, source,
+                     created_at, updated_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subject, predicate) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                (subject, predicate, value_json, confidence, source,
+                 created_at, now, metadata_json),
+            )
+        fact = self.get(subject, predicate)
+        assert fact is not None
+        return fact
+
+    def get(self, subject: str, predicate: str) -> SemanticFact | None:
+        row = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE subject = ? AND predicate = ?",
+            (self._normalize(subject), self._normalize(predicate)),
+        ).fetchone()
+        return self._to_fact(row)
+
+    def get_value(self, subject: str, predicate: str, default: Any = None) -> Any:
+        fact = self.get(subject, predicate)
+        return default if fact is None else fact.value
+
+    def find_by_subject(self, subject: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE subject = ? ORDER BY created_at",
+            (self._normalize(subject),),
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def find_by_predicate(self, predicate: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE predicate = ? ORDER BY created_at",
+            (self._normalize(predicate),),
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def all(self) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts ORDER BY created_at, subject, predicate"
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def count(self) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS total FROM semantic_facts"
+        ).fetchone()
+        return int(row["total"])
+
+    def forget(self, subject: str, predicate: str) -> bool:
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM semantic_facts WHERE subject = ? AND predicate = ?",
+                (self._normalize(subject), self._normalize(predicate)),
+            )
+        return cursor.rowcount > 0
+
+    def clear(self) -> None:
+        with self._connection:
+            self._connection.execute("DELETE FROM semantic_facts")
+
+    def close(self) -> None:
+        """Cierra la conexión SQLite asociada a esta instancia."""
+        self._connection.close()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\semantic_retriever.py
+================================================================================
+
+from __future__ import annotations
+import re
+from dataclasses import dataclass
+
+from memory.semantic_memory import SemanticFact, SemanticMemory
+
+
+@dataclass(frozen=True)
+class SemanticMatch:
+    """
+    Resultado de una recuperación semántica.
+
+    score:
+        Relevancia calculada para la consulta.
+    """
+
+    fact: SemanticFact
+    score: float
+
+
+class SemanticRetriever:
+    """
+    Recupera conocimiento desde SemanticMemory.
+
+    Esta capa NO:
+    - modifica memoria
+    - aprende hechos
+    - ejecuta acciones
+    - consulta el sistema
+    - interpreta lenguaje natural complejo
+
+    Solamente recupera y ordena conocimiento existente.
+    """
+
+    def __init__(
+        self,
+        semantic_memory: SemanticMemory,
+    ) -> None:
+        self._semantic_memory = semantic_memory
+
+    def search(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[SemanticMatch]:
+        """
+        Busca hechos relacionados con una consulta.
+
+        La recuperación utiliza coincidencias simples
+        sobre subject, predicate y value textual.
+        """
+
+        query = self._normalize(query)
+
+        if not query:
+            return []
+
+        if limit <= 0:
+            return []
+
+        matches: list[SemanticMatch] = []
+
+        for fact in self._semantic_memory.all():
+            score = self._score(
+                fact,
+                query,
+            )
+
+            if score <= 0:
+                continue
+
+            matches.append(
+                SemanticMatch(
+                    fact=fact,
+                    score=score,
+                )
+            )
+
+        matches.sort(
+            key=lambda match: (
+                -match.score,
+                -match.fact.confidence,
+                match.fact.subject,
+                match.fact.predicate,
+            )
+        )
+
+        return matches[:limit]
+
+    def search_by_subject(
+        self,
+        subject: str,
+        *,
+        limit: int = 10,
+    ) -> list[SemanticMatch]:
+        """
+        Recupera conocimiento asociado a un sujeto.
+        """
+
+        subject = self._normalize(subject)
+
+        if not subject or limit <= 0:
+            return []
+
+        facts = self._semantic_memory.find_by_subject(
+            subject
+        )
+
+        matches = [
+            SemanticMatch(
+                fact=fact,
+                score=1.0,
+            )
+            for fact in facts
+        ]
+
+        matches.sort(
+            key=lambda match: (
+                -match.fact.confidence,
+                match.fact.predicate,
+            )
+        )
+
+        return matches[:limit]
+
+    def search_by_predicate(
+        self,
+        predicate: str,
+        *,
+        limit: int = 10,
+    ) -> list[SemanticMatch]:
+        """
+        Recupera conocimiento asociado a un predicado.
+        """
+
+        predicate = self._normalize(predicate)
+
+        if not predicate or limit <= 0:
+            return []
+
+        facts = self._semantic_memory.find_by_predicate(
+            predicate
+        )
+
+        matches = [
+            SemanticMatch(
+                fact=fact,
+                score=1.0,
+            )
+            for fact in facts
+        ]
+
+        matches.sort(
+            key=lambda match: (
+                -match.fact.confidence,
+                match.fact.subject,
+            )
+        )
+
+        return matches[:limit]
+
+    
+    @staticmethod
+    def _score(
+        fact: SemanticFact,
+        query: str,
+    ) -> float:
+        """Calcula relevancia mediante frases y términos compartidos."""
+
+        subject = SemanticRetriever._normalize(fact.subject)
+        predicate = SemanticRetriever._normalize(fact.predicate)
+        value = SemanticRetriever._normalize(str(fact.value))
+
+        # Conservar el comportamiento existente para coincidencias directas.
+        score = 0.0
+
+        if query == subject:
+            score += 1.0
+
+        if query == predicate:
+            score += 0.9
+
+        if query == value:
+            score += 0.8
+
+        if query in subject:
+            score += 0.6
+
+        if query in predicate:
+            score += 0.5
+
+        if query in value:
+            score += 0.4
+
+        # Solo aplicar coincidencia por términos si la búsqueda directa
+        # no encontró nada.
+        if score > 0:
+            return score
+
+        stopwords = {
+            "que", "qué", "recordas", "recordás", "recuerdas",
+            "sobre", "el", "la", "los", "las", "de", "del",
+            "un", "una", "unos", "unas", "me", "lo", "por",
+            "favor", "acerca", "contame", "decime",
+        }
+
+        query_tokens = {
+            token
+            for token in re.findall(r"[a-záéíóúüñ0-9]+", query)
+            if token not in stopwords
+        }
+
+        if not query_tokens:
+            return 0.0
+
+        subject_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", subject)
+        )
+        predicate_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", predicate)
+        )
+        value_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", value)
+        )
+
+        matched_subject = query_tokens & subject_tokens
+        matched_predicate = query_tokens & predicate_tokens
+        matched_value = query_tokens & value_tokens
+
+        matched_tokens = (
+            matched_subject | matched_predicate | matched_value
+        )
+
+        if not matched_tokens:
+            return 0.0
+
+        coverage = len(matched_tokens) / len(query_tokens)
+
+        return (
+            0.4 * coverage
+            + 0.2 * bool(matched_subject)
+            + 0.2 * bool(matched_predicate)
+            + 0.2 * bool(matched_value)
+        )
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        return " ".join(
+            value.strip().lower().split()
+        )
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\state_history.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from memory.working_memory import WorkingMemory
+
+
+class StateHistory:
+    """
+    Consulta estados históricos derivados de los
+    execution_result almacenados en WorkingMemory.
+
+    No modifica la memoria.
+    No ejecuta acciones.
+    No interpreta lenguaje natural.
+
+    Distingue entre:
+
+    - eventos de cambio de estado
+    - eventos de restauración
+    - último estado conocido
+    - estado anterior al último cambio/restauración
+    - último estado establecido explícitamente
+
+    La clase solamente reconstruye estados a partir
+    de resultados reales de ejecución.
+    """
+
+    STATE_CHANGING_STATUSES = {
+        "set",
+        "opened",
+        "closed",
+        "enabled",
+        "disabled",
+        "connected",
+        "disconnected",
+        "started",
+        "stopped",
+        "muted",
+        "unmuted",
+        "restored",
+    }
+
+    RESTORATION_STATUS = "restored"
+
+    def __init__(
+        self,
+        memory: WorkingMemory,
+    ) -> None:
+
+        self._memory = memory
+
+    def events(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Devuelve todos los eventos históricos válidos
+        de un recurso.
+
+        Si se especifica status, filtra por ese estado.
+        """
+
+        events: list[dict[str, Any]] = []
+
+        for entry in self._memory.find(
+            "execution_result"
+        ):
+
+            data = entry.data
+
+            if not data.get("success"):
+                continue
+
+            output = data.get(
+                "output",
+                {},
+            )
+
+            if not isinstance(
+                output,
+                dict,
+            ):
+                continue
+
+            if resource not in output:
+                continue
+
+            event_status = output.get(
+                "status"
+            )
+
+            if (
+                event_status
+                not in self.STATE_CHANGING_STATUSES
+            ):
+                continue
+
+            if (
+                status is not None
+                and event_status != status
+            ):
+                continue
+
+            events.append(
+                {
+                    "resource": resource,
+                    "value": output[resource],
+                    "status": event_status,
+                    "timestamp": entry.timestamp,
+                    "data": data,
+                }
+            )
+
+        return events
+
+    def values(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> list[Any]:
+        """
+        Devuelve los valores históricos de un recurso.
+
+        Incluye eventos de restauración salvo que se
+        solicite explícitamente otro status.
+        """
+
+        return [
+            event["value"]
+            for event in self.events(
+                resource,
+                status=status,
+            )
+        ]
+
+    def last(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> Any | None:
+        """
+        Devuelve el último valor conocido de un recurso.
+
+        Si se especifica status, devuelve el último
+        evento que tenga ese status.
+        """
+
+        events = self.events(
+            resource,
+            status=status,
+        )
+
+        if not events:
+            return None
+
+        return events[-1]["value"]
+
+    def previous(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> Any | None:
+        """
+        Devuelve el valor anterior al último evento.
+
+        Si se especifica status, solamente considera
+        eventos de ese tipo.
+        """
+
+        events = self.events(
+            resource,
+            status=status,
+        )
+
+        if len(events) < 2:
+            return None
+
+        return events[-2]["value"]
+
+    def last_event(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Devuelve el último evento conocido.
+        """
+
+        events = self.events(
+            resource,
+            status=status,
+        )
+
+        if not events:
+            return None
+
+        return events[-1]
+
+    def previous_event(
+        self,
+        resource: str,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Devuelve el evento anterior al último.
+        """
+
+        events = self.events(
+            resource,
+            status=status,
+        )
+
+        if len(events) < 2:
+            return None
+
+        return events[-2]
+
+    def last_set(
+        self,
+        resource: str,
+    ) -> Any | None:
+        """
+        Devuelve el último valor establecido explícitamente.
+
+        No considera restauraciones.
+        """
+
+        return self.last(
+            resource,
+            status="set",
+        )
+
+    def previous_set(
+        self,
+        resource: str,
+    ) -> Any | None:
+        """
+        Devuelve el valor establecido explícitamente
+        inmediatamente anterior al último set.
+
+        No considera restauraciones.
+        """
+
+        return self.previous(
+            resource,
+            status="set",
+        )
+
+    def last_non_restored(
+        self,
+        resource: str,
+    ) -> Any | None:
+        """
+        Devuelve el último estado que no provino
+        de una restauración.
+
+        Es útil para reconstruir el estado base
+        anterior a una operación de restore.
+        """
+
+        events = self.events(
+            resource
+        )
+
+        for event in reversed(events):
+
+            if (
+                event["status"]
+                != self.RESTORATION_STATUS
+            ):
+                return event["value"]
+
+        return None
+
+    def previous_non_restored(
+        self,
+        resource: str,
+    ) -> Any | None:
+        """
+        Devuelve el estado no restaurado anterior
+        al último estado no restaurado.
+        """
+
+        events = [
+            event
+            for event in self.events(resource)
+            if (
+                event["status"]
+                != self.RESTORATION_STATUS
+            )
+        ]
+
+        if len(events) < 2:
+            return None
+
+        return events[-2]["value"]
+
+    def previous_restorable(
+        self,
+        resource: str,
+    ) -> Any | None:
+        """
+        Devuelve el estado al que debería volver
+        una operación de restauración.
+
+        Si el último evento fue una restauración,
+        busca el último estado anterior que no sea
+        una restauración.
+
+        Si el último evento no fue una restauración,
+        devuelve el estado inmediatamente anterior.
+        """
+
+        events = self.events(
+            resource
+        )
+
+        if not events:
+            return None
+
+        last_event = events[-1]
+
+        #
+        # Si el último evento fue una restauración,
+        # buscamos hacia atrás el último estado que
+        # no provenga de otra restauración.
+        #
+
+        if (
+            last_event["status"]
+            == self.RESTORATION_STATUS
+        ):
+
+            for event in reversed(
+                events[:-1]
+            ):
+
+                if (
+                    event["status"]
+                    != self.RESTORATION_STATUS
+                ):
+                    return event["value"]
+
+            return None
+
+        #
+        # Todavía no hubo restauración.
+        # En ese caso queremos el estado anterior
+        # al estado actual.
+        #
+
+        if len(events) < 2:
+            return None
+
+        return events[-2]["value"]
+
+    def find(
+        self,
+        resource: str,
+        value: Any,
+        status: str | None = None,
+    ) -> bool:
+        """
+        Indica si un valor determinado aparece
+        en el historial del recurso.
+        """
+
+        return value in self.values(
+            resource,
+            status=status,
+        )
+
+    def find_events(
+        self,
+        resource: str,
+        value: Any,
+        status: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Devuelve todos los eventos que coincidan
+        con un valor determinado.
+        """
+
+        return [
+            event
+            for event in self.events(
+                resource,
+                status=status,
+            )
+            if event["value"] == value
+        ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\working_memory.py
+================================================================================
+
+from __future__ import annotations
+
+from uuid import uuid4
+from typing import Iterable
+
+from memory.memory_entry import MemoryEntry
+
+
+class WorkingMemory:
+    """
+    Memoria temporal de la sesión actual de NEXUS.
+
+    Almacena los eventos recientes de la interacción
+    y permite recuperar el contexto inmediato.
+    """
+
+    def __init__(
+        self,
+        max_entries: int = 100,
+    ) -> None:
+
+        if max_entries <= 0:
+            raise ValueError(
+                "max_entries must be greater than zero."
+            )
+
+        self._max_entries = max_entries
+
+        self._entries: list[MemoryEntry] = []
+
+    def add(
+        self,
+        type: str,
+        data: dict,
+    ) -> MemoryEntry:
+        """
+        Agrega una nueva entrada a la memoria.
+        """
+
+        entry = MemoryEntry(
+            id=str(uuid4()),
+            type=type,
+            data=data,
+        )
+
+        self._entries.append(
+            entry
+        )
+
+        self._trim()
+
+        return entry
+
+    def add_entry(
+        self,
+        entry: MemoryEntry,
+    ) -> MemoryEntry:
+        """
+        Agrega una entrada existente.
+        """
+
+        self._entries.append(
+            entry
+        )
+
+        self._trim()
+
+        return entry
+
+    def recent(
+        self,
+        limit: int = 10,
+    ) -> list[MemoryEntry]:
+        """
+        Devuelve las entradas más recientes.
+        """
+
+        if limit <= 0:
+            return []
+
+        return self._entries[-limit:]
+
+    def last(self) -> MemoryEntry | None:
+        """
+        Devuelve la última entrada registrada.
+        """
+
+        if not self._entries:
+            return None
+
+        return self._entries[-1]
+
+    def find(
+        self,
+        type: str,
+    ) -> list[MemoryEntry]:
+        """
+        Devuelve todas las entradas de un tipo.
+        """
+
+        return [
+            entry
+            for entry in self._entries
+            if entry.type == type
+        ]
+
+    def count(self) -> int:
+        """
+        Devuelve la cantidad de entradas almacenadas.
+        """
+
+        return len(
+            self._entries
+        )
+
+    def all(self) -> list[MemoryEntry]:
+        """
+        Devuelve una copia de todas las entradas.
+        """
+
+        return list(
+            self._entries
+        )
+
+    def clear(self) -> None:
+        """
+        Limpia completamente la memoria.
+        """
+
+        self._entries.clear()
+
+    def _trim(self) -> None:
+        """
+        Mantiene la memoria dentro del límite configurado.
+        """
+
+        overflow = (
+            len(self._entries)
+            - self._max_entries
+        )
+
+        if overflow > 0:
+
+            del self._entries[
+                :overflow
+            ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

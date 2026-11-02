@@ -5,6 +5,7 @@ from typing import Any
 from adapters.windows.app_launcher import (
     WindowsAppLauncher,
 )
+from adapters.windows.file_opener import WindowsFileOpener
 
 from adapters.windows.process_manager import (
     WindowsProcessManager,
@@ -48,6 +49,7 @@ class LocalProvider(ToolProvider):
     def __init__(self) -> None:
 
         self._launcher = WindowsAppLauncher()
+        self._file_opener = WindowsFileOpener()
 
         self._process_manager = (
             WindowsProcessManager()
@@ -68,6 +70,18 @@ class LocalProvider(ToolProvider):
         """
 
         return [
+            Tool(
+                name="windows.open_file",
+                action="system.open_file",
+                description="Busca y abre un archivo con la aplicación predeterminada.",
+                provider=self.name,
+                parameters={
+                    "file_name": {"type": "string", "required": True, "description": "Nombre del archivo."},
+                    "location": {"type": "string", "required": True, "description": "desktop, documents o downloads."},
+                    "extension": {"type": "string", "required": False, "description": "Extensión opcional."},
+                },
+            ),
+
             Tool(
                 name="windows.open_app",
                 action="system.open_app",
@@ -188,6 +202,13 @@ class LocalProvider(ToolProvider):
         tool: str,
         parameters: dict[str, Any],
     ) -> Any:
+
+        if tool == "windows.open_file":
+            return self._file_opener.open(
+                parameters.get("file_name", ""),
+                parameters.get("location", "desktop"),
+                parameters.get("extension"),
+            )
 
         if tool == "windows.open_app":
             return await self._open_app(

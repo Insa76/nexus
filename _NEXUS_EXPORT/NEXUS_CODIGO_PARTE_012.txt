@@ -1,0 +1,2133 @@
+﻿
+================================================================================
+ARCHIVO: backend\core\vector_memory.py
+================================================================================
+
+import uuid
+import json
+
+from core.database import get_connection
+
+from core.embeddings import (
+    fake_embedding,
+    cosine_similarity
+)
+
+
+def save_vector_memory(
+
+    agent,
+    content,
+    metadata=None
+):
+
+    embedding = fake_embedding(
+        content
+    )
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO vector_memory
+        (
+            id,
+            agent,
+            content,
+            embedding,
+            metadata
+        )
+        VALUES (%s,%s,%s,%s,%s)
+    """, (
+        str(uuid.uuid4()),
+        agent,
+        content,
+        json.dumps(embedding),
+        json.dumps(metadata)
+        if metadata
+        else None
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def search_memory(
+
+    agent,
+    query,
+    limit=5
+):
+
+    query_embedding = fake_embedding(
+        query
+    )
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM vector_memory
+        WHERE agent = %s
+    """, (agent,))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    scored = []
+
+    for row in rows:
+
+        embedding = row["embedding"]
+
+        if isinstance(embedding, str):
+            embedding = json.loads(
+                embedding
+            )
+
+        score = cosine_similarity(
+            query_embedding,
+            embedding
+        )
+
+        scored.append({
+            "score": score,
+            "memory": dict(row)
+        })
+
+    scored.sort(
+        key=lambda x: x["score"],
+        reverse=True
+    )
+
+    return scored[:limit]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\vision.py
+================================================================================
+
+import pytesseract
+
+from PIL import Image
+
+from pytesseract import Output
+
+
+TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+pytesseract.pytesseract.tesseract_cmd = (
+    TESSERACT_PATH
+)
+
+
+def extract_text(image_path):
+
+    image = Image.open(image_path)
+
+    text = pytesseract.image_to_string(
+        image
+    )
+
+    return text
+
+def detect_ui_elements(
+    image_path
+):
+
+    image = Image.open(image_path)
+
+    data = pytesseract.image_to_data(
+
+        image,
+
+        output_type=Output.DICT
+    )
+
+    elements = []
+
+    total = len(data["text"])
+
+    for i in range(total):
+
+        text = data["text"][i].strip()
+
+        if not text:
+            continue
+
+        elements.append({
+
+            "text": text,
+
+            "x": data["left"][i],
+
+            "y": data["top"][i],
+
+            "w": data["width"][i],
+
+            "h": data["height"][i]
+        })
+
+    return elements
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\workflow_generator.py
+================================================================================
+
+import json
+import re
+
+from core.ai_agent import ask_agent
+
+
+def generate_workflow(
+
+    goal,
+    model="llama3"
+):
+
+    prompt = f"""
+You are an AI workflow architect.
+
+Goal:
+{goal}
+
+Available actions:
+
+- create_folder
+- move_files
+- open_url
+- if_extension
+- approval
+- join
+
+Generate a workflow graph.
+
+Respond ONLY valid JSON.
+
+Format:
+
+{{
+  "nodes": [],
+  "edges": []
+}}
+"""
+
+    response = ask_agent(
+        prompt,
+        model
+    )
+
+    print(f"🧠 DAG RAW: {response}")
+
+    match = re.search(
+        r"\{.*\}",
+        response,
+        re.DOTALL
+    )
+
+    if not match:
+
+        return None
+
+    return json.loads(
+        match.group(0)
+    )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\Dockerfile
+================================================================================
+
+FROM python:3.11
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn","main:app","--host","0.0.0.0","--port","8000"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\bus.py
+================================================================================
+
+import asyncio
+import inspect
+from collections import defaultdict
+
+
+class EventBus:
+
+    def __init__(self):
+        self.listeners = defaultdict(list)
+
+    def subscribe(self, event_type: str, handler):
+        self.listeners[event_type].append(handler)
+
+    async def publish(self, event_type: str, payload: dict):
+
+        if event_type not in self.listeners:
+            return
+
+        for handler in self.listeners[event_type]:
+
+            asyncio.create_task(
+                self._safe_execute(handler, event_type, payload)
+            )
+
+    async def _safe_execute(self, handler, event_type, payload):
+
+        try:
+            sig = inspect.signature(handler)
+
+            # Handler(event_type, payload)
+            if len(sig.parameters) == 2:
+                await handler(event_type, payload)
+
+            # Handler(payload)
+            else:
+                await handler(payload)
+
+        except Exception as e:
+            print(f"⚠ Event handler error [{event_type}]:", e)
+
+
+bus = EventBus()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\dlq.py
+================================================================================
+
+import uuid
+import json
+from datetime import datetime
+
+from core.database import get_connection
+from events.bus import bus
+
+
+class DeadLetterQueue:
+
+    async def handle_final_failure(self, payload):
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO dead_jobs
+        (id, job_id, workflow, tenant_id, workspace_id,
+         error, payload, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            str(uuid.uuid4()),
+            payload.get("job_id"),
+            payload.get("workflow"),
+            payload.get("tenant_id"),
+            payload.get("workspace_id"),
+            payload.get("error"),
+            json.dumps(payload),
+            datetime.utcnow()
+        ))
+
+        conn.commit()
+        conn.close()
+
+        await bus.publish("dlq.stored", {
+            "workflow": payload.get("workflow"),
+            "job_id": payload.get("job_id")
+        })
+
+
+dlq = DeadLetterQueue()
+
+
+def register_dlq():
+    bus.subscribe("job.failed.final", dlq.handle_final_failure)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\retry.py
+================================================================================
+
+import asyncio
+from collections import defaultdict
+from events.bus import bus
+from jobs.manager import manager
+from workflows.repository import get_workflow_by_name
+
+
+class RetryManager:
+
+    def __init__(self):
+        self.retry_count = defaultdict(int)
+
+    async def handle_step_error(self, payload):
+
+        workflow = payload["workflow"]
+        job_id = payload.get("job_id")
+
+        wf = get_workflow_by_name(workflow)
+
+        if not wf:
+            return
+
+        retry_conf = wf.get("retry")
+        if not retry_conf:
+            return
+
+        max_r = retry_conf.get("max_retries", 0)
+        delay = retry_conf.get("delay_seconds", 0)
+        backoff = retry_conf.get("backoff", "fixed")
+
+        self.retry_count[job_id] += 1
+        attempt = self.retry_count[job_id]
+
+        if attempt > max_r:
+
+            # 🔥 AQUÍ VA EL PASO 4
+            await bus.publish("job.failed.final", {
+                "workflow": workflow,
+                "job_id": job_id,
+                "tenant_id": wf.get("tenant_id"),
+                "workspace_id": wf.get("workspace_id"),
+                "error": "Max retries exceeded"
+            })
+
+            return
+
+        # delay inteligente
+        if backoff == "exponential":
+            wait = delay * (2 ** (attempt - 1))
+        else:
+            wait = delay
+
+        await asyncio.sleep(wait)
+
+        await manager.create_job(
+            workflow,
+            wf.get("tenant_id"),
+            wf.get("workspace_id")
+        )
+
+
+retry_manager = RetryManager()
+
+
+def register_retry():
+    bus.subscribe("step.error", retry_manager.handle_step_error)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\router.py
+================================================================================
+
+from events.bus import bus
+from jobs.manager import manager
+from workflows.repository import get_workflows_by_trigger
+
+
+async def handle_event(event_type: str, payload: dict):
+
+    workflows = get_workflows_by_trigger(event_type)
+
+    for wf in workflows:
+
+        await manager.create_job(
+            wf["name"],
+            wf["tenant_id"],
+            wf["workspace_id"]
+        )
+
+
+def register_event_routes():
+
+    bus.subscribe("filesystem.created", handle_event)
+    bus.subscribe("webhook.received", handle_event)
+    bus.subscribe("system.event", handle_event)
+
+    # internos
+    bus.subscribe("job.failed", handle_event)
+    bus.subscribe("job.done", handle_event)
+    bus.subscribe("step.error", handle_event)
+    bus.subscribe("circuit.opened", handle_event)
+    bus.subscribe("circuit.closed", handle_event)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\routes_dlq.py
+================================================================================
+
+from fastapi import APIRouter, Depends
+from core.database import get_connection
+from auth.deps import get_current_user
+
+router = APIRouter(prefix="/dlq")
+
+
+@router.get("/")
+def list_dead_jobs(user=Depends(get_current_user)):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT * FROM dead_jobs
+    WHERE tenant_id=%s AND workspace_id=%s
+    ORDER BY created_at DESC
+    """, (
+        user["tenant_id"],
+        user["workspace_id"]
+    ))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+@router.post("/retry/{dead_id}")
+def retry_dead(dead_id: str, user=Depends(get_current_user)):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM dead_jobs WHERE id=%s", (dead_id,))
+    job = cur.fetchone()
+
+    if not job:
+        return {"error": "not found"}
+
+    from jobs.manager import manager
+
+    import asyncio
+    asyncio.create_task(
+        manager.create_job(job["workflow"],
+                           job["tenant_id"],
+                           job["workspace_id"])
+    )
+
+    return {"status": "requeued"}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\watcher.py
+================================================================================
+
+import asyncio
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+from workflows.engine import run_workflow
+from jobs.manager import manager
+from events.bus import bus
+
+
+class FolderHandler(FileSystemEventHandler):
+
+    def __init__(self, path, workflow_name):
+        self.path = path
+        self.workflow_name = workflow_name
+
+    def on_created(self, event):
+
+     if event.is_directory:
+        return
+
+     asyncio.create_task(
+        bus.publish("filesystem.created", {
+            "path": event.src_path
+        })
+    )
+
+
+class Watcher:
+
+    def __init__(self):
+        self.observer = Observer()
+        self.active = []
+
+    def watch(self, path, workflow_name):
+
+        handler = FolderHandler(path, workflow_name)
+
+        self.observer.schedule(handler, path, recursive=False)
+        self.active.append((path, workflow_name))
+
+    def start(self):
+        self.observer.start()
+
+
+watcher = Watcher()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\events\webhook.py
+================================================================================
+
+from fastapi import APIRouter
+from jobs.manager import manager
+from events.bus import bus
+
+router = APIRouter(prefix="/webhook")
+
+
+@router.post("/{workflow_name}")
+async def webhook_trigger(workflow_name: str):
+
+    await bus.publish("webhook.received", {
+        "workflow": workflow_name
+    })
+
+    return {"status": "event published"}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\goals\goals_manager.py
+================================================================================
+
+import uuid
+from datetime import datetime
+from core.database import get_connection
+
+
+def create_goal(goal):
+
+    goal_id = str(uuid.uuid4())
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO goals
+        (id, goal, status, created_at)
+        VALUES (%s, %s, %s, %s)
+    """, (
+        goal_id,
+        goal,
+        "active",
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return goal_id
+
+
+def list_goals():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, goal, status
+        FROM goals
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": r["id"],
+            "goal": r["goal"],
+            "status": r["status"]
+        }
+        for r in rows
+    ]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\history\store.py
+================================================================================
+
+import json
+from pathlib import Path
+
+FILE = Path("nexus_history.json")
+
+
+def load_history():
+    if FILE.exists():
+        return json.loads(FILE.read_text(encoding="utf-8"))
+    return []
+
+
+def save_history(history):
+    FILE.write_text(json.dumps(history[-50:], indent=2), encoding="utf-8")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\integrations\email.py
+================================================================================
+
+import asyncio
+from email.message import EmailMessage
+import aiosmtplib
+
+
+async def send_email(
+    smtp_host,
+    smtp_port,
+    username,
+    password,
+    to,
+    subject,
+    body
+):
+
+    msg = EmailMessage()
+    msg["From"] = username
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    await aiosmtplib.send(
+        msg,
+        hostname=smtp_host,
+        port=smtp_port,
+        username=username,
+        password=password,
+        start_tls=True
+    )
+
+    return "Email enviado"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\integrations\http_client.py
+================================================================================
+
+import httpx
+
+
+async def http_request(method, url, headers=None, body=None, timeout=10):
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+
+        response = await client.request(
+            method=method,
+            url=url,
+            headers=headers,
+            json=body
+        )
+
+        response.raise_for_status()
+
+        return {
+            "status": response.status_code,
+            "data": response.json() if "application/json" in response.headers.get("content-type","") else response.text
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\integrations\slack.py
+================================================================================
+
+import httpx
+
+
+async def send_slack(webhook_url, message):
+
+    async with httpx.AsyncClient() as client:
+
+        res = await client.post(
+            webhook_url,
+            json={"text": message}
+        )
+
+        res.raise_for_status()
+
+        return "Slack enviado"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\jobs\actions.py
+================================================================================
+
+import os
+import shutil
+import webbrowser
+import json
+import re
+import pyautogui
+import asyncio
+
+from core.ai_agent import ask_agent
+
+from core.agent_memory import (
+    save_memory,
+    load_memory
+)
+
+from core.agents import (
+    PlannerAgent,
+    SupervisorAgent
+)
+
+from core.vector_memory import (
+    save_vector_memory,
+    search_memory
+)
+
+from core.workflow_generator import (
+    generate_workflow
+)
+
+from core.security import (
+    validate_action
+)
+
+from core.vision import (
+    extract_text
+)
+
+from core.vision import (
+    detect_ui_elements
+)
+
+from core.object_detection import (
+    detect_objects
+)
+
+from core.accessibility import (
+    list_ui_elements
+)
+
+from core.accessibility import (
+    click_ui_element
+)
+
+from core.multimodal_memory import (
+    save_multimodal_memory,
+    load_recent_memories
+)
+
+
+
+BASE_PATH = r"C:\Users\cdi40\Desktop"
+
+
+async def execute_action(action, value):
+
+    print(f"📂 BASE PATH: {BASE_PATH}")
+    print(f"📄 EXISTS: {os.path.exists(BASE_PATH)}")
+    print(f"🔥 STEP: {action} → {value}")
+
+    safe, reason = validate_action(
+    action,
+    value
+  )
+
+    if not safe:
+
+       print(
+          f"🛑 BLOCKED: {reason}"
+       )
+
+       return {
+          "success": False,
+          "blocked": True,
+          "reason": reason
+        }
+
+    # ==========================================================
+    # CREATE FOLDER
+    # ==========================================================
+    if action == "create_folder":
+
+        folder_path = os.path.join(
+            BASE_PATH,
+            value["path"].strip()
+        )
+
+        os.makedirs(folder_path, exist_ok=True)
+
+        print(f"📁 Carpeta creada: {folder_path}")
+
+        return {
+            "success": True
+        }
+
+    # ==========================================================
+    # MOVE FILES
+    # ==========================================================
+    elif action == "move_files":
+
+        files = os.listdir(BASE_PATH)
+
+        print(f"📄 ARCHIVOS: {files}")
+
+        moved = 0
+
+        destination = os.path.join(
+            BASE_PATH,
+            value["to"].strip()
+        )
+
+        os.makedirs(destination, exist_ok=True)
+
+        for f in files:
+
+            if f.endswith(value["ext"]):
+
+                source = os.path.join(
+                    BASE_PATH,
+                    f
+                )
+
+                target = os.path.join(
+                    destination,
+                    f
+                )
+
+                shutil.move(source, target)
+
+                moved += 1
+
+                print(f"📦 Movido: {f}")
+
+        print(f"✅ Total movidos: {moved}")
+
+        return {
+            "success": True,
+            "moved": moved
+        }
+
+    # ==========================================================
+    # OPEN URL
+    # ==========================================================
+    elif action == "open_url":
+
+        webbrowser.open(value["url"])
+
+        print(f"🌐 URL abierta: {value['url']}")
+
+        return {
+            "success": True
+        }
+
+    # ==========================================================
+    # JOIN
+    # ==========================================================
+    elif action == "join":
+
+        print("🔗 JOIN NODE")
+
+        return {
+            "success": True
+        }
+
+    # ==========================================================
+    # APPROVAL
+    # ==========================================================
+    elif action == "approval":
+
+        print("🛑 WAITING APPROVAL")
+
+        return {
+            "waiting_approval": True
+        }
+
+    # ==========================================================
+    # IF EXTENSION
+    # ==========================================================
+    elif action == "if_extension":
+
+        ext = value["ext"]
+
+        files = os.listdir(BASE_PATH)
+
+        found = any(
+            f.endswith(ext)
+            for f in files
+        )
+
+        print(f"🔍 IF EXTENSION {ext}: {found}")
+
+        return {
+            "success": found
+        }
+
+    # ==========================================================
+    # AI CLASSIFY FILE
+    # ==========================================================
+    elif action == "ai_classify_file":
+
+        files = os.listdir(BASE_PATH)
+
+        pdfs = [
+            f for f in files
+            if f.endswith(".pdf")
+        ]
+
+        if not pdfs:
+
+            return {
+                "decision": "none"
+            }
+
+        filename = pdfs[0]
+
+        print(f"🧠 AI ANALYZING: {filename}")
+
+        lower = filename.lower()
+
+        if "factura" in lower:
+
+            decision = "invoice"
+
+        elif "contrato" in lower:
+
+            decision = "contract"
+
+        else:
+
+            decision = "unknown"
+
+        print(f"🧠 AI DECISION: {decision}")
+
+        return {
+            "success": True,
+            "decision": decision
+        }
+
+    # ==========================================================
+    # AI AGENT
+    # ==========================================================
+    elif action == "ai_agent":
+
+        files = os.listdir(BASE_PATH)
+
+        context = "\n".join(files)
+
+        prompt = value.get(
+            "prompt",
+            ""
+        )
+
+        model = value.get(
+            "model",
+            "llama3"
+        )
+
+        full_prompt = f"""
+Archivos actuales:
+
+{context}
+
+{prompt}
+"""
+
+        print("🧠 ASKING AGENT")
+
+        response = ask_agent(
+            full_prompt,
+            model
+        )
+
+        print(f"🧠 AGENT RESPONSE: {response}")
+
+        return {
+            "success": True,
+            "decision": response.strip()
+        }
+
+    # ==========================================================
+    # AI TOOL AGENT
+    # ==========================================================
+    elif action == "ai_tool_agent":
+
+        goal = value.get(
+            "goal",
+            ""
+        )
+
+        model = value.get(
+            "model",
+            "llama3"
+        )
+
+        tools = """
+
+AVAILABLE TOOLS:
+
+1. create_folder
+params:
+{
+  "path": "string"
+}
+
+2. move_files
+params:
+{
+  "ext": ".pdf",
+  "to": "folder"
+}
+
+3. open_url
+params:
+{
+  "url": "https://..."
+}
+
+"""
+
+        prompt = f"""
+You are an automation AI.
+
+Goal:
+{goal}
+
+{tools}
+
+Respond ONLY valid JSON:
+
+{{
+  "tool": "...",
+  "params": {{}}
+}}
+"""
+
+        print("🧠 ASKING TOOL AGENT")
+
+        response = ask_agent(
+            prompt,
+            model
+        )
+
+        print(f"🧠 TOOL AGENT RAW: {response}")
+
+        # ======================================================
+        # EXTRACT JSON
+        # ======================================================
+        match = re.search(
+            r"\{.*\}",
+            response,
+            re.DOTALL
+        )
+
+        if not match:
+
+            print("❌ NO JSON RETURNED")
+
+            return {
+                "success": False
+            }
+
+        parsed = json.loads(
+            match.group(0)
+        )
+
+        tool = parsed.get("tool")
+
+        params = parsed.get(
+            "params",
+            {}
+        )
+
+        print(f"🛠 TOOL: {tool}")
+        print(f"🛠 PARAMS: {params}")
+
+        # ======================================================
+        # EXECUTE TOOL
+        # ======================================================
+        tool_result = await execute_action(
+            tool,
+            params
+        )
+
+        return {
+            "success": True,
+            "tool": tool,
+            "tool_result": tool_result
+        }
+
+    # ==========================================================
+    # AI AUTONOMOUS AGENT
+    # ==========================================================
+    elif action == "ai_autonomous_agent":
+
+        goal = value.get(
+            "goal",
+            ""
+        )
+
+        model = value.get(
+            "model",
+            "llama3"
+        )
+
+        max_steps = int(
+            value.get(
+                "max_steps",
+                5
+            )
+        )
+
+        # ======================================================
+        # AGENTS
+        # ======================================================
+        planner = PlannerAgent()
+
+        supervisor = SupervisorAgent()
+
+        print(f"🧠 AUTONOMOUS GOAL: {goal}")
+
+        # ======================================================
+        # TOOLS
+        # ======================================================
+        tools = """
+
+AVAILABLE TOOLS:
+
+1. create_folder
+params:
+{
+  "path": "string"
+}
+
+2. move_files
+params:
+{
+  "ext": ".pdf",
+  "to": "folder"
+}
+
+3. open_url
+params:
+{
+  "url": "https://..."
+}
+
+4. if_extension
+params:
+{
+  "ext": ".pdf"
+}
+
+"""
+
+        # ======================================================
+        # MEMORY
+        # ======================================================
+        memory = load_memory(
+            "main_agent",
+            limit=10
+        )
+
+        memory_text = "\n".join([
+
+            f"""
+Role: {m['role']}
+Content: {m['content']}
+"""
+
+            for m in memory
+        ])
+
+        # ======================================================
+        # VECTOR MEMORY
+        # ======================================================
+        similar_memories = search_memory(
+            "main_agent",
+            goal
+        )
+
+        memory_context = "\n".join([
+
+            m["memory"]["content"]
+
+            for m in similar_memories
+        ])
+
+        # ======================================================
+        # AGENT HISTORY
+        # ======================================================
+        history = []
+
+        from core.security import (
+         MAX_AUTONOMOUS_STEPS
+        )
+
+        max_steps = min(
+          max_steps,
+          MAX_AUTONOMOUS_STEPS
+        )
+
+        # ======================================================
+        # AGENT LOOP
+        # ======================================================
+        for step_index in range(max_steps):
+
+            print(f"\n🧠 AGENT STEP {step_index + 1}")
+
+            # ==================================================
+            # FILE CONTEXT
+            # ==================================================
+            try:
+
+                files = os.listdir(BASE_PATH)
+
+            except Exception:
+
+                files = []
+
+            context = "\n".join(files)
+
+            # ==================================================
+            # HISTORY
+            # ==================================================
+            history_text = "\n".join(history)
+
+            # ==================================================
+            # PROMPT
+            # ==================================================
+            prompt = f"""
+You are an autonomous automation AI.
+
+Your job is to achieve the user's goal using tools.
+
+GOAL:
+{goal}
+
+FILES:
+{context}
+
+PREVIOUS MEMORY:
+{memory_text}
+
+RELEVANT MEMORIES:
+{memory_context}
+
+TOOLS:
+{tools}
+
+PREVIOUS STEPS:
+{history_text}
+
+RULES:
+- Respond ONLY valid JSON
+- Never explain
+- Never use markdown
+- One tool at a time
+
+If the goal is complete:
+
+{{
+  "done": true
+}}
+
+Otherwise:
+
+{{
+  "tool": "tool_name",
+  "params": {{}}
+}}
+"""
+
+            # ==================================================
+            # PLANNER
+            # ==================================================
+            response = planner.plan(
+                goal,
+                tools,
+                history_text + "\n" + memory_context
+            )
+
+            print(f"🧠 RAW RESPONSE: {response}")
+
+            # ==================================================
+            # PARSE JSON
+            # ==================================================
+            try:
+
+                match = re.search(
+                    r"\{.*\}",
+                    response,
+                    re.DOTALL
+                )
+
+                if not match:
+
+                    history.append(
+                        "Invalid JSON response"
+                    )
+
+                    continue
+
+                parsed = json.loads(
+                    match.group(0)
+                )
+
+            except Exception as e:
+
+                history.append(
+                    f"JSON parse error: {str(e)}"
+                )
+
+                save_memory(
+                    "main_agent",
+                    "error",
+                    str(e)
+                )
+
+                continue
+
+            # ==================================================
+            # DONE
+            # ==================================================
+            if parsed.get("done"):
+
+                print("✅ AGENT COMPLETE")
+
+                save_memory(
+                    "main_agent",
+                    "goal_completed",
+                    goal
+                )
+
+                save_vector_memory(
+                    "main_agent",
+                    f"Completed goal: {goal}"
+                )
+
+                return {
+                    "success": True,
+                    "history": history
+                }
+
+            # ==================================================
+            # TOOL
+            # ==================================================
+            tool = parsed.get("tool")
+
+            params = parsed.get(
+                "params",
+                {}
+            )
+
+            print(f"🛠 TOOL: {tool}")
+            print(f"📦 PARAMS: {params}")
+
+            # ==================================================
+            # TOOL EXECUTION
+            # ==================================================
+            try:
+
+                tool_result = await execute_action(
+                    tool,
+                    params
+                )
+
+                print(f"✅ TOOL RESULT: {tool_result}")
+
+                # ==============================================
+                # SUPERVISOR
+                # ==============================================
+                review = supervisor.review(
+                    history
+                )
+
+                print(f"🛡 SUPERVISOR: {review}")
+
+                if "stop" in review.lower():
+
+                    print("🛑 SUPERVISOR STOPPED AGENT")
+
+                    save_memory(
+                        "main_agent",
+                        "supervisor_stop",
+                        review
+                    )
+
+                    return {
+                        "success": False,
+                        "error": "Supervisor stopped execution"
+                    }
+
+            except Exception as tool_error:
+
+                print(f"❌ TOOL ERROR: {tool_error}")
+
+                save_memory(
+                    "main_agent",
+                    "tool_error",
+                    str(tool_error)
+                )
+
+                save_vector_memory(
+                    "main_agent",
+                    f"Tool error: {tool_error}"
+                )
+
+                history.append(f"""
+Tool:
+{tool}
+
+Params:
+{params}
+
+Error:
+{str(tool_error)}
+""")
+
+                continue
+
+            # ==================================================
+            # SAVE MEMORY
+            # ==================================================
+            save_memory(
+
+                "main_agent",
+
+                "tool_execution",
+
+                f"""
+Tool: {tool}
+
+Params:
+{params}
+
+Result:
+{tool_result}
+""",
+
+                {
+                    "tool": tool
+                }
+            )
+
+            # ==================================================
+            # SAVE VECTOR MEMORY
+            # ==================================================
+            save_vector_memory(
+
+                "main_agent",
+
+                f"""
+Tool: {tool}
+
+Params:
+{params}
+
+Result:
+{tool_result}
+"""
+            )
+
+            # ==================================================
+            # OBSERVATION HISTORY
+            # ==================================================
+            history.append(f"""
+Tool:
+{tool}
+
+Params:
+{params}
+
+Result:
+{tool_result}
+""")
+
+        # ======================================================
+        # MAX STEPS REACHED
+        # ======================================================
+        print("❌ MAX STEPS REACHED")
+
+        save_memory(
+            "main_agent",
+            "max_steps",
+            goal
+        )
+
+        save_vector_memory(
+            "main_agent",
+            f"Max steps reached for goal: {goal}"
+        )
+
+        return {
+            "success": False,
+            "error": "Max steps reached",
+            "history": history
+        }
+    
+    elif action == "ai_generate_workflow":
+
+       goal = value.get(
+           "goal",
+           ""
+        )
+
+       model = value.get(
+           "model",
+           "llama3"
+        )
+
+       workflow = generate_workflow(
+           goal,
+           model
+        )
+
+       print(f"🧠 GENERATED DAG: {workflow}")
+
+       return {
+          "success": True,
+          "workflow": workflow
+        }
+    
+    elif action == "click":
+
+       x = int(value.get("x", 0))
+       y = int(value.get("y", 0))
+
+       pyautogui.click(x, y)
+
+       print(f"🖱 CLICK: {x},{y}")
+
+       return {
+          "success": True
+        }
+    
+    elif action == "type_text":
+
+       text = value.get(
+          "text",
+          ""
+        )
+
+       pyautogui.write(
+          text,
+          interval=0.02
+        )
+
+       print(f"⌨️ TEXT: {text}")
+
+       return {
+          "success": True
+        }
+    
+    elif action == "screenshot":
+
+       image = pyautogui.screenshot()
+
+       path = "latest_screen.png"
+
+       image.save(path)
+
+       print(f"📸 SCREENSHOT: {path}")
+
+       return {
+          "success": True,
+          "path": path
+        }
+    
+    elif action == "vision_read":
+
+       image = pyautogui.screenshot()
+
+       path = "vision.png"
+
+       image.save(path)
+
+       text = extract_text(path)
+
+       print(f"👁 VISION:\n{text}")
+
+       return {
+          "success": True,
+          "text": text
+        }
+    
+    elif action == "ai_vision_agent":
+
+       image = pyautogui.screenshot()
+
+       path = "vision_agent.png"
+
+       image.save(path)
+
+       text = extract_text(path)
+
+       goal = value.get(
+          "goal",
+          ""
+        )
+
+       prompt = f"""
+You are a visual AI assistant.
+
+Screen content:
+
+{text}
+
+Goal:
+{goal}
+
+What should the user click or do next?
+
+Respond briefly.
+"""
+
+       response = ask_agent(prompt)
+
+       print(f"👁🧠 VISION AI: {response}")
+
+       return {
+         "success": True,
+         "response": response
+        }
+    
+    elif action == "vision_click":
+
+       target = value.get(
+          "target",
+          ""
+        ).lower()
+
+       image = pyautogui.screenshot()
+
+       path = "vision_click.png"
+
+       image.save(path)
+
+       elements = detect_ui_elements(
+          path
+        )
+
+       print(f"👁 ELEMENTS: {elements}")
+
+       for el in elements:
+
+          text = el["text"].lower()
+
+          if target in text:
+
+            x = el["x"] + el["w"] // 2
+            y = el["y"] + el["h"] // 2
+
+            pyautogui.click(x, y)
+
+            print(
+                f"🖱 CLICKED: {target}"
+            )
+
+            return {
+                "success": True,
+
+                "clicked": target,
+
+                "x": x,
+
+                "y": y
+            }
+
+       return {
+          "success": False,
+          "error": "Target not found"
+        }
+    
+    elif action == "visual_autonomous_agent":
+
+       goal = value.get(
+          "goal",
+          ""
+        )
+
+       # ====================================
+       # LOAD VISUAL MEMORIES
+       # ====================================
+       memories = load_recent_memories(
+           "vision_agent",
+           limit=5
+        )
+
+       memory_context = "\n".join([
+
+           f"""
+OCR:
+{m["ocr_text"]}
+
+Objects:
+{m["objects"]}
+"""
+
+           for m in memories
+       ])
+
+       # ====================================
+       # VISUAL LOOP
+       # ====================================
+       for step in range(10):
+
+           print(f"👁 STEP {step+1}")
+
+           image = pyautogui.screenshot()
+
+           path = "visual_loop.png"
+
+           image.save(path)
+
+           # ====================================
+           # OCR UI
+           # ====================================
+           elements = detect_ui_elements(
+               path
+            )
+
+           ui_text = "\n".join([
+
+               el["text"]
+
+               for el in elements
+           ])
+
+           # ====================================
+           # OBJECT DETECTION
+           # ====================================
+           objects = detect_objects(
+               path
+            )
+
+           # ====================================
+           # SAVE MULTIMODAL MEMORY
+           # ====================================
+           save_multimodal_memory(
+
+              "vision_agent",
+
+              path,
+
+              ui_text,
+
+              objects,
+
+              {
+                  "goal": goal,
+                  "step": step + 1
+            }
+          )
+
+          # ====================================
+          # AI PROMPT
+          # ====================================
+           prompt = f"""
+You are a visual AI operator.
+
+Goal:
+{goal}
+
+Previous Visual Memories:
+
+{memory_context}
+
+Visible UI:
+
+{ui_text}
+
+Detected Objects:
+
+{objects}
+
+Decide the next action.
+
+Respond ONLY valid JSON.
+
+Click:
+
+{{
+  "action": "click",
+  "target": "Search"
+}}
+
+Type:
+
+{{
+  "action": "type",
+  "text": "Hello"
+}}
+
+Done:
+
+{{
+  "action": "done"
+}}
+"""
+
+        # ====================================
+        # ASK AGENT
+        # ====================================
+           response = ask_agent(
+              prompt
+            )
+
+           print(f"👁🧠 {response}")
+
+          # ====================================
+          # PARSE JSON
+          # ====================================
+           match = re.search(
+              r"\{.*\}",
+              response,
+              re.DOTALL
+            )
+
+           if not match:
+
+               print("⚠️ INVALID AI RESPONSE")
+
+               continue
+
+           parsed = json.loads(
+               match.group(0)
+            )
+
+           # ====================================
+           # ROUTING
+           # ====================================
+           action_type = parsed.get(
+               "action"
+            )
+
+           # ====================================
+           # DONE
+           # ====================================
+           if action_type == "done":
+
+              print("✅ VISUAL GOAL COMPLETED")
+
+              return {
+                  "success": True
+              }
+
+           # ====================================
+           # CLICK
+           # ====================================
+           elif action_type == "click":
+
+              target = parsed.get(
+                  "target",
+                  ""
+                )
+
+              print(f"🖱 TARGET: {target}")
+
+              await execute_action(
+
+                  "vision_click",
+
+                  {
+                    "target": target
+                  }
+              )
+
+           # ====================================
+           # TYPE
+           # ====================================
+           elif action_type == "type":
+
+              text = parsed.get(
+                 "text",
+                 ""
+                )
+
+              print(f"⌨️ TYPE: {text}")
+
+              await execute_action(
+
+                 "type_text",
+
+                 {
+                    "text": text
+                 }
+              )
+
+           # ====================================
+           # WAIT UI UPDATE
+           # ====================================
+           await asyncio.sleep(1)
+
+    # ====================================
+    # MAX STEPS
+    # ====================================
+       return {
+
+          "success": False,
+
+          "error": "Max visual steps reached"
+        }
+    
+    elif action == "detect_objects":
+
+       image = pyautogui.screenshot()
+
+       path = "objects.png"
+
+       image.save(path)
+
+       detections = detect_objects(
+          path
+        )
+
+       print(f"🎯 OBJECTS: {detections}")
+
+       return {
+          "success": True,
+          "objects": detections
+        }
+    
+    elif action == "ai_visual_reasoning":
+
+       image = pyautogui.screenshot()
+
+       path = "visual_reasoning.png"
+
+       image.save(path)
+
+       text = extract_text(path)
+
+       objects = detect_objects(
+          path
+        )
+
+       goal = value.get(
+          "goal",
+          ""
+        )
+
+       prompt = f"""
+You are a visual AI system.
+
+Goal:
+{goal}
+
+OCR Text:
+{text}
+
+Detected Objects:
+{objects}
+
+Analyze the screen.
+
+Explain what is happening.
+"""
+
+    # =========================
+    # PASO 7
+    # ASK AGENT
+    # =========================
+       response = ask_agent(
+          prompt
+        )
+
+       print(
+          f"🧠👁 VISUAL REASONING: {response}"
+        )
+
+    # =========================
+    # PASO 8
+    # RETURN
+    # =========================
+       return {
+          "success": True,
+          "response": response
+        }
+    
+    elif action == "list_ui":
+
+       elements = list_ui_elements()
+
+       print(f"🪟 UI: {elements}")
+
+       return {
+         "success": True,
+         "elements": elements
+       }
+    
+    elif action == "focus_window":
+
+       title = value.get(
+          "title",
+          ""
+        )
+
+       ok = click_ui_element(
+          title
+        )
+
+       return {
+          "success": ok
+       }
+
+    # ==========================================================
+    # UNKNOWN ACTION
+    # ==========================================================
+    else:
+
+        raise Exception(
+            f"Acción no soportada: {action}"
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

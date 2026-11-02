@@ -1,0 +1,1862 @@
+﻿
+================================================================================
+ARCHIVO: tests\test_cognitive_planning_state.py
+================================================================================
+
+import asyncio
+
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective, ObjectiveStatus
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+from runtime.executor import Executor
+
+
+class FakeActionManager:
+    def __init__(self, failing_steps=None):
+        self.failing_steps = set(failing_steps or [])
+        self.execution_order = []
+
+    async def execute(self, context):
+        step = context.plan.steps[context.current_step]
+
+        self.execution_order.append(step.id)
+
+        if step.id in self.failing_steps:
+            step.status = StepStatus.FAILED
+            context.add_error(
+                f"Step '{step.id}' failed."
+            )
+            return
+
+        step.status = StepStatus.COMPLETED
+
+        context.results[step.id] = {
+            "status": "completed"
+        }
+
+        for artifact in step.produces:
+            context.artifacts[artifact] = {
+                "produced_by": step.id
+            }
+
+
+class FakeRuntime:
+    def __init__(self, failing_steps=None):
+        self.action_manager = FakeActionManager(
+            failing_steps=failing_steps
+        )
+
+
+def make_step(
+    step_id,
+    name,
+    depends_on=None,
+    produces=None,
+    consumes=None,
+):
+    return PlanStep(
+        id=step_id,
+        name=name,
+        description=name,
+        action=name,
+        status=StepStatus.PENDING,
+        depends_on=depends_on or [],
+        consumes=consumes or [],
+        produces=produces or [],
+    )
+
+
+def make_context(steps):
+    objective = Objective(
+        id="objective-state-test",
+        title="State Consistency Test",
+        status=ObjectiveStatus.READY,
+        priority=1,
+        metadata={},
+    )
+
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=steps,
+        current_step=0,
+        completed=False,
+        metadata={},
+    )
+
+    return ExecutionContext(
+        objective=objective,
+        plan=plan,
+        variables={},
+        artifacts={},
+        results={},
+        errors=[],
+        current_step=0,
+        finished=False,
+        step_evidence={},
+    )
+
+
+def run_executor(context, runtime):
+    executor = Executor(runtime)
+
+    return asyncio.run(
+        executor.execute(context)
+    )
+
+
+def get_step(context, step_id):
+    for step in context.plan.steps:
+        if step.id == step_id:
+            return step
+
+    raise AssertionError(
+        f"Step '{step_id}' not found."
+    )
+
+
+def test_successful_plan_has_consistent_global_state():
+    runtime = FakeRuntime()
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            ),
+            make_step(
+                "step_b",
+                "action_b",
+                depends_on=["step_a"],
+            ),
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is True
+
+    assert context.finished is True
+    assert context.plan.completed is True
+    assert (
+        context.objective.status
+        == ObjectiveStatus.COMPLETED
+    )
+
+    assert all(
+        step.status == StepStatus.COMPLETED
+        for step in context.plan.steps
+    )
+
+
+def test_successful_steps_match_execution_results():
+    runtime = FakeRuntime()
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            ),
+            make_step(
+                "step_b",
+                "action_b",
+                depends_on=["step_a"],
+            ),
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is True
+
+    for step in context.plan.steps:
+        assert step.status == StepStatus.COMPLETED
+        assert step.id in result.output
+        assert result.output[step.id][
+            "status"
+        ] == "completed"
+
+
+def test_failed_execution_has_consistent_global_state():
+    runtime = FakeRuntime(
+        failing_steps={"step_b"}
+    )
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            ),
+            make_step(
+                "step_b",
+                "action_b",
+                depends_on=["step_a"],
+            ),
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is False
+
+    assert context.finished is True
+    assert context.plan.completed is False
+    assert (
+        context.objective.status
+        == ObjectiveStatus.FAILED
+    )
+
+    assert (
+        get_step(context, "step_a").status
+        == StepStatus.COMPLETED
+    )
+
+    assert (
+        get_step(context, "step_b").status
+        == StepStatus.FAILED
+    )
+
+
+def test_failed_execution_does_not_report_success():
+    runtime = FakeRuntime(
+        failing_steps={"step_a"}
+    )
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            )
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is False
+    assert context.plan.completed is False
+
+    assert (
+        result.metadata["plan_completed"]
+        is False
+    )
+
+    assert (
+        result.metadata["objective_status"]
+        == ObjectiveStatus.FAILED.value
+    )
+
+
+def test_execution_metadata_matches_context_state():
+    runtime = FakeRuntime()
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            ),
+            make_step(
+                "step_b",
+                "action_b",
+                depends_on=["step_a"],
+            ),
+            make_step(
+                "step_c",
+                "action_c",
+                depends_on=["step_b"],
+            ),
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is True
+
+    metadata = result.metadata
+
+    assert (
+        metadata["objective_id"]
+        == context.objective.id
+    )
+
+    assert (
+        metadata["objective_status"]
+        == context.objective.status.value
+    )
+
+    assert (
+        metadata["plan_completed"]
+        == context.plan.completed
+    )
+
+    assert (
+        metadata["step_count"]
+        == len(context.plan.steps)
+    )
+
+    assert (
+        metadata["errors"]
+        == context.errors
+    )
+
+
+def test_current_step_and_completed_steps_remain_coherent():
+    runtime = FakeRuntime()
+
+    context = make_context(
+        [
+            make_step(
+                "step_a",
+                "action_a",
+            ),
+            make_step(
+                "step_b",
+                "action_b",
+            ),
+            make_step(
+                "step_c",
+                "action_c",
+            ),
+        ]
+    )
+
+    result = run_executor(
+        context,
+        runtime,
+    )
+
+    assert result.success is True
+
+    completed_count = sum(
+        1
+        for step in context.plan.steps
+        if step.status == StepStatus.COMPLETED
+    )
+
+    assert (
+        context.current_step
+        == completed_count
+    )
+
+    assert (
+        context.current_step
+        == len(context.plan.steps)
+    )
+
+
+def main():
+    tests = [
+        (
+            "test_successful_plan_has_consistent_global_state",
+            test_successful_plan_has_consistent_global_state,
+        ),
+        (
+            "test_successful_steps_match_execution_results",
+            test_successful_steps_match_execution_results,
+        ),
+        (
+            "test_failed_execution_has_consistent_global_state",
+            test_failed_execution_has_consistent_global_state,
+        ),
+        (
+            "test_failed_execution_does_not_report_success",
+            test_failed_execution_does_not_report_success,
+        ),
+        (
+            "test_execution_metadata_matches_context_state",
+            test_execution_metadata_matches_context_state,
+        ),
+        (
+            "test_current_step_and_completed_steps_remain_coherent",
+            test_current_step_and_completed_steps_remain_coherent,
+        ),
+    ]
+
+    passed = 0
+
+    for name, test in tests:
+        try:
+            test()
+            print(f"PASS: {name}")
+            passed += 1
+        except Exception as exc:
+            print(f"FAIL: {name}")
+            print(
+                f"      {type(exc).__name__}: {exc}"
+            )
+
+    print()
+    print(
+        f"COGNITIVE PLANNING 6.6: "
+        f"{passed}/{len(tests)} PASSED"
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_cognitive_planning_validation.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.intent import Intent
+from planner.objective import (
+    Objective,
+    ObjectiveStatus,
+)
+from planner.planner import Planner
+
+
+class FakeTool:
+
+    def __init__(
+        self,
+        *,
+        produces=None,
+        consumes=None,
+    ):
+        self.produces = list(
+            produces or []
+        )
+        self.consumes = list(
+            consumes or []
+        )
+
+
+class FakeToolRegistry:
+
+    def __init__(self, tools):
+        self.tools = tools
+
+    def resolve(self, action):
+        return self.tools.get(action)
+
+
+def make_objective(
+    objective_id="objective-1",
+):
+    return Objective(
+        id=objective_id,
+        title="test",
+        description="test objective",
+    )
+
+
+def test_consumer_without_producer_is_detected():
+
+    registry = FakeToolRegistry(
+        {
+            "system.inspect": FakeTool(
+                consumes=["image"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    intent = Intent(
+        action="system.inspect",
+        original_text="inspeccionar imagen",
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert len(plan.steps) == 1
+
+    assert plan.steps[0].consumes == [
+        "image"
+    ]
+
+    assert (
+        objective.status
+        == ObjectiveStatus.FAILED
+    )
+
+
+def test_missing_artifact_is_reported_in_plan_metadata():
+
+    registry = FakeToolRegistry(
+        {
+            "system.inspect": FakeTool(
+                consumes=["image"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    intent = Intent(
+        action="system.inspect",
+        original_text="inspeccionar imagen",
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert "error" in plan.metadata
+
+
+def test_existing_producer_makes_plan_valid():
+
+    registry = FakeToolRegistry(
+        {
+            "system.capture": FakeTool(
+                produces=["image"],
+            ),
+            "system.inspect": FakeTool(
+                consumes=["image"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    capture = Intent(
+        action="system.capture",
+        original_text="capturar pantalla",
+    )
+
+    inspect_capture = Intent(
+        action="system.inspect",
+        original_text="inspeccionar captura",
+    )
+
+    intent = Intent(
+        action=capture.action,
+        original_text=(
+            "capturar pantalla y "
+            "inspeccionar captura"
+        ),
+        sub_intents=[
+            capture,
+            inspect_capture,
+        ],
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert (
+        objective.status
+        == ObjectiveStatus.READY
+    )
+
+    assert plan.metadata == {}
+
+
+def test_independent_consumer_is_invalid_without_matching_artifact():
+
+    registry = FakeToolRegistry(
+        {
+            "system.capture": FakeTool(
+                produces=["image"],
+            ),
+            "system.use_document": FakeTool(
+                consumes=["document"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    capture = Intent(
+        action="system.capture",
+        original_text="capturar pantalla",
+    )
+
+    use_document = Intent(
+        action="system.use_document",
+        original_text="usar documento",
+    )
+
+    intent = Intent(
+        action=capture.action,
+        original_text=(
+            "capturar pantalla y "
+            "usar documento"
+        ),
+        sub_intents=[
+            capture,
+            use_document,
+        ],
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert (
+        objective.status
+        == ObjectiveStatus.FAILED
+    )
+
+    assert "error" in plan.metadata
+
+
+def test_multiple_producers_are_not_silently_ambiguous():
+
+    registry = FakeToolRegistry(
+        {
+            "system.capture_a": FakeTool(
+                produces=["image"],
+            ),
+            "system.capture_b": FakeTool(
+                produces=["image"],
+            ),
+            "system.inspect": FakeTool(
+                consumes=["image"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    first = Intent(
+        action="system.capture_a",
+        original_text="capturar pantalla A",
+    )
+
+    second = Intent(
+        action="system.capture_b",
+        original_text="capturar pantalla B",
+    )
+
+    consumer = Intent(
+        action="system.inspect",
+        original_text="inspeccionar captura",
+    )
+
+    intent = Intent(
+        action=first.action,
+        original_text=(
+            "capturar A, capturar B "
+            "y luego inspeccionar"
+        ),
+        sub_intents=[
+            first,
+            second,
+            consumer,
+        ],
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert (
+        objective.status
+        == ObjectiveStatus.FAILED
+    )
+
+    assert "error" in plan.metadata
+
+
+def test_valid_plan_has_no_structural_error():
+
+    registry = FakeToolRegistry(
+        {
+            "system.capture": FakeTool(
+                produces=["image"],
+            ),
+            "system.inspect": FakeTool(
+                consumes=["image"],
+                produces=["inspection"],
+            ),
+            "system.process": FakeTool(
+                consumes=["inspection"],
+                produces=["result"],
+            ),
+        }
+    )
+
+    planner = Planner(
+        tool_resolver=registry.resolve
+    )
+
+    objective = make_objective()
+
+    capture = Intent(
+        action="system.capture",
+        original_text="capturar pantalla",
+    )
+
+    inspect_capture = Intent(
+        action="system.inspect",
+        original_text="inspeccionar captura",
+    )
+
+    process = Intent(
+        action="system.process",
+        original_text="procesar inspección",
+    )
+
+    intent = Intent(
+        action=capture.action,
+        original_text=(
+            "capturar, inspeccionar "
+            "y procesar"
+        ),
+        sub_intents=[
+            capture,
+            inspect_capture,
+            process,
+        ],
+    )
+
+    plan = planner.create_plan(
+        objective,
+        intent,
+    )
+
+    assert (
+        objective.status
+        == ObjectiveStatus.READY
+    )
+
+    assert plan.metadata == {}
+
+    assert (
+        plan.steps[1].depends_on
+        == [plan.steps[0].id]
+    )
+
+    assert (
+        plan.steps[2].depends_on
+        == [plan.steps[1].id]
+    )
+
+
+def run_tests():
+
+    tests = [
+        test_consumer_without_producer_is_detected,
+        test_missing_artifact_is_reported_in_plan_metadata,
+        test_existing_producer_makes_plan_valid,
+        test_independent_consumer_is_invalid_without_matching_artifact,
+        test_multiple_producers_are_not_silently_ambiguous,
+        test_valid_plan_has_no_structural_error,
+    ]
+
+    passed = 0
+    failed = 0
+
+    for test in tests:
+
+        try:
+
+            test()
+
+            print(
+                f"PASS: {test.__name__}"
+            )
+
+            passed += 1
+
+        except Exception as exc:
+
+            print(
+                f"FAIL: {test.__name__}"
+            )
+
+            print(
+                f"      {type(exc).__name__}: {exc}"
+            )
+
+            failed += 1
+
+    print()
+
+    print(
+        "COGNITIVE PLANNING 6.2: "
+        f"{passed}/{len(tests)} PASSED"
+    )
+
+    if failed:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    run_tests()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_compound_verification.py
+================================================================================
+
+from planner.objective import Objective
+from planner.plan import (
+    ExecutionPlan,
+    PlanStep,
+    StepStatus,
+)
+from planner.verification import Verifier
+from runtime.execution_result import ExecutionResult
+
+
+def make_step(
+    step_id: str,
+    action: str,
+    result_keys=None,
+    artifact_keys=None,
+):
+    metadata = {
+        "execution": {
+            "status": "completed",
+            "result_keys": result_keys or [],
+            "artifact_keys": artifact_keys or [],
+        }
+    }
+
+    return PlanStep(
+        id=step_id,
+        name=action,
+        description=action,
+        action=action,
+        status=StepStatus.COMPLETED,
+        metadata=metadata,
+    )
+
+
+def make_plan(steps):
+    return ExecutionPlan(
+        objective_id="objective-test",
+        steps=steps,
+        current_step=len(steps),
+        completed=True,
+    )
+
+
+def make_result(
+    output=None,
+    artifacts=None,
+    step_evidence=None,
+    success=True,
+):
+    metadata = {}
+
+    if step_evidence is not None:
+        metadata["step_evidence"] = step_evidence
+
+    return ExecutionResult(
+        success=success,
+        message="",
+        output=output or {},
+        artifacts=artifacts or {},
+        metadata=metadata,
+    )
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_compound_plan_all_steps_verified():
+    objective = Objective(
+        id="objective-test",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            ),
+            make_step(
+                "step-2",
+                "system.set_volume",
+                result_keys=["volume", "status"],
+            ),
+            make_step(
+                "step-3",
+                "system.screen_capture",
+                result_keys=["status"],
+                artifact_keys=["image"],
+            ),
+        ]
+    )
+
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+            "volume": 60,
+        },
+        artifacts={
+            "image": object(),
+        },
+        step_evidence={
+            "step-1": {
+                "step_id": "step-1",
+                "action": "system.open_app",
+                "status": "completed",
+                "results": {
+                    "application": "Chrome",
+                    "status": "opened",
+                },
+                "artifacts": {},
+            },
+            "step-2": {
+                "step_id": "step-2",
+                "action": "system.set_volume",
+                "status": "completed",
+                "results": {
+                    "volume": 60,
+                    "status": "set",
+                },
+                "artifacts": {},
+            },
+            "step-3": {
+                "step_id": "step-3",
+                "action": "system.screen_capture",
+                "status": "completed",
+                "results": {
+                    "status": "captured",
+                },
+                "artifacts": {
+                    "image": object(),
+                },
+            },
+        },
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        verification.verified,
+        "All compound steps should be verified.",
+    )
+
+    check(
+        verification.metadata["steps_verified"] == 3,
+        "All three steps should be verified.",
+    )
+
+    check(
+        verification.metadata["steps_total"] == 3,
+        "Plan should contain three steps.",
+    )
+
+
+def test_compound_plan_fails_when_one_step_has_wrong_evidence():
+    objective = Objective(
+        id="objective-test",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            ),
+            make_step(
+                "step-2",
+                "system.set_volume",
+                result_keys=["volume", "status"],
+            ),
+        ]
+    )
+
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+            "volume": 30,
+        },
+        step_evidence={
+            "step-1": {
+                "step_id": "step-1",
+                "action": "system.open_app",
+                "status": "completed",
+                "results": {
+                    "application": "Chrome",
+                    "status": "opened",
+                },
+                "artifacts": {},
+            },
+            "step-2": {
+                "step_id": "step-2",
+                "action": "system.set_volume",
+                "status": "completed",
+                "results": {
+                    "volume": 30,
+                    "status": "set",
+                },
+                "artifacts": {},
+            },
+        },
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        not verification.verified,
+        "Wrong evidence in one step must invalidate the compound plan.",
+    )
+
+
+def test_compound_plan_fails_when_step_evidence_is_missing():
+    objective = Objective(
+        id="objective-test",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            ),
+            make_step(
+                "step-2",
+                "system.set_volume",
+                result_keys=["volume", "status"],
+            ),
+        ]
+    )
+
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+            "volume": 60,
+        },
+        step_evidence={
+            "step-1": {
+                "step_id": "step-1",
+                "action": "system.open_app",
+                "status": "completed",
+                "results": {
+                    "application": "Chrome",
+                    "status": "opened",
+                },
+                "artifacts": {},
+            },
+        },
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        not verification.verified,
+        "Missing evidence for one step must invalidate the compound plan.",
+    )
+
+
+def test_compound_plan_fails_when_step_execution_status_is_failed():
+    objective = Objective(
+        id="objective-test",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    failed_step = make_step(
+        "step-2",
+        "system.set_volume",
+        result_keys=["volume", "status"],
+    )
+
+    failed_step.status = StepStatus.FAILED
+    failed_step.metadata["execution"]["status"] = "failed"
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            ),
+            failed_step,
+        ]
+    )
+
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+        },
+        step_evidence={
+            "step-1": {
+                "step_id": "step-1",
+                "action": "system.open_app",
+                "status": "completed",
+                "results": {
+                    "application": "Chrome",
+                    "status": "opened",
+                },
+                "artifacts": {},
+            },
+            "step-2": {
+                "step_id": "step-2",
+                "action": "system.set_volume",
+                "status": "failed",
+                "results": {},
+                "artifacts": {},
+            },
+        },
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        not verification.verified,
+        "Failed step must invalidate the compound plan.",
+    )
+
+
+def test_compound_plan_keeps_single_step_compatibility():
+    objective = Objective(
+        id="objective-test",
+        title="system.open_app",
+        metadata={
+            "application": "Chrome",
+        },
+    )
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            )
+        ]
+    )
+
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+        },
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        verification.verified,
+        "Existing single-step verification must remain valid.",
+    )
+
+
+def test_compound_plan_does_not_accept_global_output_as_step_evidence():
+    objective = Objective(
+        id="objective-test",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    plan = make_plan(
+        [
+            make_step(
+                "step-1",
+                "system.open_app",
+                result_keys=["application", "status"],
+            ),
+            make_step(
+                "step-2",
+                "system.set_volume",
+                result_keys=["volume", "status"],
+            ),
+        ]
+    )
+
+    # El output global contiene la evidencia correcta,
+    # pero NO existe evidencia individual para los steps.
+    result = make_result(
+        output={
+            "application": "Chrome",
+            "status": "opened",
+            "volume": 60,
+        },
+        step_evidence={},
+    )
+
+    verification = Verifier().verify(
+        objective,
+        plan,
+        result,
+    )
+
+    check(
+        not verification.verified,
+        "Global output alone must not satisfy compound step verification.",
+    )
+
+
+if __name__ == "__main__":
+    tests = [
+        (name, func)
+        for name, func in globals().items()
+        if name.startswith("test_")
+        and callable(func)
+    ]
+
+    passed = 0
+
+    for name, test in tests:
+        try:
+            test()
+            print(f"PASS: {name}")
+            passed += 1
+        except Exception as exc:
+            print(f"FAIL: {name}")
+            print(f"      {type(exc).__name__}: {exc}")
+
+    print()
+    print(
+        f"COMPOUND VERIFICATION: "
+        f"{passed}/{len(tests)} PASSED"
+    )
+
+    if passed != len(tests):
+        raise SystemExit(1)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_context_builder_assistant.py
+================================================================================
+
+from context import (
+    AssistantContext,
+    ContextStore,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+from memory import WorkingMemory
+
+from planner.context_builder import ContextBuilder
+
+
+def test_context_builder_includes_assistant_context():
+    store = ContextStore()
+
+    organization = OrganizationProfile.create(
+        name="NEXUS Labs",
+        industry="Software",
+        description="Organización de desarrollo.",
+        areas=["Technology", "Operations"],
+        rules=["Security first"],
+        priorities=["Reliability"],
+    )
+
+    user = UserProfile.create(
+        name="Carlos",
+        role="Founder",
+        organization_id=organization.id,
+        preferences={
+            "language": "es",
+        },
+        responsibilities=[
+            "Product",
+            "Architecture",
+        ],
+        priorities=[
+            "NEXUS",
+        ],
+    )
+
+    project = ProjectContext.create(
+        name="NEXUS",
+        organization_id=organization.id,
+        description="Cognitive runtime.",
+        status="active",
+        responsible_user_ids=[
+            user.id,
+        ],
+    )
+
+    store.add_organization(organization)
+    store.add_user(user)
+    store.add_project(project)
+
+    assistant_context = store.build_context(
+        user_id=user.id
+    )
+
+    memory = WorkingMemory()
+
+    memory.add(
+        "user_request",
+        {
+            "text": "Abrí Chrome",
+        },
+    )
+
+    builder = ContextBuilder()
+
+    context = builder.build(
+        memory,
+        assistant_context=assistant_context,
+    )
+
+    assert context["assistant_context"] is not None
+
+    assert (
+        context["assistant_context"]["user"]["name"]
+        == "Carlos"
+    )
+
+    assert (
+        context["assistant_context"]["organization"]["name"]
+        == "NEXUS Labs"
+    )
+
+    assert (
+        context["assistant_context"]["projects"][0]["name"]
+        == "NEXUS"
+    )
+
+
+def test_context_builder_keeps_previous_behavior_without_assistant_context():
+    memory = WorkingMemory()
+
+    memory.add(
+        "user_request",
+        {
+            "text": "Abrí Notepad",
+        },
+    )
+
+    builder = ContextBuilder()
+
+    context = builder.build(
+        memory
+    )
+
+    assert context["assistant_context"] is None
+
+    assert (
+        context["last_request"]["text"]
+        == "Abrí Notepad"
+    )
+
+
+def test_context_builder_can_keep_assistant_context_configured_in_constructor():
+    organization = OrganizationProfile.create(
+        name="NEXUS Labs",
+        industry="Software",
+    )
+
+    user = UserProfile.create(
+        name="Carlos",
+        role="Founder",
+        organization_id=organization.id,
+    )
+
+    project = ProjectContext.create(
+        name="NEXUS",
+        organization_id=organization.id,
+    )
+
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=[project],
+    )
+
+    builder = ContextBuilder(
+        assistant_context=assistant_context
+    )
+
+    memory = WorkingMemory()
+
+    context = builder.build(
+        memory
+    )
+
+    assert (
+        context["assistant_context"]["user"]["id"]
+        == user.id
+    )
+
+    assert (
+        context["assistant_context"]["organization"]["id"]
+        == organization.id
+    )
+
+    assert (
+        context["assistant_context"]["projects"][0]["id"]
+        == project.id
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_context_builder_providers.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from context import AssistantContext
+from memory import WorkingMemory
+from planner.context_builder import ContextBuilder
+
+
+def test_context_builder_includes_context_provider_output():
+    assistant_context = MagicMock(spec=AssistantContext)
+    assistant_context.to_dict.return_value = {
+        "user_id": "user-1",
+        "organization_id": "org-1",
+    }
+
+    memory = WorkingMemory()
+
+    captured = {}
+
+    def provider(semantic_query, effective_assistant_context):
+        captured["semantic_query"] = semantic_query
+        captured["assistant_context"] = effective_assistant_context
+
+        return {
+            "documents": [
+                {
+                    "id": "doc-1",
+                    "name": "manual.pdf",
+                }
+            ]
+        }
+
+    builder = ContextBuilder(
+        assistant_context=assistant_context,
+        context_providers=[provider],
+    )
+
+    result = builder.build(
+        memory,
+        semantic_query="buscar manual",
+    )
+
+    assert captured["semantic_query"] == "buscar manual"
+    assert captured["assistant_context"] is assistant_context
+
+    assert result["documents"] == [
+        {
+            "id": "doc-1",
+            "name": "manual.pdf",
+        }
+    ]
+
+
+def test_context_builder_ignores_provider_returning_none():
+    memory = WorkingMemory()
+
+    def provider(semantic_query, effective_assistant_context):
+        return None
+
+    builder = ContextBuilder(
+        context_providers=[provider],
+    )
+
+    result = builder.build(
+        memory,
+        semantic_query="buscar algo",
+    )
+
+    assert "documents" not in result
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_context_builder_semantic.py
+================================================================================
+
+from __future__ import annotations
+
+from memory import WorkingMemory
+from memory.context_builder import ContextBuilder
+from memory.semantic_memory import SemanticMemory
+from memory.semantic_retriever import SemanticRetriever
+
+
+def test_context_without_semantic_memory_is_compatible() -> None:
+    memory = WorkingMemory()
+
+    memory.add(
+        "user_request",
+        {
+            "text": "abrí chrome",
+        },
+    )
+
+    builder = ContextBuilder()
+
+    context = builder.build(memory)
+
+    assert context["last_request"] == {
+        "text": "abrí chrome",
+    }
+
+    assert context["semantic_knowledge"] == []
+
+
+def test_context_includes_semantic_knowledge() -> None:
+    working_memory = WorkingMemory()
+
+    semantic_memory = SemanticMemory()
+
+    semantic_memory.learn(
+        "chrome",
+        "es una aplicación",
+        True,
+        confidence=1.0,
+        source="episode",
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    builder = ContextBuilder(
+        semantic_retriever=retriever
+    )
+
+    context = builder.build(
+        working_memory,
+        semantic_query="chrome",
+    )
+
+    knowledge = context[
+        "semantic_knowledge"
+    ]
+
+    assert len(knowledge) == 1
+    assert knowledge[0]["subject"] == "chrome"
+    assert (
+        knowledge[0]["predicate"]
+        == "es una aplicación"
+    )
+    assert knowledge[0]["value"] is True
+    assert knowledge[0]["confidence"] == 1.0
+    assert knowledge[0]["source"] == "episode"
+
+
+def test_semantic_knowledge_has_score() -> None:
+    working_memory = WorkingMemory()
+
+    semantic_memory = SemanticMemory()
+
+    semantic_memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    builder = ContextBuilder(
+        semantic_retriever=retriever
+    )
+
+    context = builder.build(
+        working_memory,
+        semantic_query="spotify",
+    )
+
+    knowledge = context[
+        "semantic_knowledge"
+    ]
+
+    assert len(knowledge) == 1
+    assert knowledge[0]["score"] > 0
+
+
+def test_empty_semantic_query_returns_empty() -> None:
+    working_memory = WorkingMemory()
+
+    semantic_memory = SemanticMemory()
+
+    semantic_memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    builder = ContextBuilder(
+        semantic_retriever=retriever
+    )
+
+    context = builder.build(
+        working_memory,
+        semantic_query="   ",
+    )
+
+    assert context[
+        "semantic_knowledge"
+    ] == []
+
+
+def test_semantic_memory_does_not_change_references() -> None:
+    working_memory = WorkingMemory()
+
+    semantic_memory = SemanticMemory()
+
+    semantic_memory.learn(
+        "chrome",
+        "es una aplicación",
+        True,
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    builder = ContextBuilder(
+        semantic_retriever=retriever
+    )
+
+    context = builder.build(
+        working_memory,
+        semantic_query="chrome",
+    )
+
+    assert context["references"] == {
+        "last_action": None,
+        "last_application": None,
+        "last_executed_application": None,
+        "last_volume": None,
+        "previous_volume": None,
+        "last_capture_available": False,
+    }
+
+
+if __name__ == "__main__":
+    tests = [
+        test_context_without_semantic_memory_is_compatible,
+        test_context_includes_semantic_knowledge,
+        test_semantic_knowledge_has_score,
+        test_empty_semantic_query_returns_empty,
+        test_semantic_memory_does_not_change_references,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("CONTEXT BUILDER + SEMANTIC MEMORY")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_context_resolver.py
+================================================================================
+
+from context import (
+    ContextResolver,
+    ContextStore,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+
+def test_resolver_builds_context_from_user() -> None:
+    store = ContextStore()
+    resolver = ContextResolver(store)
+
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    project = ProjectContext.create(
+        "Proyecto Demo",
+        organization.id,
+    )
+
+    store.add_organization(organization)
+    store.add_user(user)
+    store.add_project(project)
+
+    context = resolver.resolve(user_id=user.id)
+
+    assert context.user is user
+    assert context.organization is organization
+    assert context.projects == (project,)
+
+
+def test_resolver_can_select_explicit_organization() -> None:
+    store = ContextStore()
+    resolver = ContextResolver(store)
+
+    organization_a = OrganizationProfile.create(
+        "Organización A",
+    )
+
+    organization_b = OrganizationProfile.create(
+        "Organización B",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        organization_id=organization_a.id,
+    )
+
+    project_b = ProjectContext.create(
+        "Proyecto B",
+        organization_b.id,
+    )
+
+    store.add_organization(organization_a)
+    store.add_organization(organization_b)
+    store.add_user(user)
+    store.add_project(project_b)
+
+    context = resolver.resolve(
+        user_id=user.id,
+        organization_id=organization_b.id,
+    )
+
+    assert context.user is user
+    assert context.organization is organization_b
+    assert context.projects == (project_b,)
+
+
+def test_resolver_returns_empty_context_without_selection() -> None:
+    store = ContextStore()
+    resolver = ContextResolver(store)
+
+    context = resolver.resolve()
+
+    assert context.user is None
+    assert context.organization is None
+    assert context.projects == ()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

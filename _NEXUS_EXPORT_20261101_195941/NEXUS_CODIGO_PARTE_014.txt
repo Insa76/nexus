@@ -1,0 +1,1781 @@
+﻿
+================================================================================
+ARCHIVO: backend\memory\indexer.py
+================================================================================
+
+import os
+import chromadb
+from sentence_transformers import SentenceTransformer
+from pypdf import PdfReader
+import docx
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+client = chromadb.Client()
+collection = client.get_or_create_collection("nexus_memory")
+
+
+def read_file(path):
+    ext = path.lower().split(".")[-1]
+
+    if ext == "txt":
+        return open(path, encoding="utf-8", errors="ignore").read()
+
+    if ext == "pdf":
+        reader = PdfReader(path)
+        return "\n".join(p.extract_text() or "" for p in reader.pages)
+
+    if ext == "docx":
+        d = docx.Document(path)
+        return "\n".join(p.text for p in d.paragraphs)
+
+    return ""
+
+
+def chunk_text(text, size=500):
+    return [text[i:i+size] for i in range(0, len(text), size)]
+
+
+def index_folder(folder):
+    for root, _, files in os.walk(folder):
+        for f in files:
+            if f.endswith((".pdf", ".txt", ".docx")):
+                path = os.path.join(root, f)
+                print("Indexando:", path)
+
+                content = read_file(path)
+                chunks = chunk_text(content)
+
+                for i, chunk in enumerate(chunks):
+                    emb = model.encode(chunk).tolist()
+
+                    collection.add(
+                        documents=[chunk],
+                        embeddings=[emb],
+                        ids=[f"{path}_{i}"],
+                        metadatas=[{"path": path}]
+                    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\memory\nexus_memory.py
+================================================================================
+
+import json
+from pathlib import Path
+
+MEMORY_FILE = Path("nexus_memory.json")
+
+
+def load_memory():
+
+    if not MEMORY_FILE.exists():
+        return {"workflows":[], "errors":[], "preferences":{}}
+
+    try:
+        return json.loads(MEMORY_FILE.read_text())
+    except:
+        return {"workflows":[], "errors":[], "preferences":{}}
+
+
+def save_memory(memory):
+
+    MEMORY_FILE.write_text(json.dumps(memory, indent=2))
+
+def remember_success(workflow_name):
+
+    memory = load_memory()
+
+    memory["workflows"].append({
+        "workflow":workflow_name
+    })
+
+    save_memory(memory)
+    
+def remember_error(workflow_name, error):
+
+    memory = load_memory()
+
+    memory["errors"].append({
+        "workflow":workflow_name,
+        "error":error
+    })
+
+    save_memory(memory)        
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\memory\search.py
+================================================================================
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+client = chromadb.Client()
+collection = client.get_or_create_collection("nexus_memory")
+
+
+def search_memory(query, k=4):
+    emb = model.encode(query).tolist()
+
+    results = collection.query(
+        query_embeddings=[emb],
+        n_results=k
+    )
+
+    docs = results.get("documents", [[]])[0]
+
+    return "\n".join(docs)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\monitor\routes.py
+================================================================================
+
+from fastapi import APIRouter
+from core.metrics import metrics
+from core.database import get_connection
+import psutil
+import time
+
+router = APIRouter(prefix="/monitor")
+
+
+@router.get("/health")
+def health():
+
+    try:
+        conn = get_connection()
+        conn.execute("SELECT 1")
+        conn.close()
+        db_ok = True
+    except:
+        db_ok = False
+
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "database": db_ok,
+        "cpu_percent": psutil.cpu_percent(),
+        "memory_percent": psutil.virtual_memory().percent
+    }
+
+
+@router.get("/metrics")
+def get_metrics():
+    return metrics.snapshot()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\nexus-backend.spec
+================================================================================
+
+# -*- mode: python ; coding: utf-8 -*-
+
+
+a = Analysis(
+    ['main.py'],
+    pathex=[],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.datas,
+    [],
+    name='nexus-backend',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\package-lock.json
+================================================================================
+
+{
+  "name": "backend",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {}
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\packs\bar\pack.json
+================================================================================
+
+{
+  "name": "Bar Edition",
+  "slug": "bar",
+  "color": "#7c5cff",
+  "logo": "bar",
+  "workflows": "workflows.json",
+  "plugins": []
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\packs\hotel\pack.json
+================================================================================
+
+{
+  "name": "Hotel Edition",
+  "slug": "hotel",
+  "color": "#5b8cff",
+  "logo": "hotel",
+  "workflows": "workflows.json",
+  "plugins": []
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\packs\loader.py
+================================================================================
+
+import json
+from pathlib import Path
+import sqlite3
+
+DB = "nexus.db"
+PACKS_DIR = Path("packs")
+
+
+def list_packs():
+
+    packs = []
+
+    if not PACKS_DIR.exists():
+        return packs
+
+    for p in PACKS_DIR.iterdir():
+
+        cfg = p / "pack.json"
+
+        if cfg.exists():
+            try:
+                data = json.loads(cfg.read_text())
+                packs.append(data)
+            except:
+                continue
+
+    return packs
+
+
+def install_pack(slug):
+
+    pack_dir = PACKS_DIR / slug
+
+    if not pack_dir.exists():
+        return False
+
+    workflows_file = pack_dir / "workflows.json"
+
+    if not workflows_file.exists():
+        return False
+
+    tpl = json.loads(workflows_file.read_text())
+
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+
+    for wf in tpl:
+
+        # insertar workflow
+        cur.execute("""
+            INSERT INTO workflows (name, version, tenant_id)
+            VALUES (?, ?, ?)
+        """, (
+            wf["name"],
+            1,
+            "default"
+        ))
+
+        workflow_id = cur.lastrowid
+
+        # insertar steps
+        for i, step in enumerate(wf.get("steps", [])):
+
+            cur.execute("""
+                INSERT INTO workflow_steps
+                (workflow_id, step_order, action, value, config)
+                VALUES (?, ?, ?, ?, ?)
+            """, (
+                workflow_id,
+                i,
+                step["action"],
+                json.dumps(step.get("value")),
+                json.dumps(step.get("config", {}))
+            ))
+
+    conn.commit()
+    conn.close()
+
+    return True
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\packs\office\pack.json
+================================================================================
+
+{
+  "name": "Office Edition",
+  "slug": "office",
+  "color": "#00b894",
+  "logo": "office",
+  "workflows": "workflows.json",
+  "plugins": []
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\packs\office\workflows.json
+================================================================================
+
+[
+  {
+    "name": "Ordenar PDFs",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"pdfs"},
+      {"action":"move_files","value":{"ext":".pdf","to":"pdfs"}}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugin_manager\create.py
+================================================================================
+
+TEMPLATE = """
+from plugins.sdk.base import NexusPlugin
+
+class Plugin(NexusPlugin):
+
+    name = "{name}"
+    description = "custom plugin"
+
+    def __init__(self, api):
+        self.api = api
+
+    def actions(self):
+        return {{}}
+"""
+
+def create(name):
+
+    with open(f"plugins/installed/{name}.py","w") as f:
+        f.write(TEMPLATE.format(name=name))
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugin_manager\installer.py
+================================================================================
+
+import shutil
+from pathlib import Path
+
+BASE = Path("plugins")
+INSTALLED = BASE / "installed"
+MARKET = BASE / "marketplace"
+
+INSTALLED.mkdir(exist_ok=True)
+MARKET.mkdir(exist_ok=True)
+
+
+def install_plugin(filename):
+
+    src = MARKET / filename
+    dst = INSTALLED / filename
+
+    shutil.copy(src, dst)
+
+    return f"{filename} instalado"
+
+
+def remove_plugin(filename):
+
+    f = INSTALLED / filename
+
+    if f.exists():
+        f.unlink()
+
+    return f"{filename} eliminado"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugin_manager\loader.py
+================================================================================
+
+import importlib.util
+from pathlib import Path
+from plugins.sdk.base import NexusPlugin
+from plugins.sdk.api import NexusAPI
+
+PLUGINS = {}
+
+
+def load_installed():
+
+    folder = Path("plugins/installed")
+
+    for file in folder.glob("*.py"):
+
+        spec = importlib.util.spec_from_file_location(file.stem, file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        if hasattr(module, "Plugin"):
+
+            plugin = module.Plugin(NexusAPI())
+
+            plugin.on_load()
+
+            for name, fn in plugin.actions().items():
+                PLUGINS[name] = fn
+
+    print("Plugins activos:", list(PLUGINS.keys()))
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugin_manager\registry.py
+================================================================================
+
+REGISTRY = [
+    {
+        "name": "excel-plus",
+        "file": "excel.py",
+        "description": "Automatización avanzada Excel"
+    },
+    {
+        "name": "chrome-tools",
+        "file": "chrome.py",
+        "description": "Control navegador"
+    },
+    {
+        "name": "keyboard-macro",
+        "file": "keyboard.py",
+        "description": "Automatización teclado"
+    }
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\files.py
+================================================================================
+
+import os
+import shutil
+from pathlib import Path
+
+
+def register(registry):
+
+    registry["list_files"] = list_files
+    registry["delete_file"] = delete_file
+    registry["copy_file"] = copy_file
+
+
+def list_files(path):
+    return "\n".join(os.listdir(path))
+
+
+def delete_file(path):
+    os.remove(path)
+    return f"Eliminado {path}"
+
+
+def copy_file(data):
+    shutil.copy(data["src"], data["dst"])
+    return "Archivo copiado"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\loader.py
+================================================================================
+
+import importlib
+import os
+
+PLUGINS = {}
+
+
+def load_plugins():
+
+    folder = os.path.dirname(__file__)
+
+    for f in os.listdir(folder):
+
+        if f.endswith(".py") and f not in ["loader.py", "__init__.py"]:
+
+            name = f[:-3]
+            module = importlib.import_module(f"plugins.{name}")
+
+            if hasattr(module, "register"):
+                module.register(PLUGINS)
+
+    print("Plugins cargados:", list(PLUGINS.keys()))
+
+
+def run_plugin(action, value):
+
+    if action in PLUGINS:
+        return PLUGINS[action](value)
+
+    return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\marketplace\chrome.py
+================================================================================
+
+import webbrowser
+
+
+def register(registry):
+    registry["open_url"] = open_url
+
+
+def open_url(url):
+
+    if not url.startswith("http"):
+        url = "https://www.google.com/search?q=" + url
+
+    webbrowser.open(url)
+
+    return f"Abriendo {url}"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\marketplace\example_plugin.py
+================================================================================
+
+from plugins.sdk.base import NexusPlugin
+
+
+class Plugin(NexusPlugin):
+
+    name = "hello"
+    description = "plugin demo"
+
+    def __init__(self, api):
+        self.api = api
+
+    def actions(self):
+
+        return {
+            "hello_world": self.hello
+        }
+
+    def hello(self, value):
+        return "Hola desde plugin externo!"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\marketplace\excel.py
+================================================================================
+
+from openpyxl import Workbook
+import os
+
+
+def register(registry):
+    registry["create_excel"] = create_excel
+    registry["excel_report"] = excel_report
+
+
+def create_excel(path):
+
+    wb = Workbook()
+    wb.save(path)
+
+    os.startfile(path)
+
+    return f"Excel creado: {path}"
+
+
+def excel_report(path):
+
+    wb = Workbook()
+    ws = wb.active
+
+    ws.append(["Producto", "Ventas"])
+
+    data = [
+        ("Cerveza", 120),
+        ("Vino", 80),
+        ("Tragos", 150)
+    ]
+
+    for row in data:
+        ws.append(row)
+
+    wb.save(path)
+    os.startfile(path)
+
+    return "Reporte generado"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\marketplace\keyboard.py
+================================================================================
+
+import pyautogui
+import time
+import pyperclip
+
+
+def register(registry):
+    registry["type_text"] = type_text
+
+
+def type_text(text):
+
+    time.sleep(1)  # te da tiempo a enfocar
+
+    pyperclip.copy(text)
+    pyautogui.hotkey("ctrl", "v")
+
+    return "Texto escrito"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\marketplace\vscode.py
+================================================================================
+
+import subprocess
+
+
+def register(registry):
+    registry["open_project"] = open_project
+
+
+def open_project(path):
+
+    subprocess.Popen(["code", path])
+
+    return f"Proyecto abierto en VSCode: {path}"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\sdk\api.py
+================================================================================
+
+from actions.system_actions import execute_action
+
+
+class NexusAPI:
+
+    def run(self, action, value, user=None):
+        return execute_action(action, value, user)
+
+    def log(self, text):
+        print("[PLUGIN]", text)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\plugins\sdk\base.py
+================================================================================
+
+class NexusPlugin:
+
+    name = "base"
+    description = "plugin"
+
+    def actions(self):
+        """
+        devolver dict:
+        {
+            "action_name": function
+        }
+        """
+        return {}
+
+    def on_load(self):
+        pass
+
+    def on_unload(self):
+        pass
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\realtime\ws.py
+================================================================================
+
+from fastapi import WebSocket
+
+class WSManager:
+
+    def __init__(self):
+        self.clients: list[WebSocket] = []
+
+    async def connect(self, ws: WebSocket):
+        await ws.accept()
+        self.clients.append(ws)
+        print(f"🟢 WS conectado | Total: {len(self.clients)}")
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.clients:
+            self.clients.remove(ws)
+            print(f"🔌 WS desconectado | Total: {len(self.clients)}")
+
+    async def broadcast(self, data):
+
+        print(f"📡 Broadcasting: {data}")
+
+        disconnected = []
+
+        for c in self.clients:
+            try:
+                await c.send_json(data)
+            except Exception as e:
+                print("❌ Error WS:", e)
+                disconnected.append(c)
+
+        # limpiar conexiones muertas
+        for d in disconnected:
+            self.disconnect(d)
+
+
+manager = WSManager()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\requirements.txt
+================================================================================
+
+fastapi
+uvicorn
+sqlalchemy
+psycopg[binary]
+python-dotenv
+requests
+schedule
+psutil
+websockets
+httpx
+aiosmtplib
+watchdog
+croniter
+ollama
+chromadb
+sentence_transformers
+pygetwindow
+pypdf
+python-docx
+python-jose[cryptography]
+passlib[bcrypt]
+openai
+argon2-cffi
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\resilience\__init__.py
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\resilience\circuit.py
+================================================================================
+
+import time
+from collections import defaultdict
+
+from events.bus import bus
+from brain.nexus_voice import speak
+
+
+class CircuitBreaker:
+
+    def __init__(self):
+        self.failures = defaultdict(int)
+        self.state = {}
+        self.opened_at = {}
+
+        self.threshold = 5
+        self.cooldown_seconds = 30
+
+    # --------------------------------------------------
+    # INTERNAL KEY BUILDER
+    # --------------------------------------------------
+
+    def _key(self, workflow, tenant, workspace):
+        return f"{workflow}:{tenant}:{workspace}"
+
+    # --------------------------------------------------
+    # CHECK STATE
+    # --------------------------------------------------
+
+    def is_open(self, workflow, tenant, workspace):
+
+        key = self._key(workflow, tenant, workspace)
+        state = self.state.get(key, "CLOSED")
+
+        if state == "OPEN":
+
+            opened = self.opened_at.get(key, 0)
+
+            # cooldown para probar recuperación
+            if time.time() - opened > self.cooldown_seconds:
+
+                print(f"🟡 Circuit HALF_OPEN para {key}")
+
+                self.state[key] = "HALF_OPEN"
+                return False
+
+            return True
+
+        return False
+
+    # --------------------------------------------------
+    # FAILURE
+    # --------------------------------------------------
+
+    async def handle_failure(self, payload):
+
+        workflow = payload["workflow"]
+        tenant = payload.get("tenant_id", "default")
+        workspace = payload.get("workspace_id", "main")
+
+        key = self._key(workflow, tenant, workspace)
+
+        self.failures[key] += 1
+
+        if self.failures[key] >= self.threshold:
+
+            self.state[key] = "OPEN"
+            self.opened_at[key] = time.time()
+
+            print(f"🔥 Circuit OPEN para {key}")
+
+            await speak(
+                f"He bloqueado temporalmente el workflow {workflow} por fallos repetidos.",
+                "warning"
+            )
+
+            await bus.publish("circuit.opened", {
+                "workflow": workflow,
+                "tenant_id": tenant,
+                "workspace_id": workspace
+            })
+
+    # --------------------------------------------------
+    # SUCCESS
+    # --------------------------------------------------
+
+    async def handle_success(self, payload):
+
+        workflow = payload["workflow"]
+        tenant = payload.get("tenant_id", "default")
+        workspace = payload.get("workspace_id", "main")
+
+        key = self._key(workflow, tenant, workspace)
+
+        if self.state.get(key) == "HALF_OPEN":
+
+            self.state[key] = "CLOSED"
+            self.failures[key] = 0
+
+            print(f"🟢 Circuit CLOSED para {key}")
+
+            await speak(
+                f"He restaurado el funcionamiento normal del workflow {workflow}.",
+                "info"
+            )
+
+            await bus.publish("circuit.closed", {
+                "workflow": workflow,
+                "tenant_id": tenant,
+                "workspace_id": workspace
+            })
+
+
+circuit = CircuitBreaker()
+
+
+def register_circuit():
+    bus.subscribe("job.failed", circuit.handle_failure)
+    bus.subscribe("job.done", circuit.handle_success)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\scheduler\engine.py
+================================================================================
+
+import asyncio
+from datetime import datetime
+from croniter import croniter
+
+from core.database import get_connection
+from jobs.manager import manager
+
+
+class Scheduler:
+
+    def __init__(self):
+        asyncio.create_task(self.loop())
+
+    # =========================
+    # LOOP PRINCIPAL
+    # =========================
+
+    async def loop(self):
+
+        while True:
+            try:
+                await self.check_schedules()
+            except Exception as e:
+                print("🔥 Scheduler loop error:", e)
+
+            await asyncio.sleep(5)
+
+    # =========================
+    # CHECK SCHEDULES
+    # =========================
+
+    async def check_schedules(self):
+
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+
+            cur.execute("SELECT * FROM schedules WHERE enabled = TRUE AND tenant_id = %s", ("default",))
+            rows = cur.fetchall()
+        except Exception as e:
+              print("⏳ Scheduler DB error:", e)
+              return   
+
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
+
+        now = datetime.utcnow()
+
+        for row in rows:
+
+            try:
+
+                if row["type"] == "interval":
+                    await self.check_interval(row, now)
+
+                elif row["type"] == "cron":
+                    await self.check_cron(row, now)
+
+            except Exception as e:
+                print("🔥 Scheduler check error:", e)
+
+    # =========================
+    # INTERVAL
+    # =========================
+
+    async def check_interval(self, row, now):
+
+        interval = int(row["expression"])
+
+        if not row["last_run"]:
+            await self.run_schedule(row)
+            return
+
+        last = self.parse_datetime(row["last_run"])
+
+        if not last:
+            await self.run_schedule(row)
+            return
+
+        if (now - last).total_seconds() >= interval:
+            await self.run_schedule(row)
+
+    # =========================
+    # CRON
+    # =========================
+
+    async def check_cron(self, row, now):
+
+        expr = row["expression"]
+
+        base = self.parse_datetime(row["last_run"]) or now
+
+        itr = croniter(expr, base)
+        next_run = itr.get_next(datetime)
+
+        if now >= next_run:
+            await self.run_schedule(row)
+
+    # =========================
+    # RUN
+    # =========================
+
+    async def run_schedule(self, row):
+
+        try:
+
+            await manager.create_job(row["workflow"])
+
+            conn = get_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                UPDATE schedules
+                SET last_run = %s
+                WHERE id = %s
+            """, (
+                datetime.utcnow(),
+                row["id"]
+            ))
+
+            conn.commit()
+            conn.close()
+
+        except Exception as e:
+            print("🔥 Scheduler run error:", e)
+
+    # =========================
+    # HELPERS
+    # =========================
+
+    def parse_datetime(self, value):
+
+        try:
+            if isinstance(value, datetime):
+                return value
+            return datetime.fromisoformat(str(value))
+        except Exception:
+            return None
+
+
+# =========================
+# INIT
+# =========================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\scheduler\routes.py
+================================================================================
+
+from fastapi import APIRouter
+import uuid
+from core.database import get_connection
+
+router = APIRouter(prefix="/scheduler")
+
+
+@router.get("/")
+def list_schedules():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("SELECT * FROM schedules")
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+
+@router.post("/create")
+def create(data: dict):
+
+    schedule_id = str(uuid.uuid4())
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    INSERT INTO schedules (id, workflow, type, expression, enabled)
+    VALUES (%s, %s, %s, %s, 1)
+    """, (
+        schedule_id,
+        data["workflow"],
+        data["type"],
+        data["expression"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {"id": schedule_id}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\security\logger.py
+================================================================================
+
+from datetime import datetime
+
+FILE = "nexus_logs.txt"
+
+
+def log(action, result):
+
+    line = f"{datetime.now()} | {action} | {result}"
+
+    # ✅ guardar archivo
+    with open(FILE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+    # ✅ mostrar en consola (nuevo)
+    print(line)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\security\policy.py
+================================================================================
+
+# acciones seguras
+SAFE = {
+    "open_app",
+    "list_files",
+    "list_processes"
+}
+
+# acciones que requieren confirmación
+CONFIRM = {
+    "delete_file",
+    "move_files",
+    "run_cmd",
+    "close_active_app"
+}
+
+# sandbox (solo estas rutas permitidas)
+ALLOWED_PATHS = [
+    "C:\\Users",
+    "."
+]
+
+
+def is_path_allowed(path):
+
+    for base in ALLOWED_PATHS:
+        if path.startswith(base):
+            return True
+
+    return False
+
+
+def requires_confirm(action):
+    return action in CONFIRM
+
+
+def is_safe(action):
+    return action in SAFE
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\simulation\workflow_simulator.py
+================================================================================
+
+from workflows.repository import get_workflow_by_name
+
+
+def simulate_workflow(name, tenant_id="default", workspace_id="main"):
+
+    wf = get_workflow_by_name(name, tenant_id, workspace_id)
+
+    if not wf:
+        return {"error":"workflow no encontrado"}
+
+    risks=[]
+    steps = wf.get("steps", [])
+
+    for step in steps:
+
+        action = step.get("action")
+
+        # riesgo común
+        if action == "move_files":
+
+            value = step.get("value",{})
+
+            if isinstance(value,dict):
+
+                folder = value.get("to")
+
+                if not folder:
+                    risks.append({
+                        "step":"move_files",
+                        "risk":"destino no definido"
+                    })
+
+        if action == "delete_file":
+
+            risks.append({
+                "step":"delete_file",
+                "risk":"acción destructiva"
+            })
+
+    return {
+        "workflow": name,
+        "steps": len(steps),
+        "risks": risks,
+        "safe": len(risks) == 0
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\client.py
+================================================================================
+
+import requests
+
+SYNC_URL = "http://192.168.0.15:8000/sync"  # IP del HUB
+
+
+def push_memory(text):
+
+    try:
+        requests.post(SYNC_URL + "/push", json={"content": text})
+    except:
+        pass
+
+
+def pull_memory():
+
+    try:
+        r = requests.get(SYNC_URL + "/pull")
+        return r.json()["items"]
+    except:
+        return []
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\models.py
+================================================================================
+
+from sqlalchemy import create_engine, Column, String, Text
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+engine = create_engine("sqlite:///nexus_sync.db")
+
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+
+
+class Memory(Base):
+    __tablename__ = "memory"
+
+    id = Column(String, primary_key=True)
+    content = Column(Text)
+
+
+class Habit(Base):
+    __tablename__ = "habits"
+
+    id = Column(String, primary_key=True)
+    content = Column(Text)
+
+
+def init_db():
+    Base.metadata.create_all(engine)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\server.py
+================================================================================
+
+from fastapi import APIRouter
+from sync.models import Session, Memory
+import uuid
+
+router = APIRouter(prefix="/sync")
+
+
+@router.post("/push")
+def push(data: dict):
+
+    db = Session()
+
+    m = Memory(
+        id=str(uuid.uuid4()),
+        content=data["content"]
+    )
+
+    db.add(m)
+    db.commit()
+
+    return {"ok": True}
+
+
+@router.get("/pull")
+def pull():
+
+    db = Session()
+
+    rows = db.query(Memory).all()
+
+    return {"items": [r.content for r in rows]}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\triggers\folder_trigger.py
+================================================================================
+
+import asyncio
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+import jobs.manager as manager_module
+
+from core.database import get_connection
+
+
+WATCH_PATH = r"C:\Users\cdi40\Desktop"
+
+
+class FolderHandler(FileSystemEventHandler):
+
+    def on_created(self, event):
+
+        # ignorar carpetas
+        if event.is_directory:
+            return
+
+        print(f"📁 Nuevo archivo detectado: {event.src_path}")
+
+        try:
+
+            # =========================
+            # CARGAR TRIGGERS
+            # =========================
+            conn = get_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT *
+                FROM triggers
+                WHERE enabled = TRUE
+            """)
+
+            triggers = cur.fetchall()
+
+            conn.close()
+
+            print(f"⚡ Triggers activos: {len(triggers)}")
+
+            # =========================
+            # EVALUAR TRIGGERS
+            # =========================
+            for trigger in triggers:
+
+                config = trigger["config"] or {}
+
+                ext = config.get("ext")
+
+                if not ext:
+                    continue
+
+                print(f"🔍 Evaluando trigger: {ext}")
+
+                # match extensión
+                if event.src_path.lower().endswith(ext.lower()):
+
+                    print(f"🔥 Trigger match: {ext}")
+
+                    workflow_id = trigger["workflow_id"]
+
+                    tenant_id = trigger["tenant_id"]
+
+                    print(
+                        f"🚀 Ejecutando workflow: {workflow_id}"
+                    )
+
+                    asyncio.run(
+                        manager_module.manager.create_job(
+                            workflow_id,
+                            tenant_id
+                        )
+                    )
+
+        except Exception as e:
+
+            print(f"❌ Trigger error: {e}")
+
+
+def start_folder_trigger():
+
+    observer = Observer()
+
+    observer.schedule(
+        FolderHandler(),
+        WATCH_PATH,
+        recursive=False
+    )
+
+    observer.start()
+
+    print(f"👀 Watching folder: {WATCH_PATH}")
+
+    return observer
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\voice\listener.py
+================================================================================
+
+import sounddevice as sd
+import whisper
+import numpy as np
+import threading
+import time
+
+from brain.agent import ask_nexus
+from actions.system_actions import execute_action
+from voice.tts import speak
+
+
+model = whisper.load_model("base")
+samplerate = 16000
+
+
+# -----------------------------
+# 🔥 detectar mic dinámicamente
+# -----------------------------
+def get_input_device():
+
+    try:
+        devices = sd.query_devices()
+
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0:
+                print(f"🎤 Mic detectado: {d['name']} (id {i})")
+                return i
+
+    except Exception:
+        pass
+
+    return None   # 👈 NUNCA romper backend
+
+
+# -----------------------------
+def record(seconds, device):
+
+    audio = sd.rec(
+        int(seconds * samplerate),
+        samplerate=samplerate,
+        channels=1,
+        dtype="float32",
+        device=device
+    )
+
+    sd.wait()
+    return audio.flatten()
+
+
+# -----------------------------
+def process(text):
+
+    print("🧠 Usuario:", text)
+
+    result = ask_nexus(text)
+
+    if result.get("action"):
+        output = execute_action(result["action"], result.get("value"))
+        speak(output)
+    else:
+        speak(result["response"])
+
+
+# -----------------------------
+def listen_loop():
+
+    device = get_input_device()
+
+    if device is None:
+        print("🔇 No hay micrófono válido → voz desactivada")
+        return
+
+    print("🎤 Nexus escuchando... decí 'nexus'")
+
+    while True:
+
+        try:
+
+            audio = record(3, device)
+
+            result = model.transcribe(audio, fp16=False)
+            text = result["text"].lower().strip()
+
+            if not text:
+                continue
+
+            print("Oído:", text)
+
+            if "nexus" in text:
+
+                speak("Sí, te escucho")
+
+                audio = record(5, device)
+                result = model.transcribe(audio, fp16=False)
+
+                command = result["text"].strip()
+
+                process(command)
+
+        except Exception as e:
+            print("⚠️ Error mic:", e)
+            print("🔇 Desactivando voz...")
+            return   # 👈 sale del loop sin romper server
+
+
+# -----------------------------
+def start_listener():
+
+    thread = threading.Thread(
+        target=listen_loop,
+        daemon=True
+    )
+
+    thread.start()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\voice\tts.py
+================================================================================
+
+import pyttsx3
+
+engine = pyttsx3.init()
+engine.setProperty("rate", 180)
+
+def speak(text: str):
+    engine.say(text)
+    engine.runAndWait()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\ai_generator.py
+================================================================================
+
+import json
+from brain.llm import ask_llm  # usa tu wrapper actual del LLM
+
+
+SYSTEM_PROMPT = """
+Sos un planificador de automatizaciones.
+
+Convertí la instrucción del usuario en un workflow JSON.
+
+Reglas:
+- devolver SOLO JSON válido
+- formato:
+
+{
+ "name": "nombre",
+ "trigger": "manual",
+ "steps": [
+   {"action":"list_dir","value":"."}
+ ]
+}
+
+Acciones disponibles:
+open_app
+open_url
+list_dir
+read_file
+write_file
+delete_file
+copy_file
+rename_file
+create_folder
+move_files
+list_processes
+kill_process
+get_time
+run_cmd
+sleep
+
+NO inventes acciones nuevas.
+"""
+
+
+def generate_workflow(text: str):
+
+    prompt = f"{SYSTEM_PROMPT}\n\nUsuario: {text}"
+
+    raw = ask_llm(prompt)
+
+    try:
+        data = json.loads(raw)
+        return data
+    except:
+        return {
+            "error": "No se pudo generar workflow",
+            "raw": raw
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

@@ -1,0 +1,34 @@
+{
+  "name": "nexus-desktop",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "concurrently \"npm run backend\" \"npm run frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "backend": "cd ../backend && venv\\Scripts\\activate && uvicorn main:app",
+    "frontend": "cd ../frontend && npm run dev",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^26.4.0",
+    "wait-on": "^7.0.0"
+  },
+  "build": {
+  "appId": "com.nexus.ia",
+  "productName": "Nexus",
+  "directories": {
+    "buildResources": "assets"
+  },
+  "files": [
+    "**/*",
+    "../frontend/dist/**/*",
+    "../backend/dist/**/*"
+  ],
+  "win": {
+    "target": [
+      "nsis"
+    ]
+  }
+}
+}

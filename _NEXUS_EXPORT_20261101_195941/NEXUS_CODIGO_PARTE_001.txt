@@ -1,0 +1,223 @@
+﻿
+================================================================================
+ARCHIVO: .gitignore
+================================================================================
+
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+.venv/
+venv/
+
+# Herramientas y pruebas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Variables de entorno y secretos
+.env
+.env.*
+!.env.example
+
+# Sistema operativo y editores
+.DS_Store
+Thumbs.db
+.vscode/
+
+@'
+
+# Dependencias de Node.js
+node_modules/
+
+# Metadatos generados por Python
+*.egg-info/
+'@ | Add-Content .gitignore
+
+# Artefactos de compilacion
+/backend/build/
+/backend/dist/
+/desktop/dist/
+
+# Datos y estado local de NEXUS
+/backend/nexus.db
+/backend/nexus_learning.json
+/backend/nexus_memory.json
+/backend/nexus_logs.txt
+
+# Modelo binario local
+/backend/yolov8n.pt
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: .python-version
+================================================================================
+
+3.12
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: .vscode\settings.json
+================================================================================
+
+{
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/packages/bootstrap/src",
+        "${workspaceFolder}/packages/engine/src",
+        "${workspaceFolder}/packages/core/src",
+        "${workspaceFolder}/packages/planner/src",
+        "${workspaceFolder}/packages/runtime/src",
+        "${workspaceFolder}/packages/actions/src",
+        "${workspaceFolder}/packages/providers/src",
+        "${workspaceFolder}/packages/adapters/src",
+        "${workspaceFolder}/packages/memory/src",
+        "${workspaceFolder}/packages/shared/src"
+    ]
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\.gitignore
+================================================================================
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\eslint.config.js
+================================================================================
+
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import tseslint from 'typescript-eslint'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{ts,tsx}'],
+    extends: [
+      js.configs.recommended,
+      tseslint.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      globals: globals.browser,
+    },
+  },
+])
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\index.html
+================================================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>console</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\package.json
+================================================================================
+
+{
+  "name": "console",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.6",
+    "globals": "^17.12.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.69.0",
+    "vite": "^8.3.0"
+  }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

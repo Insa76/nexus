@@ -9,6 +9,7 @@ from planner.intent import Intent
 @pytest.mark.asyncio
 async def test_engine_passes_empty_cognitive_result_to_decision():
     runtime = MagicMock()
+    runtime.execute = AsyncMock()
     runtime.tool_registry.describe.return_value = []
 
     intent_provider = MagicMock()
@@ -64,7 +65,14 @@ async def test_engine_passes_empty_cognitive_result_to_decision():
         return_value=decision,
     )
 
-    await engine.execute("busca documentos")
+    result = await engine.execute("busca documentos")
+
+    assert result.success is True
+    assert result.output["operation"] == "documents.find_relevant"
+    assert result.output["status"] == "empty"
+    assert result.output["documents"] == []
+    assert "No encontré documentos" in result.metadata["response"]
+    runtime.execute.assert_not_awaited()
 
     decision_context = (
         engine.decision_engine.decide.call_args.kwargs["context"]

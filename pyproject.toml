@@ -30,3 +30,5 @@ dev = [
 asyncio_mode = "auto"
 python_classes = ["Test*"]
 python_files = ["test_*.py"]
+# No recolectar copias de respaldo: contienen tests con nombres duplicados.
+norecursedirs = [".git", ".venv", "venv", "backups", "dist", "build", "node_modules", ".pytest_cache", "__pycache__"]

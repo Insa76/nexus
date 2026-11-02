@@ -1,0 +1,142 @@
+from __future__ import annotations
+
+from context.models import AssistantContext
+
+from documents.context_resolver import (
+    DocumentContext,
+    DocumentContextResolver,
+)
+from documents.context_relevance import DocumentContextMatch
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+class DocumentContextAccess:
+    """
+    Frontera de acceso al contexto documental.
+
+    Los consumidores externos no necesitan conocer la implementación
+    interna del resolver.
+    """
+
+    def __init__(
+        self,
+        resolver: DocumentContextResolver,
+    ) -> None:
+        self._resolver = resolver
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> DocumentContext:
+        return self._resolver.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+    def resolve_from_context(
+        self,
+        context: AssistantContext,
+    ) -> DocumentContext:
+        return self._resolver.resolve_from_context(
+            context,
+        )
+
+    def query(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def query_from_context(
+        self,
+        context: AssistantContext,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def resolve_ordered_matches_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[DocumentContextMatch, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_matches()
+
+    def resolve_ordered_documents_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[Document, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_documents()
+
+    def resolve_ordered_matches(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[DocumentContextMatch, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_matches()
+
+    def resolve_ordered_documents(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[Document, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_documents()
+

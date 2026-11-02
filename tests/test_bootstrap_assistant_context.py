@@ -1,10 +1,10 @@
+
 from bootstrap.bootstrap import build_engine
 from context import (
     AssistantContext,
     AssistantSession,
     OrganizationProfile,
     UserProfile,
-    AssistantSessionManager,
 )
 
 
@@ -39,8 +39,14 @@ def test_bootstrap_can_inject_assistant_context() -> None:
 def test_bootstrap_keeps_context_optional() -> None:
     engine = build_engine()
 
-    assert engine._assistant_context is None
-    assert engine._context_builder._assistant_context is None
+    assert isinstance(engine._assistant_context, AssistantContext)
+    assert engine._assistant_context.user is None
+    assert engine._assistant_context.organization is None
+    assert (
+        engine._context_builder._assistant_context
+        is engine._assistant_context
+    )
+
 
 def test_bootstrap_can_inject_assistant_session() -> None:
     organization = OrganizationProfile.create(
@@ -73,8 +79,9 @@ def test_bootstrap_can_inject_assistant_session() -> None:
         is assistant_context
     )
 
-    def test_bootstrap_creates_session_from_context() -> None:
-      organization = OrganizationProfile.create(
+
+def test_bootstrap_creates_session_from_context() -> None:
+    organization = OrganizationProfile.create(
         "Organización Demo",
         industry="technology",
     )
@@ -90,8 +97,12 @@ def test_bootstrap_can_inject_assistant_session() -> None:
         organization=organization,
     )
 
+    assistant_session = AssistantSession.create(
+        assistant_context,
+    )
+
     engine = build_engine(
-        assistant_context=assistant_context,
+        assistant_session=assistant_session,
     )
 
     assert engine._assistant_context is assistant_context

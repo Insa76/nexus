@@ -1,0 +1,1748 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\src\documents\change.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+
+
+class DocumentChangeType(str, Enum):
+    ADDED = "added"
+    REMOVED = "removed"
+    MODIFIED = "modified"
+
+
+@dataclass(frozen=True)
+class DocumentChange:
+    change_type: DocumentChangeType
+    before: str | None
+    after: str | None
+    before_line: int | None = None
+    after_line: int | None = None
+
+    @classmethod
+    def added(
+        cls,
+        text: str,
+        *,
+        line: int | None = None,
+    ) -> DocumentChange:
+        return cls(
+            change_type=DocumentChangeType.ADDED,
+            before=None,
+            after=text,
+            before_line=None,
+            after_line=line,
+        )
+
+    @classmethod
+    def removed(
+        cls,
+        text: str,
+        *,
+        line: int | None = None,
+    ) -> DocumentChange:
+        return cls(
+            change_type=DocumentChangeType.REMOVED,
+            before=text,
+            after=None,
+            before_line=line,
+            after_line=None,
+        )
+
+    @classmethod
+    def modified(
+        cls,
+        before: str,
+        after: str,
+        *,
+        before_line: int | None = None,
+        after_line: int | None = None,
+    ) -> DocumentChange:
+        return cls(
+            change_type=DocumentChangeType.MODIFIED,
+            before=before,
+            after=after,
+            before_line=before_line,
+            after_line=after_line,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\change_detector.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from difflib import SequenceMatcher
+
+from documents.change import DocumentChange
+from documents.version_comparison import DocumentVersionComparison
+
+
+@dataclass(frozen=True)
+class DocumentChangeDetection:
+    comparison: DocumentVersionComparison
+    changes: tuple[DocumentChange, ...]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
+
+    @property
+    def unchanged(self) -> bool:
+        return not self.changed
+
+
+class DocumentChangeDetector:
+    def detect(
+        self,
+        comparison: DocumentVersionComparison,
+        before_text: str,
+        after_text: str,
+    ) -> DocumentChangeDetection:
+        matcher = SequenceMatcher(
+            a=before_text.splitlines(),
+            b=after_text.splitlines(),
+            autojunk=False,
+        )
+
+        changes: list[DocumentChange] = []
+
+        before_lines = before_text.splitlines()
+        after_lines = after_text.splitlines()
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                continue
+
+            removed_lines = before_lines[i1:i2]
+            added_lines = after_lines[j1:j2]
+
+            if removed_lines and added_lines:
+                common_count = min(
+                    len(removed_lines),
+                    len(added_lines),
+                )
+
+                for offset in range(common_count):
+                    changes.append(
+                        DocumentChange.modified(
+                            before=removed_lines[offset],
+                            after=added_lines[offset],
+                            before_line=i1 + offset + 1,
+                            after_line=j1 + offset + 1,
+                        )
+                    )
+
+                for offset in range(
+                    common_count,
+                    len(removed_lines),
+                ):
+                    changes.append(
+                        DocumentChange.removed(
+                            removed_lines[offset],
+                            line=i1 + offset + 1,
+                        )
+                    )
+
+                for offset in range(
+                    common_count,
+                    len(added_lines),
+                ):
+                    changes.append(
+                        DocumentChange.added(
+                            added_lines[offset],
+                            line=j1 + offset + 1,
+                        )
+                    )
+
+            elif removed_lines:
+                for offset, line in enumerate(removed_lines):
+                    changes.append(
+                        DocumentChange.removed(
+                            line,
+                            line=i1 + offset + 1,
+                        )
+                    )
+
+            elif added_lines:
+                for offset, line in enumerate(added_lines):
+                    changes.append(
+                        DocumentChange.added(
+                            line,
+                            line=j1 + offset + 1,
+                        )
+                    )
+
+        return DocumentChangeDetection(
+            comparison=comparison,
+            changes=tuple(changes),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\cognitive.py
+================================================================================
+
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from documents.capability import DocumentCapability
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentCognitiveResult:
+    """
+    Resultado de una operación cognitiva sobre Documents.
+
+    Representa información que el Cognitive Core puede utilizar
+    para razonar sobre documentos sin conocer stores ni detalles
+    internos del subsistema Documents.
+    """
+
+    query: DocumentQueryResult
+    documents: tuple[Document, ...]
+    metadata: dict[str, Any]
+
+
+class DocumentCognitiveAccess:
+    """
+    Punto de acceso cognitivo a Documents.
+
+    Esta capa traduce una necesidad cognitiva del Assistant
+    en una operación sobre DocumentCapability.
+
+    No conoce stores.
+    No ejecuta acciones del Runtime.
+    No interpreta lenguaje natural.
+    """
+
+    def __init__(
+        self,
+        capability: DocumentCapability,
+    ) -> None:
+        self._capability = capability
+
+    def find_relevant(
+        self,
+        *,
+        context: object,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentCognitiveResult:
+        query = self._capability.query(
+            context=context,
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+        # La consulta ya contiene los filtros, el orden y la
+        # paginación aplicados. No recuperar otra colección
+        # independiente que pueda contradecir ese resultado.
+        documents = query.documents
+
+        return DocumentCognitiveResult(
+            query=query,
+            documents=documents,
+            metadata={
+                "operation": "find_relevant",
+                "name": name,
+                "mime_type": mime_type,
+                "offset": offset,
+                "limit": limit,
+                "count": len(documents),
+                "total": query.total,
+                "has_more": query.has_more,
+            },
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\content.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DocumentContent:
+    """
+    Contenido procesable de un documento.
+
+    Representa contenido ya disponible para NEXUS, pero no define
+    cómo fue obtenido ni cómo se almacena físicamente.
+    """
+
+    id: str
+    text: str
+    content_type: str
+    language: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        text: str,
+        content_type: str = "text/plain",
+        language: str | None = None,
+    ) -> DocumentContent:
+        return cls(
+            id=str(uuid4()),
+            text=text,
+            content_type=content_type,
+            language=language,
+            created_at=_utc_now(),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\content_store.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.content import DocumentContent
+
+
+class ContentStore:
+    def __init__(self) -> None:
+        self._contents: dict[str, DocumentContent] = {}
+
+    def add(self, content: DocumentContent) -> DocumentContent:
+        self._contents[content.id] = content
+        return content
+
+    def get(self, content_id: str) -> DocumentContent | None:
+        return self._contents.get(content_id)
+
+    def list(self) -> list[DocumentContent]:
+        return list(self._contents.values())
+
+    def update(self, content: DocumentContent) -> DocumentContent:
+        if content.id not in self._contents:
+            raise KeyError(f"Content not found: {content.id}")
+
+        self._contents[content.id] = content
+        return content
+
+    def remove(self, content_id: str) -> DocumentContent | None:
+        return self._contents.pop(content_id, None)
+
+    def clear(self) -> None:
+        self._contents.clear()
+
+    def count(self) -> int:
+        return len(self._contents)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\content_version.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from documents.document_type import DocumentType
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DocumentContentVersion:
+    """
+    Immutable historical version of a document's content.
+
+    A version identifies the content produced at a particular point in
+    the document lifecycle. It does not replace DocumentContent.
+    """
+
+    id: str
+    document_id: str
+    content_id: str
+    version: int
+
+    content_type: DocumentType
+
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        document_id: str,
+        content_id: str,
+        version: int,
+        content_type: str | DocumentType,
+    ) -> DocumentContentVersion:
+        if version < 1:
+            raise ValueError(
+                "Document content version must be greater than zero"
+            )
+
+        resolved_content_type = (
+            content_type
+            if isinstance(content_type, DocumentType)
+            else DocumentType.from_mime_type(content_type)
+        )
+
+        return cls(
+            id=str(uuid4()),
+            document_id=document_id,
+            content_id=content_id,
+            version=version,
+            content_type=resolved_content_type,
+            created_at=_utc_now(),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\content_version_store.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.content_version import DocumentContentVersion
+
+
+class DocumentContentVersionStore:
+    def __init__(self) -> None:
+        self._versions: dict[str, DocumentContentVersion] = {}
+
+    def add(
+        self,
+        version: DocumentContentVersion,
+    ) -> DocumentContentVersion:
+        self._versions[version.id] = version
+        return version
+
+    def get(
+        self,
+        version_id: str,
+    ) -> DocumentContentVersion | None:
+        return self._versions.get(version_id)
+
+    def list(self) -> list[DocumentContentVersion]:
+        return list(self._versions.values())
+
+    def list_for_document(
+        self,
+        document_id: str,
+    ) -> list[DocumentContentVersion]:
+        return [
+            version
+            for version in self._versions.values()
+            if version.document_id == document_id
+        ]
+
+    def get_latest_for_document(
+        self,
+        document_id: str,
+    ) -> DocumentContentVersion | None:
+        versions = self.list_for_document(document_id)
+
+        if not versions:
+            return None
+
+        return max(
+            versions,
+            key=lambda version: version.version,
+        )
+
+    def get_next_version(
+        self,
+        document_id: str,
+    ) -> int:
+        latest = self.get_latest_for_document(
+            document_id
+        )
+
+        if latest is None:
+            return 1
+
+        return latest.version + 1
+
+    def remove(
+        self,
+        version_id: str,
+    ) -> DocumentContentVersion | None:
+        return self._versions.pop(version_id, None)
+
+    def remove_for_document(
+        self,
+        document_id: str,
+    ) -> int:
+        versions = [
+            version
+            for version in self._versions.values()
+            if version.document_id == document_id
+        ]
+
+        for version in versions:
+            self._versions.pop(version.id, None)
+
+        return len(versions)
+
+    def clear(self) -> None:
+        self._versions.clear()
+
+    def count(self) -> int:
+        return len(self._versions)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\context_access.py
+================================================================================
+
+from __future__ import annotations
+
+from context.models import AssistantContext
+
+from documents.context_resolver import (
+    DocumentContext,
+    DocumentContextResolver,
+)
+from documents.context_relevance import DocumentContextMatch
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+class DocumentContextAccess:
+    """
+    Frontera de acceso al contexto documental.
+
+    Los consumidores externos no necesitan conocer la implementación
+    interna del resolver.
+    """
+
+    def __init__(
+        self,
+        resolver: DocumentContextResolver,
+    ) -> None:
+        self._resolver = resolver
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> DocumentContext:
+        return self._resolver.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+    def resolve_from_context(
+        self,
+        context: AssistantContext,
+    ) -> DocumentContext:
+        return self._resolver.resolve_from_context(
+            context,
+        )
+
+    def query(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def query_from_context(
+        self,
+        context: AssistantContext,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def resolve_ordered_matches_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[DocumentContextMatch, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_matches()
+
+    def resolve_ordered_documents_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[Document, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_documents()
+
+    def resolve_ordered_matches(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[DocumentContextMatch, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_matches()
+
+    def resolve_ordered_documents(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[Document, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_documents()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\context_relevance.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import IntEnum
+
+from documents.models import Document
+
+
+class DocumentContextRelevance(IntEnum):
+    USER = 1
+    ORGANIZATION = 2
+    PROJECT = 3
+
+
+@dataclass(frozen=True)
+class DocumentContextMatch:
+    document: Document
+    relevance: DocumentContextRelevance
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\context_relevance_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from documents.context_relevance import (
+    DocumentContextMatch,
+    DocumentContextRelevance,
+)
+from documents.models import Document
+
+if TYPE_CHECKING:
+    from documents.context_resolver import DocumentContextSelection
+
+
+class DocumentContextRelevanceResolver:
+    """
+    Determina el nivel de especificidad contextual de un documento.
+
+    No decide si un documento debe formar parte del contexto.
+    Solamente clasifica el vínculo existente.
+    """
+
+    def resolve(
+        self,
+        *,
+        document: Document,
+        selection: DocumentContextSelection,
+    ) -> DocumentContextMatch | None:
+        if (
+            document.project_id is not None
+            and document.project_id in selection.project_ids
+        ):
+            return DocumentContextMatch(
+                document=document,
+                relevance=DocumentContextRelevance.PROJECT,
+            )
+
+        if (
+            document.organization_id is not None
+            and document.organization_id == selection.organization_id
+        ):
+            return DocumentContextMatch(
+                document=document,
+                relevance=DocumentContextRelevance.ORGANIZATION,
+            )
+
+        if (
+            document.user_id is not None
+            and document.user_id == selection.user_id
+        ):
+            return DocumentContextMatch(
+                document=document,
+                relevance=DocumentContextRelevance.USER,
+            )
+
+        return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\context_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.access import DocumentsAccess
+from documents.context_relevance import (
+    DocumentContextMatch,
+)
+from documents.context_relevance_resolver import (
+    DocumentContextRelevanceResolver,
+)
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+@dataclass(frozen=True)
+class DocumentContextSelection:
+    """
+    Selección contextual utilizada para resolver documentos.
+    """
+
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DocumentContext:
+    """
+    Documentos relevantes para un contexto operativo.
+
+    La selección que originó los documentos queda preservada
+    para mantener trazabilidad.
+
+    `documents` se mantiene como acceso directo compatible.
+    `matches` agrega la relevancia contextual de cada documento.
+    """
+
+    selection: DocumentContextSelection
+    documents: tuple[Document, ...]
+    matches: tuple[DocumentContextMatch, ...]
+
+    @classmethod
+    def empty(
+        cls,
+        selection: DocumentContextSelection,
+    ) -> DocumentContext:
+        return cls(
+            selection=selection,
+            documents=(),
+            matches=(),
+        )
+
+    def ordered_matches(
+        self,
+    ) -> tuple[DocumentContextMatch, ...]:
+        return tuple(
+            sorted(
+                self.matches,
+                key=lambda match: match.relevance,
+                reverse=True,
+            )
+        )
+
+    def ordered_documents(self) -> tuple[Document, ...]:
+        return tuple(
+            match.document
+            for match in self.ordered_matches()
+        )
+
+    def documents_by_mime_type(
+        self,
+        mime_type: str,
+    ) -> tuple[Document, ...]:
+        return tuple(
+            document
+            for document in self.documents
+            if document.mime_type == mime_type
+        )
+
+    def documents_by_name(
+        self,
+        name: str,
+    ) -> tuple[Document, ...]:
+        normalized_name = name.strip().lower()
+
+        return tuple(
+            document
+            for document in self.documents
+            if normalized_name in document.name.lower()
+        )
+
+    def filter(
+        self,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+    ) -> tuple[Document, ...]:
+        normalized_name = (
+            name.strip().lower()
+            if name is not None
+            else None
+        )
+
+        return tuple(
+            document
+            for document in self.documents
+            if (
+                normalized_name is None
+                or normalized_name in document.name.lower()
+            )
+            and (
+                mime_type is None
+                or document.mime_type == mime_type
+            )
+        )
+
+    def query(
+        self,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        normalized_name = (
+            name.strip().lower()
+            if name is not None
+            else None
+        )
+
+        if offset < 0:
+            raise ValueError(
+                "offset must be greater than or equal to zero"
+            )
+
+        if limit is not None and limit < 0:
+            raise ValueError(
+                "limit must be greater than or equal to zero"
+            )
+
+        matched_documents = tuple(
+            match.document
+            for match in self.matches
+            if (
+                normalized_name is None
+                or normalized_name in match.document.name.lower()
+            )
+            and (
+                mime_type is None
+                or match.document.mime_type == mime_type
+            )
+        )
+
+        matched_document_ids = {
+            document.id
+            for document in matched_documents
+        }
+
+        matches = tuple(
+            match
+            for match in self.matches
+            if match.document.id in matched_document_ids
+        )
+
+        total = len(matched_documents)
+
+        if limit is None:
+            paginated_documents = matched_documents[offset:]
+            paginated_ids = {
+                document.id
+                for document in paginated_documents
+            }
+        else:
+            paginated_documents = matched_documents[
+             offset:offset + limit
+            ]
+            paginated_ids = {
+                document.id
+                for document in paginated_documents
+            }
+
+        paginated_matches = tuple(
+            match
+            for match in matches
+            if match.document.id in paginated_ids
+        )
+
+        return DocumentQueryResult.from_documents(
+            paginated_documents,
+            total=total,
+            offset=offset,
+            limit=limit,
+            query={
+    key: value
+    for key, value in {
+        "name": name,
+        "mime_type": mime_type,
+        "offset": offset if offset != 0 else None,
+        "limit": limit,
+    }.items()
+    if value is not None
+},
+            matches=paginated_matches,
+        )
+
+class DocumentContextResolver:
+    """
+    Resuelve documentos relevantes para un contexto operativo.
+
+    No conoce AssistantContext, ContextStore ni Engine.
+    """
+
+    def __init__(
+        self,
+        access: DocumentsAccess,
+        relevance_resolver: DocumentContextRelevanceResolver | None = None,
+    ) -> None:
+        self._access = access
+        self._relevance_resolver = (
+            relevance_resolver
+            or DocumentContextRelevanceResolver()
+        )
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> DocumentContext:
+        selection = DocumentContextSelection(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=tuple(project_ids),
+        )
+
+        if not user_id and not organization_id and not project_ids:
+            return DocumentContext.empty(selection)
+
+        # ---------------------------------------------------------
+        # DOCUMENTS
+        # ---------------------------------------------------------
+        #
+        # `documents` mantiene la semántica de resolución
+        # contextual exacta.
+        #
+        # Cuando hay proyectos explícitos:
+        #
+        #   USER + ORGANIZATION + PROJECT
+        #
+        # Cuando no hay proyectos:
+        #
+        #   USER + ORGANIZATION
+        #
+        # Los resultados se deduplican preservando el orden.
+        #
+
+        documents: list[Document] = []
+
+        if project_ids:
+            for project_id in project_ids:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        user_id=user_id,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                    )
+                )
+        else:
+            if user_id is not None:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        user_id=user_id,
+                    )
+                )
+
+            if organization_id is not None:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        organization_id=organization_id,
+                    )
+                )
+
+        unique_documents: list[Document] = []
+
+        for document in documents:
+            if document not in unique_documents:
+                unique_documents.append(document)
+
+        # ---------------------------------------------------------
+        # MATCH DOCUMENTS
+        # ---------------------------------------------------------
+        #
+        # Para calcular relevancia necesitamos considerar todos
+        # los niveles del contexto:
+        #
+        #   USER
+        #   ORGANIZATION
+        #   PROJECT
+        #
+        # Esto es deliberadamente diferente de `documents`.
+        #
+        # `documents` representa la resolución documental.
+        # `matches` representa la clasificación contextual.
+        #
+
+        match_documents: list[Document] = []
+
+        if user_id is not None:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    user_id=user_id,
+                )
+            )
+
+        if organization_id is not None:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    organization_id=organization_id,
+                )
+            )
+
+        for project_id in project_ids:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    project_id=project_id,
+                )
+            )
+
+        unique_match_documents: list[Document] = []
+
+        for document in match_documents:
+            if document not in unique_match_documents:
+                unique_match_documents.append(document)
+
+        # ---------------------------------------------------------
+        # RELEVANCE MATCHES
+        # ---------------------------------------------------------
+
+        matches = tuple(
+            match
+            for document in unique_match_documents
+            if (
+                match := self._relevance_resolver.resolve(
+                    document=document,
+                    selection=selection,
+                )
+            )
+            is not None
+        )
+
+        return DocumentContext(
+            selection=selection,
+            documents=tuple(unique_documents),
+            matches=matches,
+        )
+
+    def resolve_from_context(
+        self,
+        context,
+    ) -> DocumentContext:
+        user_id = (
+            context.user.id
+            if context.user is not None
+            else None
+        )
+
+        organization_id = (
+            context.organization.id
+            if context.organization is not None
+            else None
+        )
+
+        project_ids = tuple(
+            project.id
+            for project in context.projects
+        )
+
+        if (
+            user_id is None
+            and organization_id is None
+            and not project_ids
+        ):
+            return DocumentContext.empty(
+                DocumentContextSelection()
+            )
+
+        return self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\declared_type_detection.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.artifacts import DocumentArtifact
+from documents.document_type import DocumentType
+
+
+class DeclaredTypeDetectionStrategy:
+    def __init__(
+        self,
+        declared_types: dict[str, str] | None = None,
+    ) -> None:
+        self._declared_types = dict(
+            declared_types or {}
+        )
+
+    def resolve(
+        self,
+        artifact: DocumentArtifact,
+    ) -> DocumentType | None:
+        mime_type = self._declared_types.get(
+            artifact.id
+        )
+
+        if mime_type is None:
+            return None
+
+        return DocumentType.from_mime_type(
+            mime_type
+        )
+
+    def declare(
+        self,
+        artifact: DocumentArtifact,
+        mime_type: str,
+    ) -> None:
+        self._declared_types[
+            artifact.id
+        ] = mime_type
+
+    def remove(
+        self,
+        artifact: DocumentArtifact,
+    ) -> str | None:
+        return self._declared_types.pop(
+            artifact.id,
+            None,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\document_ingestion_result.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.resolver import DocumentResolution
+from documents.type_detection_evidence import (
+    DocumentTypeDetectionEvidence,
+)
+from documents.type_validation import DocumentTypeValidation
+
+
+@dataclass(frozen=True)
+class DocumentIngestionResult:
+    resolution: DocumentResolution
+    type_validation: DocumentTypeValidation | None = None
+    detection_evidence: DocumentTypeDetectionEvidence | None = None
+
+    @property
+    def document(self):
+        return self.resolution.document
+
+    @property
+    def artifact(self):
+        return self.resolution.artifact
+
+    @property
+    def content(self):
+        return self.resolution.content
+
+    @property
+    def type_matches(self) -> bool | None:
+        if self.type_validation is None:
+            return None
+
+        return self.type_validation.matches
+
+    @property
+    def type_mismatch(self) -> bool | None:
+        if self.type_validation is None:
+            return None
+
+        return self.type_validation.mismatch
+
+    @property
+    def detected_type(self):
+        if self.detection_evidence is None:
+            return None
+
+        return self.detection_evidence.detected_type
+
+    @property
+    def detection_strategy(self) -> str | None:
+        if self.detection_evidence is None:
+            return None
+
+        return self.detection_evidence.strategy
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\document_type.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class DocumentType:
+    """
+    Representa el tipo normalizado de un documento.
+
+    El mime type original puede conservarse por separado en Document.
+    Esta abstracción solamente define el tipo que utilizará Documents
+    para seleccionar un mecanismo de ingestión.
+    """
+
+    mime_type: str
+
+    @property
+    def category(self) -> str:
+        return self.mime_type.split("/", 1)[0]
+
+    @property
+    def subtype(self) -> str:
+        return self.mime_type.split("/", 1)[1]
+
+    @classmethod
+    def from_mime_type(cls, mime_type: str) -> DocumentType:
+        normalized = mime_type.strip().lower()
+
+        if not normalized:
+            raise ValueError("mime_type cannot be empty")
+
+        if "/" not in normalized:
+            raise ValueError(
+                f"Invalid mime type: {mime_type}"
+            )
+
+        category, subtype = normalized.split("/", 1)
+
+        if not category or not subtype:
+            raise ValueError(
+                f"Invalid mime type: {mime_type}"
+            )
+
+        return cls(
+            mime_type=f"{category}/{subtype}",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\extension_type_detection.py
+================================================================================
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from documents.artifacts import DocumentArtifact
+from documents.document_type import DocumentType
+
+
+class ExtensionTypeDetectionStrategy:
+    _EXTENSION_TYPES: dict[str, str] = {
+        ".txt": "text/plain",
+        ".text": "text/plain",
+        ".md": "text/markdown",
+        ".markdown": "text/markdown",
+        ".csv": "text/csv",
+        ".json": "application/json",
+        ".pdf": "application/pdf",
+        ".html": "text/html",
+        ".htm": "text/html",
+    }
+
+    def resolve(
+        self,
+        artifact: DocumentArtifact,
+    ) -> DocumentType | None:
+        location = artifact.location.strip()
+
+        if not location:
+            return None
+
+        extension = Path(location).suffix.lower()
+
+        mime_type = self._EXTENSION_TYPES.get(
+            extension
+        )
+
+        if mime_type is None:
+            return None
+
+        return DocumentType.from_mime_type(
+            mime_type
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\format_ingestion.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.artifact_type_resolver import ArtifactTypeResolver
+from documents.artifacts import DocumentArtifact
+from documents.content import DocumentContent
+from documents.document_type import DocumentType
+from documents.format_reader_registry import FormatReaderRegistry
+from documents.ingestion import IngestionResult
+from documents.type_detection_evidence import (
+    DocumentTypeDetectionEvidence,
+)
+from documents.type_validation import DocumentTypeValidation
+from documents.type_validator import DocumentTypeValidator
+
+
+@dataclass(frozen=True)
+class FormatIngestionResult:
+    ingestion: IngestionResult
+    type_validation: DocumentTypeValidation | None = None
+    detection_evidence: DocumentTypeDetectionEvidence | None = None
+
+
+class FormatIngestionService:
+    def __init__(
+        self,
+        reader_registry: FormatReaderRegistry,
+        type_resolver: ArtifactTypeResolver | None = None,
+        type_validator: DocumentTypeValidator | None = None,
+    ) -> None:
+        self._reader_registry = reader_registry
+        self._type_resolver = (
+            type_resolver
+            if type_resolver is not None
+            else ArtifactTypeResolver()
+        )
+        self._type_validator = (
+            type_validator
+            if type_validator is not None
+            else DocumentTypeValidator()
+        )
+
+    def ingest(
+        self,
+        artifact: DocumentArtifact,
+        document_type: str | DocumentType | None = None,
+    ) -> IngestionResult:
+        resolved_type = self._resolve_type(
+            artifact=artifact,
+            document_type=document_type,
+        )
+
+        reader = self._reader_registry.get(
+            resolved_type
+        )
+
+        if reader is None:
+            raise ValueError(
+                "No format reader registered for content type: "
+                f"{resolved_type.mime_type}"
+            )
+
+        text = reader.read(
+            artifact,
+            resolved_type,
+        )
+
+        content = DocumentContent.create(
+            text=text,
+            content_type=resolved_type.mime_type,
+        )
+
+        return IngestionResult(
+            artifact=artifact,
+            content=content,
+        )
+
+    def ingest_with_validation(
+        self,
+        artifact: DocumentArtifact,
+        declared_type: str | DocumentType,
+    ) -> FormatIngestionResult:
+        detection_evidence = (
+            self._type_resolver.resolve_with_evidence(
+                artifact
+            )
+        )
+
+        validation = self._type_validator.validate(
+            declared_type=declared_type,
+            detected_type=detection_evidence.detected_type,
+        )
+
+        ingestion = self.ingest(
+            artifact=artifact,
+            document_type=detection_evidence.detected_type,
+        )
+
+        return FormatIngestionResult(
+            ingestion=ingestion,
+            type_validation=validation,
+            detection_evidence=detection_evidence,
+        )
+
+    def _resolve_type(
+        self,
+        artifact: DocumentArtifact,
+        document_type: str | DocumentType | None,
+    ) -> DocumentType:
+        if isinstance(
+            document_type,
+            DocumentType,
+        ):
+            return document_type
+
+        if isinstance(
+            document_type,
+            str,
+        ):
+            return DocumentType.from_mime_type(
+                document_type
+            )
+
+        return self._type_resolver.resolve(
+            artifact
+        )
+
+    def supported_content_types(self) -> list[str]:
+        return self._reader_registry.content_types()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\format_reader.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from documents.artifacts import DocumentArtifact
+from documents.document_type import DocumentType
+
+
+class DocumentFormatReader(Protocol):
+    """
+    Lee e interpreta un artifact según su formato documental.
+
+    A diferencia de ArtifactReader, que solamente obtiene
+    el contenido físico, este componente conoce el formato
+    del documento.
+    """
+
+    def supports(
+        self,
+        document_type: DocumentType,
+    ) -> bool:
+        ...
+
+    def read(
+        self,
+        artifact: DocumentArtifact,
+        document_type: DocumentType,
+    ) -> str:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\format_reader_registry.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.document_type import DocumentType
+from documents.format_reader import DocumentFormatReader
+
+
+class FormatReaderRegistry:
+    def __init__(self) -> None:
+        self._readers: dict[str, DocumentFormatReader] = {}
+
+    @staticmethod
+    def _normalize_document_type(
+        document_type: str | DocumentType,
+    ) -> str:
+        if isinstance(document_type, DocumentType):
+            return document_type.mime_type
+
+        return DocumentType.from_mime_type(
+            document_type
+        ).mime_type
+
+    def register(
+        self,
+        document_type: str | DocumentType,
+        reader: DocumentFormatReader,
+    ) -> None:
+        normalized_type = self._normalize_document_type(
+            document_type
+        )
+
+        self._readers[normalized_type] = reader
+
+    def get(
+        self,
+        document_type: str | DocumentType,
+    ) -> DocumentFormatReader | None:
+        normalized_type = self._normalize_document_type(
+            document_type
+        )
+
+        return self._readers.get(
+            normalized_type
+        )
+
+    def supports(
+        self,
+        document_type: str | DocumentType,
+    ) -> bool:
+        normalized_type = self._normalize_document_type(
+            document_type
+        )
+
+        return normalized_type in self._readers
+
+    def remove(
+        self,
+        document_type: str | DocumentType,
+    ) -> DocumentFormatReader | None:
+        normalized_type = self._normalize_document_type(
+            document_type
+        )
+
+        return self._readers.pop(
+            normalized_type,
+            None,
+        )
+
+    def clear(self) -> None:
+        self._readers.clear()
+
+    def content_types(self) -> list[str]:
+        return list(self._readers)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Protocol
+
+from documents.artifacts import DocumentArtifact
+from documents.content import DocumentContent
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    artifact: DocumentArtifact
+    content: DocumentContent
+
+
+class DocumentIngestor(Protocol):
+    def ingest(self, artifact: DocumentArtifact) -> IngestionResult:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion_evidence.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.document_type import DocumentType
+
+
+@dataclass(frozen=True)
+class DocumentIngestionEvidence:
+    declared_type: DocumentType
+    detected_type: DocumentType
+    detection_strategy: str
+
+    @property
+    def matches(self) -> bool:
+        return (
+            self.declared_type.mime_type
+            == self.detected_type.mime_type
+        )
+
+    @property
+    def mismatch(self) -> bool:
+        return not self.matches
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

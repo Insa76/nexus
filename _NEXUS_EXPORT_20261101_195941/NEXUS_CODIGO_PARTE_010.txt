@@ -1,0 +1,1883 @@
+﻿
+================================================================================
+ARCHIVO: backend\brain\agent.py
+================================================================================
+
+import ollama
+import json
+
+from memory.search import search_memory
+from context.system_context import get_context
+from history.store import load_history, save_history
+
+from brain.personal_memory.store import save_memory
+from brain.personal_memory.recall import recall
+from brain.personal_memory.extractor import should_remember
+
+from brain.autonomous.runner import run_autonomous
+
+from brain.semantic.recall import recall_semantic
+from brain.semantic.learner import learn_from_interaction
+from brain.semantic.vector_store import save_vector_memory
+from brain.semantic.ranking import search_similar
+
+
+SYSTEM_PROMPT = """
+Sos Nexus, un asistente de sistema local inteligente.
+
+REGLAS ESTRICTAS:
+
+SIEMPRE devolver SOLO uno de estos formatos:
+
+Acción simple:
+{ "action": "open_app", "value": "chrome" }
+
+Texto:
+{ "response": "texto" }
+
+NUNCA usar:
+- type
+- data
+- launch_app
+- formatos inventados
+
+Sé breve, directo y práctico.
+"""
+
+
+# =========================================================
+# 🔥 Parser tolerante (corrige formatos raros del LLM)
+# =========================================================
+def normalize_result(result):
+
+    if not isinstance(result, dict):
+        return {"response": str(result)}
+
+    # formato correcto
+    if "action" in result or "response" in result:
+        return result
+
+    # formato inventado tipo:
+    # { type: "LAUNCH_APP", data: { app_name: "Chrome" } }
+    if "type" in result:
+        t = str(result["type"]).lower()
+
+        if "launch" in t or "open" in t:
+            app = result.get("data", {}).get("app_name", "")
+            return {"action": "open_app", "value": app}
+
+    return {"response": str(result)}
+
+
+# =========================================================
+# 🧠 Cerebro principal
+# =========================================================
+def ask_nexus(message: str, user=None):
+
+    if user is None:
+        user = {"id": "default"}
+
+    user_id = user.get("id", "default")
+
+    lower = message.lower()
+
+    # =====================================================
+    # 1️⃣ Tareas complejas → agente autónomo
+    # =====================================================
+    if any(x in lower for x in [
+        "prepará", "analizá", "organiza todo",
+        "hacé todo", "completo", "automáticamente"
+    ]):
+        result = run_autonomous(message, user)
+        return {"response": result}
+
+    # =====================================================
+    # 2️⃣ Contextos inteligentes
+    # =====================================================
+    memory_context = search_memory(message)
+    system_ctx = get_context()
+    personal_memories = recall(message)
+    semantic_mem = recall_semantic(user_id)
+
+    # =====================================================
+    # 3️⃣ Historial conversacional
+    # =====================================================
+    history = load_history()
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": f"Contexto del sistema:\n{system_ctx}"}
+    ]
+
+    if memory_context:
+        messages.append({
+            "role": "system",
+            "content": f"Contexto de archivos:\n{memory_context}"
+        })
+
+    if personal_memories:
+        messages.append({
+            "role": "system",
+            "content": f"Memoria personal relevante:\n{personal_memories}"
+        })
+
+    if semantic_mem:
+        messages.append({
+            "role": "system",
+            "content": f"Memoria semántica del usuario:\n{semantic_mem}"
+        })
+
+    # últimos intercambios
+    for h in history[-6:]:
+        messages.append({"role": "user", "content": h["user"]})
+        messages.append({"role": "assistant", "content": h["assistant"]})
+
+    messages.append({"role": "user", "content": message})
+
+    similar = search_similar(user.get("id","default"), message)
+
+    if similar:
+       memory_context = "\n".join([x[1] for x in similar])
+       messages.append({
+        "role": "system",
+        "content": f"Memoria relevante:\n{memory_context}"
+    })
+
+    # =====================================================
+    # 4️⃣ LLM
+    # =====================================================
+    try:
+        res = ollama.chat(
+            model="llama3",
+            messages=messages
+        )
+
+        content = res["message"]["content"]
+
+    except Exception as e:
+        return {"response": f"Error LLM: {str(e)}"}
+    
+    save_vector_memory(user.get("id","default"), message)
+
+    # =====================================================
+    # 5️⃣ Parseo robusto
+    # =====================================================
+    try:
+        parsed = json.loads(content)
+        result = normalize_result(parsed)
+    except Exception:
+        result = {"response": content}
+
+    # =====================================================
+    # 6️⃣ Guardar historial
+    # =====================================================
+    history.append({
+        "user": message,
+        "assistant": result.get("response") or str(result)
+    })
+
+    save_history(history)
+
+    # =====================================================
+    # 7️⃣ Memoria personal
+    # =====================================================
+    if should_remember(message):
+        save_memory(message)
+
+    # =====================================================
+    # 8️⃣ Aprendizaje semántico automático
+    # =====================================================
+    learn_from_interaction(
+        user_id,
+        message,
+        result.get("response", "")
+    )
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\agents\planner.py
+================================================================================
+
+import json
+import ollama
+from actions.system_actions import execute_action
+
+
+SYSTEM = """
+Sos Nexus Planner.
+
+Convertí la orden del usuario en un PLAN JSON.
+
+Formato:
+{
+  "steps": [
+    {"action": "create_folder", "value": "PDF"},
+    {"action": "move_files", "value": {"ext": ".pdf", "to": "PDF"}}
+  ]
+}
+
+Acciones disponibles:
+- open_app
+- open_file
+- create_folder
+- move_files
+- run_cmd
+- close_active_app
+- list_processes
+
+Solo devolver JSON.
+"""
+
+
+def run_plan(user_message: str):
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user_message}
+        ]
+    )
+
+    content = res["message"]["content"]
+
+    try:
+        plan = json.loads(content)
+    except:
+        return "No pude generar un plan."
+
+    outputs = []
+
+    for step in plan.get("steps", []):
+        out = execute_action(step["action"], step["value"])
+        outputs.append(out)
+
+    return "\n".join(outputs)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\ai_planner.py
+================================================================================
+
+import requests
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+MODEL = "llama3"
+
+
+def generate_workflow(task):
+
+    prompt = f"""
+You are an automation system.
+
+Convert the user request into a workflow JSON.
+
+Available actions:
+- list_dir
+- move_files
+- create_folder
+- read_file
+- write_file
+
+User request:
+{task}
+
+Return only valid JSON.
+"""
+
+    r = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": MODEL,
+            "prompt": prompt,
+            "stream": False
+        }
+    )
+
+    data = r.json()
+
+    return data["response"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\anomaly_detector.py
+================================================================================
+
+class AnomalyDetector:
+
+    def __init__(self):
+        self.history = []
+
+    def detect(self, history):
+
+        # Si no hay suficiente historial no detectamos anomalías
+        if len(history) < 5:
+            return False
+
+        # ejemplo simple: muchos errores seguidos
+        errors = [h for h in history[-5:] if h.get("status") == "error"]
+
+        if len(errors) >= 3:
+            return True
+
+        return False
+
+
+anomaly_detector = AnomalyDetector()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\autonomous\agent.py
+================================================================================
+
+import ollama
+import json
+
+SYSTEM = """
+Sos un agente autónomo.
+
+Objetivo:
+Dividí la meta del usuario en pasos pequeños ejecutables.
+
+Formato:
+{
+  "steps":[
+    {"action":"create_folder","value":"report"},
+    {"action":"open_app","value":"notepad"}
+  ],
+  "done": false
+}
+
+Si ya terminaste:
+{"done": true}
+
+Solo JSON.
+"""
+
+
+def next_step(goal, history):
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": f"Objetivo: {goal}\nHistorial:\n{history}"}
+        ]
+    )
+
+    try:
+        return json.loads(res["message"]["content"])
+    except:
+        return {"done": True}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\autonomous\runner.py
+================================================================================
+
+from brain.autonomous.agent import next_step
+from actions.system_actions import execute_action
+import time
+
+
+MAX_STEPS = 10
+
+
+def run_autonomous(goal, user=None):
+
+    history = []
+    step_count = 0
+
+    while step_count < MAX_STEPS:
+
+        plan = next_step(goal, history)
+
+        if plan.get("done"):
+            break
+
+        steps = plan.get("steps", [])
+
+        for s in steps:
+            out = execute_action(s["action"], s["value"], user)
+            history.append(out)
+
+        step_count += 1
+        time.sleep(1)
+
+    return "\n".join(history)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\command_parser.py
+================================================================================
+
+def parse_local_command(text: str):
+    t = text.lower().strip()
+
+    # hora
+    if "hora" in t:
+        return {"action": "get_time"}
+
+    # abrir app
+    if t.startswith("abrir ") or t.startswith("abrí ") or t.startswith("open "):
+        app = t.split(" ", 1)[1]
+        return {"action": "open_app", "value": app}
+
+    return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\llm.py
+================================================================================
+
+import requests
+
+OLLAMA_URL = "http://host.docker.internal:11434/api/generate"
+
+def ask_llm(prompt):
+
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": "llama3",
+            "prompt": prompt,
+            "stream": False
+        }
+    )
+
+    return response.json()["response"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\multi\critic.py
+================================================================================
+
+import ollama
+
+SYSTEM = """
+Evaluá si la ejecución fue exitosa.
+
+Si todo ok → OK
+Si hubo problema → FAIL
+"""
+
+
+def evaluate(result_text):
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": result_text}
+        ]
+    )
+
+    return "OK" in res["message"]["content"].upper()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\multi\executor.py
+================================================================================
+
+from actions.system_actions import execute_action
+
+
+def execute_plan(plan, user=None):
+
+    outputs = []
+
+    for step in plan.get("steps", []):
+        out = execute_action(step["action"], step["value"], user)
+        outputs.append(out)
+
+    return outputs
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\multi\orchestrator.py
+================================================================================
+
+from brain.multi.planner import plan_task
+from brain.multi.executor import execute_plan
+from brain.multi.critic import evaluate
+
+
+def run_multi_agent(message, user=None):
+
+    print("🧠 Planner creando plan...")
+    plan = plan_task(message)
+
+    print("⚙️ Executor ejecutando...")
+    result = execute_plan(plan)
+
+    joined = "\n".join(result)
+
+    print("🔍 Critic evaluando...")
+    ok = evaluate(joined)
+
+    if ok:
+        return joined
+
+    print("🔁 Reintentando una vez...")
+    result = execute_plan(plan, user)
+
+    return "\n".join(result)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\multi\planner.py
+================================================================================
+
+import ollama
+import json
+
+SYSTEM = """
+Convertí la orden del usuario en un plan JSON.
+
+Formato:
+{
+  "steps": [
+    {"action": "open_app", "value": "notepad"}
+  ]
+}
+
+Solo JSON.
+"""
+
+
+def plan_task(message):
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": message}
+        ]
+    )
+
+    try:
+        return json.loads(res["message"]["content"])
+    except:
+        return {"steps": []}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\nexus_voice.py
+================================================================================
+
+from realtime.ws import manager as ws
+
+
+async def speak(message, level="info"):
+
+    text = f"Nexus: {message}"
+
+    print(text)
+
+    try:
+        await ws.broadcast({
+            "type": "nexus_voice",
+            "message": text,
+            "level": level
+        })
+    except:
+        pass
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\patterns.py
+================================================================================
+
+from collections import Counter
+from core.database import get_connection
+
+
+def analyze_patterns(limit=200):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT step_name FROM step_executions
+    ORDER BY started_at DESC
+    LIMIT %s
+    """, (limit,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    steps = [r["step_name"] for r in rows]
+
+    counter = Counter(steps)
+
+    suggestions = []
+
+    for step, count in counter.items():
+
+        if count >= 5:
+            suggestions.append({
+                "type": "repeated_step",
+                "step": step,
+                "count": count,
+                "message": f"Detecté que ejecutás '{step}' {count} veces. ¿Querés automatizarlo?"
+            })
+
+    return suggestions
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\personal_memory\extractor.py
+================================================================================
+
+IMPORTANT = [
+    "proyecto",
+    "cliente",
+    "decidimos",
+    "acordamos",
+    "usar",
+    "configurar",
+    "preferencia"
+]
+
+
+def should_remember(text):
+
+    t = text.lower()
+
+    return any(word in t for word in IMPORTANT)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\personal_memory\recall.py
+================================================================================
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+client = chromadb.Client()
+collection = client.get_or_create_collection("nexus_personal")
+
+
+def recall(query, k=3):
+
+    emb = model.encode(query).tolist()
+
+    res = collection.query(
+        query_embeddings=[emb],
+        n_results=k
+    )
+
+    docs = res.get("documents", [[]])[0]
+
+    return "\n".join(docs)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\personal_memory\store.py
+================================================================================
+
+import chromadb
+from sentence_transformers import SentenceTransformer
+from datetime import datetime
+from sync.client import push_memory
+
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
+client = chromadb.Client()
+collection = client.get_or_create_collection("nexus_personal")
+
+
+def save_memory(text, meta=None):
+
+    emb = model.encode(text).tolist()
+
+    collection.add(
+        documents=[text],
+        embeddings=[emb],
+        ids=[str(datetime.now().timestamp())],
+        metadatas=[meta or {}]
+    )
+
+    push_memory(text)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\proactive.py
+================================================================================
+
+import asyncio
+from brain.patterns import analyze_patterns
+from realtime.ws import manager as ws
+
+INTERVAL_SECONDS = 1800  # 30 min
+
+
+async def periodic_analysis():
+
+    print("🧠 Proactive AI iniciada")
+
+    while True:
+
+        try:
+            suggestions = analyze_patterns()
+
+            if suggestions:
+
+                await ws.broadcast({
+                    "type": "ai_suggestion",
+                    "data": suggestions
+                })
+
+                print("🧠 Nueva sugerencia enviada")
+
+        except Exception as e:
+            print("Proactive AI error:", e)
+
+        await asyncio.sleep(INTERVAL_SECONDS)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\routes.py
+================================================================================
+
+from fastapi import APIRouter
+from brain.patterns import analyze_patterns
+from brain.suggester import generate_suggestion
+
+router = APIRouter(prefix="/ai")
+
+@router.get("/suggestions")
+def suggestions():
+    return analyze_patterns()
+
+@router.post("/suggestions/generate")
+def generate(data: dict):
+    return generate_suggestion(data["pattern"])
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\decay.py
+================================================================================
+
+from datetime import datetime, timedelta
+from core.database import get_connection
+
+
+def apply_decay():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    threshold = datetime.utcnow() - timedelta(days=30)
+
+    cur.execute("""
+        UPDATE semantic_vectors
+        SET confidence = confidence * 0.9
+        WHERE last_used < %s
+    """, (threshold,))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\embedder.py
+================================================================================
+
+import ollama
+
+def embed(text: str):
+    response = ollama.embeddings(
+        model="nomic-embed-text",
+        prompt=text
+    )
+    return response["embedding"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\learner.py
+================================================================================
+
+from brain.semantic.store import save_semantic
+
+
+def learn_from_interaction(user_id, message, response):
+
+    lower = message.lower()
+
+    # ejemplo simple
+    if "siempre abrí" in lower:
+        app = lower.replace("siempre abrí", "").strip()
+        save_semantic(user_id, "default_app", app)
+
+    if "prefiero" in lower:
+        pref = lower.replace("prefiero", "").strip()
+        save_semantic(user_id, "preference", pref)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\models.py
+================================================================================
+
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+
+
+class SemanticMemory(BaseModel):
+    user_id: str
+    key: str
+    value: str
+    confidence: float = 0.5
+    created_at: datetime = datetime.now()
+    updated_at: datetime = datetime.now()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\ranking.py
+================================================================================
+
+import json
+import math
+
+from core.database import get_connection
+from brain.semantic.embedder import embed
+
+
+# ==========================================================
+# COSINE SIMILARITY
+# ==========================================================
+
+def cosine(a, b):
+    dot = sum(x * y for x, y in zip(a, b))
+    mag_a = math.sqrt(sum(x * x for x in a))
+    mag_b = math.sqrt(sum(x * x for x in b))
+    return dot / (mag_a * mag_b + 1e-8)
+
+
+# ==========================================================
+# SEARCH SIMILAR
+# ==========================================================
+
+def search_similar(user_id, query, limit=5):
+
+    q_vec = embed(query)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, content, embedding, confidence
+        FROM semantic_vectors
+        WHERE user_id = %s
+    """, (user_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    scored = []
+
+    for row in rows:
+        emb = json.loads(row[2])  # embedding guardado como JSON
+        confidence = row[3] if row[3] else 1.0
+
+        score = cosine(q_vec, emb) * confidence
+
+        scored.append({
+            "id": row[0],
+            "content": row[1],
+            "score": score
+        })
+
+    # ordenar por score
+    scored.sort(key=lambda x: x["score"], reverse=True)
+
+    return scored[:limit]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\recall.py
+================================================================================
+
+from core.database import get_connection
+
+
+def recall_semantic(user_id):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT key, value, confidence
+        FROM semantic_memory
+        WHERE user_id = %s
+        ORDER BY confidence DESC
+        LIMIT 20
+    """, (user_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\store.py
+================================================================================
+
+from datetime import datetime, timezone
+
+from core.database import get_connection
+
+
+def save_semantic(user_id, key, value, confidence=0.6):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # 🔍 Buscar existente
+    cur.execute("""
+        SELECT id, confidence
+        FROM semantic_memory
+        WHERE user_id = %s AND key = %s
+    """, (user_id, key))
+
+    row = cur.fetchone()
+
+    now = datetime.now(timezone.utc)
+
+    if row:
+        semantic_id = row[0]
+        current_conf = row[1]
+
+        new_conf = min(1.0, current_conf + 0.1)
+
+        cur.execute("""
+            UPDATE semantic_memory
+            SET value = %s,
+                confidence = %s,
+                updated_at = %s
+            WHERE id = %s
+        """, (value, new_conf, now, semantic_id))
+
+    else:
+        cur.execute("""
+            INSERT INTO semantic_memory
+            (user_id, key, value, confidence, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user_id, key, value, confidence, now, now))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\semantic\vector_store.py
+================================================================================
+
+import json
+from datetime import datetime, timezone
+
+from core.database import get_connection
+from brain.semantic.embedder import embed
+
+
+# ==========================================================
+# SAVE VECTOR MEMORY
+# ==========================================================
+
+def save_vector_memory(user_id, content):
+
+    vec = embed(content)
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    now = datetime.now(timezone.utc)
+
+    cur.execute("""
+        INSERT INTO semantic_vectors
+        (user_id, content, embedding, confidence, created_at, last_used)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """, (
+        user_id,
+        content,
+        json.dumps(vec),
+        0.6,
+        now,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\suggester.py
+================================================================================
+
+from brain.llm import ask_llm
+
+SYSTEM_PROMPT = """
+Sos un experto en automatización.
+
+Generá un workflow JSON válido basado en este patrón repetitivo.
+
+Formato:
+
+{
+ "name": "...",
+ "trigger": {"type":"manual"},
+ "steps": [...]
+}
+"""
+
+def generate_suggestion(pattern):
+
+    prompt = f"""
+{SYSTEM_PROMPT}
+
+Patrón detectado:
+{pattern}
+"""
+
+    return ask_llm(prompt)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\brain\workflow_optimizer.py
+================================================================================
+
+from core.database import get_connection
+
+
+def analyze_workflows():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT step, status, COUNT(*) as total
+        FROM job_steps
+        GROUP BY step, status
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    problems = []
+
+    for r in rows:
+
+        step = r["step"]
+        status = r["status"]
+        total = r["total"]
+
+        if status == "error" and total > 2:
+
+            problems.append({
+                "step": step,
+                "issue": "step falla frecuentemente",
+                "count": total
+            })
+
+    return problems
+
+from core.database import get_connection
+
+
+def analyze_workflows():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT step, status, COUNT(*) as total
+        FROM job_steps
+        GROUP BY step, status
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    problems = []
+
+    for r in rows:
+
+        step = r["step"]
+        status = r["status"]
+        total = r["total"]
+
+        if status == "error" and total > 2:
+
+            problems.append({
+                "step": step,
+                "issue": "step falla frecuentemente",
+                "count": total
+            })
+
+    return problems
+
+def suggest_fixes(problems):
+
+    suggestions = []
+
+    for p in problems:
+
+        step = p["step"]
+
+        if step == "move_files":
+
+            suggestions.append({
+                "step": step,
+                "suggestion": "verificar que la carpeta destino exista"
+            })
+
+        if step == "read_file":
+
+            suggestions.append({
+                "step": step,
+                "suggestion": "validar que el archivo exista antes"
+            })
+
+    return suggestions    
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\context\system_context.py
+================================================================================
+
+import psutil
+import os
+import platform
+
+# =========================
+# Windows-only dependency
+# =========================
+
+if platform.system() == "Windows":
+    try:
+        import pygetwindow as gw
+    except Exception:
+        gw = None
+else:
+    gw = None
+
+
+# =========================
+# ACTIVE WINDOW
+# =========================
+
+def active_window():
+
+    if gw is None:
+        return "unsupported_os"
+
+    try:
+        win = gw.getActiveWindow()
+        return win.title if win else "unknown"
+    except Exception:
+        return "unknown"
+
+
+# =========================
+# RUNNING PROCESSES
+# =========================
+
+def running_processes(limit=10):
+
+    procs = []
+
+    for p in psutil.process_iter(['name', 'cpu_percent']):
+        try:
+            procs.append((p.info['name'], p.info['cpu_percent']))
+        except Exception:
+            pass
+
+    procs.sort(key=lambda x: x[1], reverse=True)
+
+    return [p[0] for p in procs[:limit]]
+
+
+# =========================
+# CURRENT FOLDER
+# =========================
+
+def current_folder():
+    return os.getcwd()
+
+
+# =========================
+# GLOBAL CONTEXT
+# =========================
+
+def get_context():
+
+    processes = ", ".join(running_processes())
+
+    return f"""
+Ventana activa: {active_window()}
+Carpeta actual: {current_folder()}
+Procesos principales: {processes}
+"""
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\copilot\copilot_engine.py
+================================================================================
+
+import json
+import requests
+import re
+
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+
+SYSTEM_PROMPT = """
+Eres un generador de workflows para Nexus Automation Engine.
+
+Devuelve SOLO JSON válido.
+
+Formato requerido:
+
+{
+ "name": "workflow_name",
+ "trigger": "manual",
+ "steps": [
+   {
+     "type": "action",
+     "action": "action_name",
+     "value": "value"
+   }
+ ]
+}
+
+Acciones disponibles y su formato:
+
+create_folder
+
+{
+ "type": "action",
+ "action": "create_folder",
+ "value": "FOLDER_NAME"
+}
+
+move_files
+
+{
+ "type": "action",
+ "action": "move_files",
+ "value": {
+   "ext": ".pdf",
+   "to": "PDF"
+ }
+}
+
+list_dir
+
+{
+ "type": "action",
+ "action": "list_dir",
+ "value": "."
+}
+
+Ejemplo completo:
+
+{
+ "name": "organize_pdfs",
+ "trigger": "manual",
+ "steps": [
+  {
+   "type": "action",
+   "action": "create_folder",
+   "value": "PDF"
+  },
+  {
+   "type": "action",
+   "action": "move_files",
+   "value": {
+    "ext": ".pdf",
+    "to": "PDF"
+   }
+  }
+ ]
+}
+
+No expliques nada.
+Devuelve SOLO JSON válido.
+"""
+
+
+# ==========================================================
+# PARSE SCHEDULE FROM NATURAL LANGUAGE
+# ==========================================================
+
+def parse_schedule(prompt):
+
+    prompt = prompt.lower()
+
+    # cada X minutos
+    m = re.search(r"cada (\d+) minutos?", prompt)
+    if m:
+        return int(m.group(1)) * 60
+
+    # cada X horas
+    m = re.search(r"cada (\d+) horas?", prompt)
+    if m:
+        return int(m.group(1)) * 3600
+
+    # cada hora
+    if "cada hora" in prompt:
+        return 3600
+
+    # cada día
+    if "cada día" in prompt or "cada dia" in prompt:
+        return 86400
+
+    return None
+
+
+# ==========================================================
+# COPILOT ENGINE
+# ==========================================================
+
+class CopilotEngine:
+
+    def interpret(self, prompt):
+
+        interval = parse_schedule(prompt)
+
+        full_prompt = SYSTEM_PROMPT + "\n\n" + prompt
+
+        r = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": "llama3",
+                "prompt": full_prompt,
+                "stream": False
+            }
+        )
+
+        data = r.json()
+
+        content = data.get("response", "")
+
+        try:
+
+            workflow = json.loads(content)
+
+            # si detectamos intervalo temporal
+            if interval:
+                workflow["trigger"] = "schedule"
+                workflow["interval"] = interval
+
+            return workflow
+
+        except Exception:
+            return None
+
+
+# instancia global
+copilot = CopilotEngine()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\copilot\debugger.py
+================================================================================
+
+from core.database import get_connection
+
+
+class CopilotDebugger:
+
+    def analyze_last_failure(self):
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # último job fallido
+        cur.execute("""
+            SELECT id, workflow, result, updated_at
+            FROM jobs
+            WHERE status='error'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """)
+
+        job = cur.fetchone()
+
+        if not job:
+            conn.close()
+            return {
+                "message": "No encontré workflows fallidos recientemente."
+            }
+
+        job_id = job["id"]
+
+        # pasos del job
+        cur.execute("""
+            SELECT step, status, result
+            FROM job_steps
+            WHERE job_id=%s
+        """,(job_id,))
+
+        steps = cur.fetchall()
+
+        conn.close()
+
+        failed_step = None
+
+        for s in steps:
+            if s["status"] == "error":
+                failed_step = s
+                break
+
+        if failed_step:
+
+            return {
+                "workflow": job["workflow"],
+                "message": f"El workflow falló en el paso '{failed_step['step']}'.",
+                "error": failed_step["result"]
+            }
+
+        return {
+            "workflow": job["workflow"],
+            "message": "El workflow falló pero no encontré el paso exacto."
+        }
+
+
+debugger = CopilotDebugger()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\copilot\fixer.py
+================================================================================
+
+from core.database import get_connection
+
+
+class CopilotFixer:
+
+    def propose_fix(self):
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        # último job fallido
+        cur.execute("""
+            SELECT id, workflow, result
+            FROM jobs
+            WHERE status='error'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """)
+
+        job = cur.fetchone()
+
+        if not job:
+            conn.close()
+            return {
+                "message": "No encontré errores recientes."
+            }
+
+        error_text = job["result"] or ""
+
+        suggestion = None
+
+        # =========================
+        # REGLAS DE CORRECCIÓN
+        # =========================
+
+        if "File not found" in error_text:
+            suggestion = {
+                "action": "add_step",
+                "step": {
+                    "type": "action",
+                    "action": "create_folder",
+                    "value": "missing_folder"
+                },
+                "reason": "El workflow intenta leer un archivo que no existe."
+            }
+
+        elif "Ruta no permitida" in error_text:
+            suggestion = {
+                "action": "change_path",
+                "reason": "La ruta está bloqueada por sandbox."
+            }
+
+        elif "Workflow no encontrado" in error_text:
+            suggestion = {
+                "action": "verify_workflow_name",
+                "reason": "El workflow solicitado no existe en la base de datos."
+            }
+
+        else:
+            suggestion = {
+                "action": "manual_review",
+                "reason": "No pude determinar automáticamente la causa."
+            }
+
+        conn.close()
+
+        return {
+            "workflow": job["workflow"],
+            "error": error_text,
+            "suggestion": suggestion
+        }
+
+
+fixer = CopilotFixer()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\accessibility.py
+================================================================================
+
+from pywinauto import Desktop
+
+
+
+def list_ui_elements():
+
+    windows = Desktop(
+        backend="uia"
+    ).windows()
+
+    result = []
+
+    for w in windows:
+
+        try:
+
+            title = w.window_text()
+
+            rect = w.rectangle()
+
+            result.append({
+
+                "title": title,
+
+                "x": rect.left,
+
+                "y": rect.top,
+
+                "w": rect.width(),
+
+                "h": rect.height()
+            })
+
+        except:
+            pass
+
+    return result
+
+def click_ui_element(
+    title
+):
+
+    windows = Desktop(
+        backend="uia"
+    ).windows()
+
+    for w in windows:
+
+        try:
+
+            if title.lower() in (
+                w.window_text().lower()
+            ):
+
+                w.set_focus()
+
+                return True
+
+        except:
+            pass
+
+    return False
+
+def get_active_window():
+
+    try:
+
+        window = Desktop(
+            backend="uia"
+        ).get_active()
+
+        return {
+
+            "title": window.window_text()
+        }
+
+    except:
+
+        return None    
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\agent_bus.py
+================================================================================
+
+import uuid
+import json
+
+from core.database import get_connection
+
+
+def send_message(
+
+    sender,
+    receiver,
+    message,
+    metadata=None
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO agent_messages
+        (
+            id,
+            sender,
+            receiver,
+            message,
+            metadata
+        )
+        VALUES (%s,%s,%s,%s,%s)
+    """, (
+        str(uuid.uuid4()),
+        sender,
+        receiver,
+        message,
+        json.dumps(metadata)
+        if metadata
+        else None
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_messages(
+    receiver,
+    limit=20
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM agent_messages
+        WHERE receiver = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+    """, (
+        receiver,
+        limit
+    ))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\agent_memory.py
+================================================================================
+
+import uuid
+import json
+
+from core.database import get_connection
+
+
+def save_memory(
+
+    agent,
+    role,
+    content,
+    metadata=None
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO agent_memory
+        (
+            id,
+            agent,
+            role,
+            content,
+            metadata
+        )
+        VALUES (%s,%s,%s,%s,%s)
+    """, (
+        str(uuid.uuid4()),
+        agent,
+        role,
+        content,
+        json.dumps(metadata)
+        if metadata
+        else None
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def load_memory(
+    agent,
+    limit=10
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM agent_memory
+        WHERE agent = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+    """, (
+        agent,
+        limit
+    ))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

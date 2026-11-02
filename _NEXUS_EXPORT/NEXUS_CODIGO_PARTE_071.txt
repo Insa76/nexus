@@ -1,0 +1,1722 @@
+﻿
+================================================================================
+ARCHIVO: packages\planner\tests\test_semantic_memory_intent.py
+================================================================================
+
+import pytest
+
+from planner.intent_recognizer import IntentRecognizer
+
+
+def test_recognizes_explicit_memory_write_and_preserves_value_case() -> None:
+    intent = IntentRecognizer().recognize("Recordá que mi proyecto actual se llama NEXUS.")
+    assert intent.action == "system.remember_fact"
+    assert intent.parameters == {
+        "subject": "user",
+        "predicate": "proyecto actual",
+        "value": "NEXUS",
+    }
+
+
+def test_recognizes_semantic_memory_lookup() -> None:
+    intent = IntentRecognizer().recognize("¿Cómo se llama mi proyecto actual?")
+    assert intent.action == "system.recall_fact"
+    assert intent.parameters == {"subject": "user", "predicate": "proyecto actual"}
+
+
+def test_recognizes_compound_remember_and_recall_last_fact() -> None:
+    intent = IntentRecognizer().recognize(
+        "Recordá que mi proyecto actual se llama NEXUS y después decime qué nombre te pedí recordar"
+    )
+    assert intent.is_compound
+    assert [part.action for part in intent.sub_intents] == [
+        "system.remember_fact",
+        "system.recall_last_fact",
+    ]
+    assert intent.sub_intents[0].parameters["value"] == "NEXUS"
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿Qué recordás sobre prueba de persistencia de nexus?",
+        "¿Qué tenés registrado sobre prueba de persistencia de nexus?",
+    ],
+)
+def test_recognizes_semantic_memory_lookup_by_topic(
+    phrase: str,
+) -> None:
+    intent = IntentRecognizer().recognize(phrase)
+
+    assert intent.action == "system.recall_fact"
+    assert intent.parameters == {
+        "subject": "user",
+        "predicate": "prueba de persistencia de nexus",
+    }
+
+
+@pytest.mark.parametrize(
+    "phrase, expected_predicate",
+    [
+        ("¿Cuál es mi proyecto actual?", "proyecto actual"),
+        ("¿Cual es mi proyecto actual?", "proyecto actual"),
+    ],
+)
+def test_recognizes_direct_personal_fact_lookup(
+    phrase: str,
+    expected_predicate: str,
+) -> None:
+    intent = IntentRecognizer().recognize(phrase)
+
+    assert intent.action == "system.recall_fact"
+    assert intent.parameters == {
+        "subject": "user",
+        "predicate": expected_predicate,
+    }
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿Qué recordás sobre mí?",
+        "¿Qué recordás sobre mi persona?",
+        "¿Qué tenés registrado sobre mí?",
+    ],
+)
+def test_recognizes_broad_personal_memory_lookup(phrase: str) -> None:
+    intent = IntentRecognizer().recognize(phrase)
+
+    assert intent.action == "system.recall_fact"
+    assert intent.parameters == {
+        "subject": "user",
+        "predicate": "__all__",
+    }
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\tests\test_time_intent.py
+================================================================================
+
+import pytest
+
+from planner.intent_recognizer import IntentRecognizer
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿Qué hora es?",
+        "Que hora es",
+        "Decime la hora",
+        "Decíme la hora",
+        "Dime la hora",
+        "Decime qué hora es",
+        "¿Qué hora tenemos?",
+        "¿Me decís la hora?",
+        "Decime la fecha y hora actual del sistema.",
+    ],
+)
+def test_recognizes_time_intent(phrase: str) -> None:
+    intent = IntentRecognizer().recognize(phrase)
+
+    assert intent.action == "system.get_time"
+    assert intent.parameters == {}
+    assert intent.original_text == phrase
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\presence\pyproject.toml
+================================================================================
+
+[project]
+name = "presence"
+version = "0.1.0"
+description = "NEXUS Presence observation layer"
+requires-python = ">=3.12"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\presence\src\presence\__init__.py
+================================================================================
+
+from .presence_event import PresenceEvent
+from .presence_event_bus import PresenceEventBus
+from .presence_service import PresenceService
+
+__all__ = [
+    "PresenceEvent",
+    "PresenceEventBus",
+    "PresenceService",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\presence\src\presence\presence_event.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
+
+
+@dataclass(frozen=True)
+class PresenceEvent:
+    """
+    Evento observable del estado de presencia de NEXUS.
+
+    Este contrato representa lo que un consumidor externo
+    puede conocer del estado cognitivo del runtime.
+
+    No contiene chain-of-thought ni razonamiento privado.
+    """
+
+    state: str
+
+    timestamp: datetime = field(
+        default_factory=datetime.now,
+    )
+
+    message: str | None = None
+
+    data: dict[str, Any] | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "state": self.state,
+            "timestamp": self.timestamp.isoformat(),
+            "message": self.message,
+            "data": self.data,
+        }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\presence\src\presence\presence_event_bus.py
+================================================================================
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from threading import RLock
+from typing import Any
+
+from .presence_event import PresenceEvent
+
+
+PresenceListener = Callable[[PresenceEvent], None]
+
+
+class PresenceEventBus:
+    """
+    Bus de eventos observables de NEXUS.
+
+    Permite que consumidores externos como:
+    - NEXUS Console
+    - JARVIS
+    - futuras interfaces
+
+    reciban transiciones reales del runtime.
+
+    El bus no contiene lógica cognitiva.
+    No ejecuta acciones.
+    No modifica el Engine.
+
+    Los listeners reciben solamente información
+    observable y estructurada.
+    """
+
+    def __init__(self) -> None:
+        self._listeners: set[PresenceListener] = set()
+        self._lock = RLock()
+
+    def subscribe(
+        self,
+        listener: PresenceListener,
+    ) -> Callable[[], None]:
+        """
+        Registra un listener y devuelve una función
+        para cancelar la suscripción.
+        """
+
+        with self._lock:
+            self._listeners.add(listener)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                self._listeners.discard(listener)
+
+        return unsubscribe
+
+    def emit(
+        self,
+        event: PresenceEvent,
+    ) -> None:
+        """
+        Publica un evento a todos los listeners actuales.
+
+        Un error de un consumidor no debe romper NEXUS.
+        """
+
+        with self._lock:
+            listeners = tuple(self._listeners)
+
+        for listener in listeners:
+            try:
+                listener(event)
+            except Exception:
+                continue
+
+    def emit_state(
+        self,
+        state: str,
+        *,
+        message: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> PresenceEvent:
+        """
+        Crea y publica un PresenceEvent.
+        """
+
+        event = PresenceEvent(
+            state=state,
+            message=message,
+            data=data,
+        )
+
+        self.emit(event)
+
+        return event
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\presence\src\presence\presence_service.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+
+class PresenceService:
+    """
+    Capa de observación de NEXUS.
+
+    Convierte el estado observable de WorkingMemory
+    en un modelo de presencia apto para consumidores
+    externos como Console o JARVIS.
+
+    IMPORTANTE:
+    - No ejecuta acciones.
+    - No modifica el Engine.
+    - No contiene lógica cognitiva.
+    - No expone chain-of-thought.
+    """
+
+    def __init__(self, memory) -> None:
+        self._memory = memory
+
+    def snapshot(self) -> dict[str, Any]:
+        """
+        Devuelve el estado observable actual de NEXUS.
+        """
+
+        entries = self._memory.all()
+
+        request = self._latest_data(
+            entries,
+            "user_request",
+        )
+
+        context = self._latest_data(
+            entries,
+            "cognitive_context",
+        )
+
+        intent = self._latest_data(
+            entries,
+            "intent",
+        )
+
+        decision = self._latest_data(
+            entries,
+            "decision",
+        )
+
+        objective = self._latest_data(
+            entries,
+            "objective",
+        )
+
+        plan = self._latest_data(
+            entries,
+            "plan_final",
+        )
+
+        if plan is None:
+            plan = self._latest_data(
+                entries,
+                "plan",
+            )
+
+        execution_result = self._latest_data(
+            entries,
+            "execution_result",
+        )
+
+        verification = self._latest_data(
+            entries,
+            "verification",
+        )
+
+        state = self._resolve_state(
+            intent=intent,
+            decision=decision,
+            execution_result=execution_result,
+            verification=verification,
+        )
+
+        return {
+            "state": state,
+            "request": self._build_request(request),
+            "context": self._safe_value(context),
+            "intent": self._build_intent(intent),
+            "decision": self._build_decision(decision),
+            "objective": self._build_objective(objective),
+            "plan": self._build_plan(plan),
+            "execution": self._build_execution(
+                execution_result,
+                intent,
+            ),
+            "verification": self._build_verification(
+                verification,
+            ),
+            "memory": self._build_memory(
+                entries,
+            ),
+            "learning": self._build_learning(
+                entries,
+            ),
+            "events": self._build_events(
+                entries,
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # STATE
+    # ---------------------------------------------------------
+
+    def _resolve_state(
+        self,
+        *,
+        intent: dict[str, Any] | None,
+        decision: dict[str, Any] | None,
+        execution_result: dict[str, Any] | None,
+        verification: dict[str, Any] | None,
+    ) -> str:
+
+        if not intent:
+            return "idle"
+
+        if not decision:
+            return "understanding"
+
+        if not decision.get(
+            "requires_execution",
+            False,
+        ):
+            return "needs_confirmation"
+
+        if not execution_result:
+            return "executing"
+
+        if not execution_result.get(
+            "success",
+            False,
+        ):
+            return "failed"
+
+        if not verification:
+            return "verifying"
+
+        if not verification.get(
+            "verified",
+            False,
+        ):
+            return "failed"
+
+        return "completed"
+
+    # ---------------------------------------------------------
+    # REQUEST
+    # ---------------------------------------------------------
+
+    def _build_request(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        return {
+            "text": data.get(
+                "text",
+                "",
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # INTENT
+    # ---------------------------------------------------------
+
+    def _build_intent(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        return {
+            "name": data.get(
+                "action",
+                "unknown",
+            ),
+            "confidence": data.get(
+                "confidence",
+                0.0,
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # DECISION
+    # ---------------------------------------------------------
+
+    def _build_decision(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        requires_execution = data.get(
+            "requires_execution",
+            False,
+        )
+
+        if requires_execution:
+            decision_type = "execute"
+        else:
+            decision_type = "none"
+
+        return {
+            "type": decision_type,
+            "reason": data.get(
+                "reason",
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # OBJECTIVE
+    # ---------------------------------------------------------
+
+    def _build_objective(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        description = (
+            data.get("description")
+            or data.get("title")
+            or data.get("action")
+            or data.get("name")
+        )
+
+        if description is None:
+            metadata = data.get(
+                "metadata",
+            )
+
+            if isinstance(
+                metadata,
+                dict,
+            ):
+                application = metadata.get(
+                    "application",
+                )
+
+                original_text = metadata.get(
+                    "original_text",
+                )
+
+                if original_text:
+                    description = original_text
+                elif application:
+                    description = (
+                        f"Execute action for "
+                        f"{application}"
+                    )
+
+        if description is None:
+            description = str(data)
+
+        return {
+            "description": str(
+                description
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # PLAN
+    # ---------------------------------------------------------
+
+    def _build_plan(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        steps = data.get(
+            "steps",
+            [],
+        )
+
+        normalized_steps = []
+
+        for index, step in enumerate(
+            steps
+        ):
+
+            if not isinstance(
+                step,
+                dict,
+            ):
+                continue
+
+            status = step.get(
+                "status",
+                "pending",
+            )
+
+            status = self._enum_value(
+                status,
+                "pending",
+            )
+
+            action = step.get(
+                "action"
+            )
+
+            if action is None:
+                action = step.get(
+                    "name",
+                    "unknown",
+                )
+
+            normalized_steps.append(
+                {
+                    "id": step.get(
+                        "id",
+                        f"step-{index + 1}",
+                    ),
+                    "action": str(
+                        action
+                    ),
+                    "status": status,
+                    "description": (
+                        str(
+                            step["description"]
+                        )
+                        if step.get(
+                            "description"
+                        ) is not None
+                        else None
+                    ),
+                }
+            )
+
+        return {
+            "steps": normalized_steps,
+        }
+
+    # ---------------------------------------------------------
+    # EXECUTION
+    # ---------------------------------------------------------
+
+    def _build_execution(
+        self,
+        data: dict[str, Any] | None,
+        intent: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        return {
+            "status": (
+                "completed"
+                if data.get("success")
+                else "failed"
+            ),
+            "action": (
+                intent.get("action")
+                if intent
+                else None
+            ),
+            "result": self._safe_value(
+                data.get("output")
+            ),
+            "error": (
+                data.get("message")
+                if not data.get("success")
+                else None
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # VERIFICATION
+    # ---------------------------------------------------------
+
+    def _build_verification(
+        self,
+        data: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+
+        if data is None:
+            return None
+
+        verified = data.get(
+            "verified",
+            False,
+        )
+
+        confidence = data.get(
+            "confidence",
+        )
+
+        if verified:
+            if (
+                isinstance(
+                    confidence,
+                    (int, float),
+                )
+                and confidence < 1.0
+            ):
+                status = (
+                    "verified_with_limited_evidence"
+                )
+            else:
+                status = "verified"
+        else:
+            status = "failed"
+
+        return {
+            "status": status,
+            "confidence": confidence,
+            "message": data.get(
+                "reason",
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # MEMORY
+    # ---------------------------------------------------------
+
+    def _build_memory(
+        self,
+        entries: list,
+    ) -> dict[str, Any]:
+
+        has_episode = any(
+            entry.type == "episode"
+            for entry in entries
+        )
+
+        return {
+            "status": (
+                "stored"
+                if has_episode
+                else "pending"
+            ),
+            "entries": len(entries),
+        }
+
+    # ---------------------------------------------------------
+    # LEARNING
+    # ---------------------------------------------------------
+
+    def _build_learning(
+        self,
+        entries: list,
+    ) -> dict[str, Any]:
+
+        has_episode = any(
+            entry.type == "episode"
+            for entry in entries
+        )
+
+        return {
+            "status": (
+                "learned"
+                if has_episode
+                else "pending"
+            ),
+            "message": (
+                "Execution experience available "
+                "for future reuse."
+                if has_episode
+                else None
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # EVENTS
+    # ---------------------------------------------------------
+
+    def _build_events(
+        self,
+        entries: list,
+    ) -> list[dict[str, Any]]:
+
+        events = []
+
+        for entry in entries:
+
+            timestamp = getattr(
+                entry,
+                "timestamp",
+                None,
+            )
+
+            if isinstance(
+                timestamp,
+                datetime,
+            ):
+                timestamp_value = (
+                    timestamp.isoformat()
+                )
+            else:
+                timestamp_value = str(
+                    timestamp
+                )
+
+            events.append(
+                {
+                    "id": str(
+                        entry.id
+                    ),
+                    "type": entry.type,
+                    "timestamp": timestamp_value,
+                    "message": self._event_message(
+                        entry.type,
+                        entry.data,
+                    ),
+                    "data": self._safe_value(
+                        entry.data
+                    ),
+                }
+            )
+
+        return events
+
+    def _event_message(
+        self,
+        event_type: str,
+        data: Any,
+    ) -> str:
+
+        messages = {
+            "user_request": "Request received.",
+            "cognitive_context": "Context recovered.",
+            "intent": "Intent resolved.",
+            "decision": "Decision generated.",
+            "objective": "Objective created.",
+            "plan": "Plan generated.",
+            "plan_final": "Final plan state recorded.",
+            "verification": "Execution verified.",
+            "execution_result": "Execution result recorded.",
+            "episode": "Episode stored.",
+            "error": "Execution error recorded.",
+            "verification_failure": "Verification failed.",
+        }
+
+        return messages.get(
+            event_type,
+            event_type.replace(
+                "_",
+                " ",
+            ).capitalize()
+            + ".",
+        )
+
+    # ---------------------------------------------------------
+    # HELPERS
+    # ---------------------------------------------------------
+
+    @staticmethod
+    def _latest_data(
+        entries: list,
+        entry_type: str,
+    ) -> dict[str, Any] | None:
+
+        for entry in reversed(entries):
+
+            if entry.type == entry_type:
+                return entry.data
+
+        return None
+
+    @staticmethod
+    def _enum_value(
+        value: Any,
+        default: str,
+    ) -> str:
+
+        if isinstance(
+            value,
+            Enum,
+        ):
+            return str(
+                value.value
+            )
+
+        if value is None:
+            return default
+
+        return str(value)
+
+    @classmethod
+    def _safe_value(
+        cls,
+        value: Any,
+    ) -> Any:
+
+        if value is None:
+            return None
+
+        if isinstance(
+            value,
+            Enum,
+        ):
+            return value.value
+
+        if isinstance(
+            value,
+            (str, int, float, bool),
+        ):
+            return value
+
+        if isinstance(
+            value,
+            datetime,
+        ):
+            return value.isoformat()
+
+        if isinstance(
+            value,
+            dict,
+        ):
+            return {
+                str(key): cls._safe_value(
+                    item
+                )
+                for key, item in value.items()
+            }
+
+        if isinstance(
+            value,
+            (list, tuple, set),
+        ):
+            return [
+                cls._safe_value(item)
+                for item in value
+            ]
+
+        model_dump = getattr(
+            value,
+            "model_dump",
+            None,
+        )
+
+        if callable(model_dump):
+            try:
+                return cls._safe_value(
+                    model_dump()
+                )
+            except Exception:
+                pass
+
+        return str(value)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\pyproject.toml
+================================================================================
+
+[project]
+name = "nexus-processes"
+version = "0.1.0"
+description = "NEXUS assistant processes subsystem"
+requires-python = ">=3.12"
+dependencies = [
+    "nexus-context",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/processes"]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\__init__.py
+================================================================================
+
+from .capability import ProcessCapability
+from .models import Process, ProcessStatus
+from .resolver import ProcessResolver
+from .store import ProcessStore
+from .cognitive import (
+    ProcessCognitiveAccess,
+    ProcessCognitiveResult,
+)
+
+__all__ = [
+    "Process",
+    "ProcessStatus",
+    "ProcessResolver",
+    "ProcessStore",
+    "ProcessCapability",
+    "ProcessCognitiveAccess",
+    "ProcessCognitiveResult",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\capability.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from context import AssistantContext
+
+from processes.models import Process
+from processes.resolver import ProcessResolver
+from processes.store import ProcessStore
+
+
+@dataclass(slots=True)
+class ProcessCapability:
+    """
+    Interfaz cognitiva de acceso a procesos.
+
+    Expone operaciones orientadas al Assistant/Cognitive Core
+    sin exponer directamente stores ni detalles internos.
+    """
+
+    store: ProcessStore
+    resolver: ProcessResolver
+
+    def create(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> Process:
+        process = Process.create(
+            name=name,
+            description=description,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+        return self.store.add(process)
+
+    def get(
+        self,
+        process_id: str,
+    ) -> Process | None:
+        return self.store.get(process_id)
+
+    def list(
+        self,
+    ) -> list[Process]:
+        return self.store.list()
+
+    def relevant(
+        self,
+        *,
+        context: AssistantContext,
+    ) -> list[Process]:
+        return self.resolver.resolve(context)
+
+    def update(
+        self,
+        process: Process,
+    ) -> Process:
+        return self.store.update(process)
+
+    def remove(
+        self,
+        process_id: str,
+    ) -> Process | None:
+        return self.store.remove(process_id)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\cognitive.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from processes.capability import ProcessCapability
+from processes.models import Process
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessCognitiveResult:
+    """
+    Resultado de una operación cognitiva sobre Processes.
+
+    Expone información que el Cognitive Core puede utilizar
+    sin conocer stores ni detalles internos del subsistema.
+    """
+
+    processes: tuple[Process, ...]
+    metadata: dict[str, Any]
+
+
+class ProcessCognitiveAccess:
+    """
+    Punto de acceso cognitivo a Processes.
+
+    Traduce una necesidad cognitiva del Assistant
+    en una operación sobre ProcessCapability.
+    """
+
+    def __init__(
+        self,
+        capability: ProcessCapability,
+    ) -> None:
+        self._capability = capability
+
+    def find_relevant(
+        self,
+        *,
+        context: object,
+    ) -> ProcessCognitiveResult:
+        processes = self._capability.relevant(
+            context=context,
+        )
+
+        return ProcessCognitiveResult(
+            processes=tuple(processes),
+            metadata={
+                "operation": "processes.find_relevant",
+                "count": len(processes),
+            },
+        )
+
+    def get(
+        self,
+        process_id: str,
+        *,
+        context: object,
+    ) -> Process | None:
+        processes = self._capability.relevant(
+            context=context,
+        )
+
+        return next(
+            (
+                process
+                for process in processes
+                if process.id == process_id
+            ),
+            None,
+        )
+
+    def list(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Process, ...]:
+        return tuple(
+            self._capability.relevant(
+                context=context,
+            )
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ProcessStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class Process:
+    id: str
+    name: str
+    description: str | None = None
+    status: ProcessStatus = ProcessStatus.PENDING
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> Process:
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            description=description,
+            status=ProcessStatus.PENDING,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from context import AssistantContext
+
+from processes.models import Process
+from processes.store import ProcessStore
+
+
+class ProcessResolver:
+    """Resolves processes relevant to an assistant context."""
+
+    def __init__(self, store: ProcessStore) -> None:
+        self._store = store
+
+    def resolve(
+        self,
+        context: AssistantContext,
+    ) -> list[Process]:
+        processes = self._store.list()
+
+        user = context.user
+        organization = context.organization
+        project_ids = {
+            project.id
+            for project in context.projects
+        }
+
+        resolved: list[Process] = []
+
+        for process in processes:
+            if user is not None and process.user_id == user.id:
+                resolved.append(process)
+                continue
+
+            if (
+                organization is not None
+                and process.organization_id == organization.id
+            ):
+                resolved.append(process)
+                continue
+
+            if (
+                process.project_id is not None
+                and process.project_id in project_ids
+            ):
+                resolved.append(process)
+
+        return resolved
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\src\processes\store.py
+================================================================================
+
+from __future__ import annotations
+
+from processes.models import Process
+
+
+class ProcessStore:
+    """In-memory store for assistant processes."""
+
+    def __init__(self) -> None:
+        self._processes: dict[str, Process] = {}
+
+    def add(self, process: Process) -> Process:
+        self._processes[process.id] = process
+        return process
+
+    def get(self, process_id: str) -> Process | None:
+        return self._processes.get(process_id)
+
+    def list(self) -> list[Process]:
+        return list(self._processes.values())
+
+    def update(self, process: Process) -> Process:
+        if process.id not in self._processes:
+            raise KeyError(
+                f"Process not found: {process.id}"
+            )
+
+        self._processes[process.id] = process
+        return process
+
+    def remove(self, process_id: str) -> Process | None:
+        return self._processes.pop(process_id, None)
+
+    def clear(self) -> None:
+        self._processes.clear()
+
+    def count(self) -> int:
+        return len(self._processes)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\tests\test_process_cognitive_operations.py
+================================================================================
+
+
+from types import SimpleNamespace
+
+from context import AssistantContext
+from processes.capability import ProcessCapability
+from processes.cognitive import ProcessCognitiveAccess
+from processes.resolver import ProcessResolver
+from processes.store import ProcessStore
+
+
+def build_access() -> ProcessCognitiveAccess:
+    store = ProcessStore()
+    resolver = ProcessResolver(store)
+    capability = ProcessCapability(
+        store=store,
+        resolver=resolver,
+    )
+    return ProcessCognitiveAccess(capability)
+
+
+def make_context(user_id: str) -> AssistantContext:
+    return AssistantContext(
+        user=SimpleNamespace(id=user_id),
+        organization=None,
+        projects=(),
+    )
+
+
+def test_cognitive_access_can_find_process_by_id():
+    access = build_access()
+
+    process = access._capability.create(
+        name="Proceso de prueba",
+        user_id="user-1",
+    )
+
+    result = access.get(
+        process.id,
+        context=make_context("user-1"),
+    )
+
+    assert result == process
+
+
+def test_cognitive_access_can_list_processes():
+    access = build_access()
+
+    first = access._capability.create(
+        name="Proceso 1",
+        user_id="user-1",
+    )
+    second = access._capability.create(
+        name="Proceso 2",
+        user_id="user-1",
+    )
+
+    result = access.list(
+        context=make_context("user-1"),
+    )
+
+    assert result == (first, second)
+
+
+def test_cognitive_access_can_resolve_relevant_processes():
+    access = build_access()
+
+    process = access._capability.create(
+        name="Proceso relevante",
+        user_id="user-1",
+    )
+
+    result = access.find_relevant(
+        context=make_context("user-1"),
+    )
+
+    assert process in result.processes
+
+
+def test_cognitive_access_cannot_get_process_from_another_user():
+    access = build_access()
+
+    process = access._capability.create(
+        name="Proceso ajeno",
+        user_id="user-2",
+    )
+
+    result = access.get(
+        process.id,
+        context=make_context("user-1"),
+    )
+
+    assert result is None
+
+
+def test_cognitive_access_lists_only_processes_from_current_context():
+    access = build_access()
+
+    own_process = access._capability.create(
+        name="Proceso propio",
+        user_id="user-1",
+    )
+    access._capability.create(
+        name="Proceso ajeno",
+        user_id="user-2",
+    )
+
+    result = access.list(
+        context=make_context("user-1"),
+    )
+
+    assert result == (own_process,)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\processes\tests\test_processes.py
+================================================================================
+
+from context import AssistantContext
+
+from processes import (
+    Process,
+    ProcessStatus,
+    ProcessResolver,
+    ProcessStore,
+    ProcessCognitiveAccess,
+    ProcessCognitiveResult,
+    ProcessCapability,
+)
+
+
+def test_process_create():
+    process = Process.create(
+        name="Proceso de ventas",
+        description="Seguimiento comercial",
+    )
+
+    assert process.id
+    assert process.name == "Proceso de ventas"
+    assert process.description == "Seguimiento comercial"
+    assert process.status == ProcessStatus.PENDING
+
+
+def test_process_store():
+    store = ProcessStore()
+
+    process = Process.create(
+        name="Proceso de ventas",
+    )
+
+    store.add(process)
+
+    assert store.get(process.id) == process
+    assert store.list() == [process]
+    assert store.count() == 1
+
+    updated = Process(
+        id=process.id,
+        name=process.name,
+        description=process.description,
+        status=ProcessStatus.IN_PROGRESS,
+        user_id=process.user_id,
+        organization_id=process.organization_id,
+        project_id=process.project_id,
+        created_at=process.created_at,
+    )
+
+    store.update(updated)
+
+    assert store.get(process.id).status == ProcessStatus.IN_PROGRESS
+
+    removed = store.remove(process.id)
+
+    assert removed == updated
+    assert store.count() == 0
+
+
+def test_process_resolver_by_user():
+    store = ProcessStore()
+
+    process = Process.create(
+        name="Proceso personal",
+        user_id="user-1",
+    )
+
+    store.add(process)
+
+    context = AssistantContext(
+        user=type("User", (), {"id": "user-1"})(),
+        organization=None,
+        projects=[],
+    )
+
+    resolver = ProcessResolver(store)
+
+    resolved = resolver.resolve(context)
+
+    assert resolved == [process]
+
+
+def test_process_capability():
+    store = ProcessStore()
+    resolver = ProcessResolver(store)
+
+    capability = ProcessCapability(
+        store=store,
+        resolver=resolver,
+    )
+
+    process = capability.create(
+        name="Proceso operativo",
+        description="Proceso creado mediante capability",
+    )
+
+    assert process.name == "Proceso operativo"
+    assert capability.get(process.id) == process
+    assert capability.list() == [process]
+
+    removed = capability.remove(process.id)
+
+    assert removed == process
+    assert capability.list() == []
+
+def test_process_cognitive_access():
+    store = ProcessStore()
+    resolver = ProcessResolver(store)
+
+    capability = ProcessCapability(
+        store=store,
+        resolver=resolver,
+    )
+
+    process = capability.create(
+        name="Proceso contextual",
+        user_id="user-1",
+    )
+
+    access = ProcessCognitiveAccess(capability)
+
+    context = AssistantContext(
+        user=type("User", (), {"id": "user-1"})(),
+        organization=None,
+        projects=[],
+    )
+
+    result = access.find_relevant(
+        context=context,
+    )
+
+    assert result.processes == (process,)
+    assert result.metadata["operation"] == "processes.find_relevant"
+    assert result.metadata["count"] == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\.python-version
+================================================================================
+
+3.12
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\pyproject.toml
+================================================================================
+
+[project]
+name = "providers"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "diego", email = "dinsaurralde@yahoo.com.ar" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+providers = "providers:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\README.md
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\__init__.py
+================================================================================
+
+from .provider import ToolProvider
+from .provider_manager import ProviderManager
+from .local_provider import LocalProvider
+from .mcp_provider import MCPProvider
+from .tool import Tool
+from .tool_registry import ToolRegistry
+
+
+__all__ = [
+    "ToolProvider",
+    "ProviderManager",
+    "LocalProvider",
+    "MCPProvider",
+    "Tool",
+    "ToolRegistry",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

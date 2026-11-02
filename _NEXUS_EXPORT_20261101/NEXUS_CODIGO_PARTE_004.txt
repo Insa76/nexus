@@ -1,0 +1,3551 @@
+﻿
+================================================================================
+ARCHIVO: apps\console\src\App.tsx
+================================================================================
+
+import { useEffect, useRef, useState } from "react";
+
+import "./index.css";
+
+import { presenceAdapter } from "./presence/adapter";
+import {
+  loadLearningCandidates,
+  removeLearningCandidate,
+  saveLearningCandidate,
+  updateLearningCandidate,
+} from "./presence/learningCandidates";
+
+import {
+  buildCycleHistory,
+  getHistoricalCycles,
+  getCurrentCycle,
+} from "./presence/cycles";
+
+import type {
+  NexusPresenceState,
+  NexusPresenceStateModel,
+} from "./presence/types";
+
+type NavItem = {
+  id: string;
+  label: string;
+  icon: string;
+};
+
+type TimelineStatus =
+  | "done"
+  | "active"
+  | "pending"
+  | "failed";
+
+type TimelineEvent = {
+  id: string;
+  time: string;
+  label: string;
+  status: TimelineStatus;
+  state: NexusPresenceState;
+  eventType: string;
+  data?: unknown;
+  detail?: string;
+};
+
+type HistoricalReplayEvent = {
+  id: string;
+  time: string;
+  label: string;
+  eventType: string;
+  data?: unknown;
+  detail?: string;
+};
+
+type CycleComparisonRow = {
+  key: string;
+  label: string;
+  left: string;
+  right: string;
+  changed: boolean;
+};
+
+type CycleInsight = {
+  id: string;
+  label: string;
+  title: string;
+  detail: string;
+  tone: "stable" | "change" | "difference";
+  evidenceKeys: string[];
+};
+
+type InsightLearningCandidate = {
+  id: string;
+  insightId: string;
+  title: string;
+  knowledge: string;
+  sourceCycleIds: string[];
+  evidenceKeys: string[];
+  createdAt: string;
+  status?: "staged" | "promoted";
+  promotedAt?: string;
+  memoryKey?: string;
+};
+
+type FocusField = {
+  label: string;
+  value: string;
+};
+
+type FocusSemantic = {
+  label: string;
+  eventType: string;
+};
+
+function getCycleRequestText(
+  cycle: { request?: { message?: string; data?: unknown } } | null,
+): string {
+  const requestData = cycle?.request?.data;
+
+  if (requestData && typeof requestData === "object") {
+    const record = requestData as Record<string, unknown>;
+
+    const candidates = [
+      record.text,
+      record.original_text,
+      record.request,
+    ];
+
+    const requestValue = candidates.find(
+      (value): value is string =>
+        typeof value === "string" && value.trim().length > 0,
+    );
+
+    if (requestValue) {
+      return requestValue;
+    }
+  }
+
+  if (
+    typeof cycle?.request?.message === "string" &&
+    cycle.request.message.trim().length > 0
+  ) {
+    return cycle.request.message;
+  }
+
+  return "Cognitive cycle";
+}
+
+function getFocusSemantic(eventType: string): FocusSemantic {
+  switch (eventType) {
+    case "user_request":
+    case "cognitive_context":
+      return {
+        label: "INPUT",
+        eventType,
+      };
+
+    case "intent":
+    case "decision":
+      return {
+        label: "REASONING",
+        eventType,
+      };
+
+    case "objective":
+    case "plan":
+    case "plan_final":
+      return {
+        label: "OBJECTIVE",
+        eventType,
+      };
+
+    case "execution_result":
+      return {
+        label: "EXECUTION",
+        eventType,
+      };
+
+    case "verification":
+    case "verification_failure":
+      return {
+        label: "EVIDENCE",
+        eventType,
+      };
+
+    case "episode":
+      return {
+        label: "MEMORY",
+        eventType,
+      };
+
+    default:
+      return {
+        label: "COGNITION",
+        eventType,
+      };
+  }
+}
+
+function buildInsightLearningCandidate(
+  insight: CycleInsight | null,
+  leftCycle: { id: string } | null,
+  rightCycle: { id: string } | null,
+): InsightLearningCandidate | null {
+  if (!insight || !leftCycle || !rightCycle) {
+    return null;
+  }
+
+  const knowledgeByInsight: Record<string, string> = {
+    "same-intent-different-execution":
+      "Cuando NEXUS identifica el mismo intento con objetivos de ejecución diferentes, debe conservar la relación entre intención y aplicación como evidencia contextual del ciclo.",
+    "same-decision-different-result":
+      "Una misma decisión puede producir resultados diferentes; la decisión no debe considerarse suficiente para explicar el resultado sin consultar la evidencia de ejecución.",
+    "plan-changed":
+      "Cambios en la secuencia de pasos deben conservarse como una diferencia de estrategia entre ciclos comparables.",
+    "objective-changed":
+      "Un cambio de objetivo indica que ciclos aparentemente similares pueden estar resolviendo metas distintas y deben mantenerse separados en el aprendizaje.",
+    "verification-differs":
+      "La verificación debe conservarse como evidencia independiente del resultado de ejecución para explicar por qué dos ciclos no son equivalentes.",
+    "reasoning-stable":
+      "Cuando intención y decisión permanecen estables entre ciclos, esa estabilidad puede utilizarse como referencia al analizar diferencias posteriores en ejecución o verificación.",
+  };
+
+  const sourceCycleIds = [leftCycle.id, rightCycle.id].sort();
+
+  return {
+    id: `insight-${insight.id}-${sourceCycleIds.join("--")}`,
+    insightId: insight.id,
+    title: insight.title,
+    knowledge:
+      knowledgeByInsight[insight.id] ??
+      `El patrón “${insight.title}” fue observado entre dos ciclos y queda registrado como candidato para conocimiento reutilizable.`,
+    sourceCycleIds,
+    evidenceKeys: insight.evidenceKeys,
+    createdAt: new Date().toISOString(),
+    status: "staged",
+  };
+}
+
+const navigation: NavItem[] = [
+  { id: "overview", label: "Overview", icon: "⌂" },
+  { id: "request", label: "Request", icon: "↳" },
+  { id: "context", label: "Context", icon: "◌" },
+  { id: "intent", label: "Intent", icon: "◎" },
+  { id: "decision", label: "Decision", icon: "◇" },
+  { id: "objective", label: "Objective", icon: "◈" },
+  { id: "plan", label: "Plan", icon: "≡" },
+  { id: "execution", label: "Execution", icon: "▶" },
+  { id: "verification", label: "Verification", icon: "✓" },
+  { id: "memory", label: "Memory", icon: "▣" },
+  { id: "learning", label: "Learning", icon: "✦" },
+  { id: "events", label: "Events", icon: "◷" },
+];
+
+const stateLabels: Record<NexusPresenceState, string> = {
+  idle: "Standby",
+  listening: "Listening...",
+  understanding: "Understanding...",
+  thinking: "Thinking...",
+  deciding: "Making a decision...",
+  executing: "Executing...",
+  verifying: "Verifying...",
+  completed: "Ready.",
+  needs_confirmation: "Awaiting confirmation...",
+  failed: "Execution failed.",
+  recovering: "Recovering...",
+};
+
+function formatTime(timestamp?: string): string {
+  if (!timestamp) {
+    return "--:--:--";
+  }
+
+  const date = new Date(timestamp);
+
+  if (Number.isNaN(date.getTime())) {
+    return "--:--:--";
+  }
+
+  return date.toLocaleTimeString("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function eventLabel(type: string, message?: string): string {
+  if (message) {
+    return message;
+  }
+
+  const labels: Record<string, string> = {
+    request: "Request processed",
+    context: "Context recovered",
+    intent: "Intent identified",
+    decision: "Decision evaluated",
+    objective: "Objective defined",
+    plan: "Plan generated",
+    execution: "Action executed",
+    verification: "Execution verified",
+    memory: "Episode stored",
+    learning: "Experience learned",
+  };
+
+  return labels[type] ?? type;
+}
+
+function getEventDetail(
+  eventType: string,
+  data?: unknown,
+): string | undefined {
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+
+  const record = data as Record<string, unknown>;
+
+  /*
+   * ============================================================
+   * 9.13 — COGNITIVE FOCUS
+   * ============================================================
+   */
+
+  if (eventType === "user_request") {
+    const text =
+      typeof record.text === "string"
+        ? record.text
+        : undefined;
+
+    return text;
+  }
+
+  if (eventType === "cognitive_context") {
+    const keys = Object.keys(record);
+
+    if (keys.length > 0) {
+      return `${keys.length} context fields`;
+    }
+
+    return undefined;
+  }
+
+  if (eventType === "intent") {
+    const action =
+      typeof record.action === "string"
+        ? record.action
+        : undefined;
+
+    const confidence =
+      typeof record.confidence === "number"
+        ? record.confidence
+        : undefined;
+
+    if (action && confidence !== undefined) {
+      return `${action} · confidence ${confidence.toFixed(2)}`;
+    }
+
+    if (action) {
+      return action;
+    }
+
+    if (confidence !== undefined) {
+      return `confidence ${confidence.toFixed(2)}`;
+    }
+
+    return undefined;
+  }
+
+  if (eventType === "decision") {
+    const action =
+      typeof record.selected_action === "string"
+        ? record.selected_action
+        : undefined;
+
+    const confidence =
+      typeof record.confidence === "number"
+        ? record.confidence
+        : undefined;
+
+    const reason =
+      typeof record.reason === "string"
+        ? record.reason
+        : undefined;
+
+    const parts: string[] = [];
+
+    if (action) {
+      parts.push(action);
+    }
+
+    if (confidence !== undefined) {
+      parts.push(`confidence ${confidence.toFixed(2)}`);
+    }
+
+    if (reason) {
+      parts.push(reason);
+    }
+
+    return parts.length > 0
+      ? parts.join(" · ")
+      : undefined;
+  }
+
+  if (eventType === "objective") {
+    const title =
+      typeof record.title === "string"
+        ? record.title
+        : undefined;
+
+    const status =
+      typeof record.status === "string"
+        ? record.status
+        : undefined;
+
+    let application: string | undefined;
+
+    if (
+      record.metadata &&
+      typeof record.metadata === "object"
+    ) {
+      const metadata =
+        record.metadata as Record<string, unknown>;
+
+      if (
+        typeof metadata.application === "string"
+      ) {
+        application = metadata.application;
+      }
+    }
+
+    const parts: string[] = [];
+
+    if (title) {
+      parts.push(title);
+    }
+
+    if (status) {
+      parts.push(`status ${status}`);
+    }
+
+    if (application) {
+      parts.push(`application ${application}`);
+    }
+
+    return parts.length > 0
+      ? parts.join(" · ")
+      : undefined;
+  }
+
+  if (
+    eventType === "plan" ||
+    eventType === "plan_final"
+  ) {
+    const steps = Array.isArray(record.steps)
+      ? record.steps
+      : [];
+
+    if (steps.length > 0) {
+      const firstStep = steps[0];
+
+      if (
+        firstStep &&
+        typeof firstStep === "object"
+      ) {
+        const step =
+          firstStep as Record<string, unknown>;
+
+        const action =
+          typeof step.action === "string"
+            ? step.action
+            : undefined;
+
+        const status =
+          typeof step.status === "string"
+            ? step.status
+            : undefined;
+
+        const parts: string[] = [];
+
+        if (action) {
+          parts.push(action);
+        }
+
+        if (status) {
+          parts.push(`status ${status}`);
+        }
+
+        if (steps.length > 1) {
+          parts.push(`${steps.length} steps`);
+        }
+
+        if (parts.length > 0) {
+          return parts.join(" · ");
+        }
+      }
+    }
+
+    const completed =
+      typeof record.completed === "boolean"
+        ? record.completed
+        : undefined;
+
+    if (completed !== undefined) {
+      return completed
+        ? "plan completed"
+        : "plan pending";
+    }
+
+    return undefined;
+  }
+
+  if (
+    eventType === "verification" ||
+    eventType === "verification_failure"
+  ) {
+    const verified =
+      typeof record.verified === "boolean"
+        ? record.verified
+        : undefined;
+
+    const confidence =
+      typeof record.confidence === "number"
+        ? record.confidence
+        : undefined;
+
+    const reason =
+      typeof record.reason === "string"
+        ? record.reason
+        : undefined;
+
+    const parts: string[] = [];
+
+    if (verified !== undefined) {
+      parts.push(
+        verified
+          ? "verified"
+          : "not verified",
+      );
+    }
+
+    if (confidence !== undefined) {
+      parts.push(
+        `confidence ${confidence.toFixed(2)}`,
+      );
+    }
+
+    if (reason) {
+      parts.push(reason);
+    }
+
+    return parts.length > 0
+      ? parts.join(" · ")
+      : undefined;
+  }
+
+  if (eventType === "execution_result") {
+    const success =
+      typeof record.success === "boolean"
+        ? record.success
+        : undefined;
+
+    const message =
+      typeof record.message === "string"
+        ? record.message
+        : undefined;
+
+    let output:
+      | Record<string, unknown>
+      | undefined;
+
+    if (
+      record.output &&
+      typeof record.output === "object"
+    ) {
+      output =
+        record.output as Record<string, unknown>;
+    }
+
+    const parts: string[] = [];
+
+    if (success !== undefined) {
+      parts.push(
+        success
+          ? "success"
+          : "failed",
+      );
+    }
+
+    if (output) {
+      const application =
+        typeof output.application === "string"
+          ? output.application
+          : undefined;
+
+      const status =
+        typeof output.status === "string"
+          ? output.status
+          : undefined;
+
+      if (application) {
+        parts.push(application);
+      }
+
+      if (status) {
+        parts.push(status);
+      }
+    }
+
+    if (message) {
+      parts.push(message);
+    }
+
+    return parts.length > 0
+      ? parts.join(" · ")
+      : undefined;
+  }
+
+  if (eventType === "episode") {
+    return "Experience stored for future reuse.";
+  }
+
+  return undefined;
+}
+
+function getFocusFields(
+  eventType: string,
+  data?: unknown,
+): FocusField[] {
+  if (!data || typeof data !== "object") {
+    return [];
+  }
+
+  const record = data as Record<string, unknown>;
+
+  if (eventType === "user_request") {
+    const text =
+      typeof record.text === "string"
+        ? record.text
+        : undefined;
+
+    return text
+      ? [{ label: "REQUEST", value: text }]
+      : [];
+  }
+
+  if (eventType === "cognitive_context") {
+    return [
+      {
+        label: "FIELDS",
+        value: `${Object.keys(record).length}`,
+      },
+    ];
+  }
+
+  if (eventType === "intent") {
+    const fields: FocusField[] = [];
+
+    if (typeof record.action === "string") {
+      fields.push({
+        label: "ACTION",
+        value: record.action,
+      });
+    }
+
+    if (typeof record.confidence === "number") {
+      fields.push({
+        label: "CONFIDENCE",
+        value: record.confidence.toFixed(2),
+      });
+    }
+
+    if (
+      record.parameters &&
+      typeof record.parameters === "object"
+    ) {
+      fields.push({
+        label: "PARAMETERS",
+        value: JSON.stringify(record.parameters),
+      });
+    }
+
+    if (typeof record.original_text === "string") {
+      fields.push({
+        label: "ORIGINAL",
+        value: record.original_text,
+      });
+    }
+
+    return fields;
+  }
+
+  if (eventType === "decision") {
+    const fields: FocusField[] = [];
+
+    if (typeof record.selected_action === "string") {
+      fields.push({
+        label: "ACTION",
+        value: record.selected_action,
+      });
+    }
+
+    if (typeof record.confidence === "number") {
+      fields.push({
+        label: "CONFIDENCE",
+        value: record.confidence.toFixed(2),
+      });
+    }
+
+    if (typeof record.requires_execution === "boolean") {
+      fields.push({
+        label: "EXECUTION",
+        value: record.requires_execution
+          ? "required"
+          : "not required",
+      });
+    }
+
+    if (typeof record.reason === "string") {
+      fields.push({
+        label: "REASON",
+        value: record.reason,
+      });
+    }
+
+    return fields;
+  }
+
+  if (eventType === "objective") {
+    const fields: FocusField[] = [];
+
+    if (typeof record.id === "string") {
+      fields.push({
+        label: "ID",
+        value: record.id,
+      });
+    }
+
+    if (typeof record.title === "string") {
+      fields.push({
+        label: "TITLE",
+        value: record.title,
+      });
+    }
+
+    if (typeof record.status === "string") {
+      fields.push({
+        label: "STATUS",
+        value: record.status,
+      });
+    }
+
+    if (
+      record.metadata &&
+      typeof record.metadata === "object"
+    ) {
+      const metadata =
+        record.metadata as Record<string, unknown>;
+
+      if (typeof metadata.application === "string") {
+        fields.push({
+          label: "APPLICATION",
+          value: metadata.application,
+        });
+      }
+    }
+
+    return fields;
+  }
+
+  if (
+    eventType === "plan" ||
+    eventType === "plan_final"
+  ) {
+    const fields: FocusField[] = [];
+
+    if (typeof record.objective_id === "string") {
+      fields.push({
+        label: "OBJECTIVE",
+        value: record.objective_id,
+      });
+    }
+
+    const steps = Array.isArray(record.steps)
+      ? record.steps
+      : [];
+
+    fields.push({
+      label: "STEPS",
+      value: `${steps.length}`,
+    });
+
+    if (steps.length > 0) {
+      const firstStep = steps[0];
+
+      if (
+        firstStep &&
+        typeof firstStep === "object"
+      ) {
+        const step =
+          firstStep as Record<string, unknown>;
+
+        if (typeof step.action === "string") {
+          fields.push({
+            label: "ACTION",
+            value: step.action,
+          });
+        }
+
+        if (typeof step.status === "string") {
+          fields.push({
+            label: "STATUS",
+            value: step.status,
+          });
+        }
+
+        if (typeof step.description === "string") {
+          fields.push({
+            label: "DESCRIPTION",
+            value: step.description,
+          });
+        }
+      }
+    }
+
+    if (typeof record.current_step === "number") {
+      fields.push({
+        label: "CURRENT STEP",
+        value: String(record.current_step),
+      });
+    }
+
+    if (typeof record.completed === "boolean") {
+      fields.push({
+        label: "COMPLETED",
+        value: record.completed
+          ? "yes"
+          : "no",
+      });
+    }
+
+    return fields;
+  }
+
+  if (
+    eventType === "verification" ||
+    eventType === "verification_failure"
+  ) {
+    const fields: FocusField[] = [];
+
+    if (typeof record.verified === "boolean") {
+      fields.push({
+        label: "STATUS",
+        value: record.verified
+          ? "verified"
+          : "not verified",
+      });
+    }
+
+    if (typeof record.confidence === "number") {
+      fields.push({
+        label: "CONFIDENCE",
+        value: record.confidence.toFixed(2),
+      });
+    }
+
+    if (typeof record.reason === "string") {
+      fields.push({
+        label: "REASON",
+        value: record.reason,
+      });
+    }
+
+    if (Array.isArray(record.evidence)) {
+      fields.push({
+        label: "EVIDENCE",
+        value: `${record.evidence.length} item${
+          record.evidence.length === 1
+            ? ""
+            : "s"
+        }`,
+      });
+    }
+
+    return fields;
+  }
+
+  if (eventType === "execution_result") {
+    const fields: FocusField[] = [];
+
+    if (typeof record.success === "boolean") {
+      fields.push({
+        label: "STATUS",
+        value: record.success
+          ? "success"
+          : "failed",
+      });
+    }
+
+    if (typeof record.message === "string") {
+      fields.push({
+        label: "MESSAGE",
+        value: record.message,
+      });
+    }
+
+    if (
+      record.output &&
+      typeof record.output === "object"
+    ) {
+      const output =
+        record.output as Record<string, unknown>;
+
+      if (typeof output.application === "string") {
+        fields.push({
+          label: "APPLICATION",
+          value: output.application,
+        });
+      }
+
+      if (typeof output.status === "string") {
+        fields.push({
+          label: "RESULT",
+          value: output.status,
+        });
+      }
+    }
+
+    return fields;
+  }
+
+  if (eventType === "episode") {
+    return [
+      {
+        label: "MEMORY",
+        value: "Experience stored for future reuse.",
+      },
+    ];
+  }
+
+  return [];
+}
+
+function getTimelineStatus(
+  eventIndex: number,
+  totalEvents: number,
+  state: NexusPresenceState,
+): TimelineStatus {
+  if (
+    state === "failed" &&
+    eventIndex === totalEvents - 1
+  ) {
+    return "failed";
+  }
+
+  if (
+    (state === "recovering" ||
+      state === "needs_confirmation") &&
+    eventIndex === totalEvents - 1
+  ) {
+    return "active";
+  }
+
+  if (
+    state !== "completed" &&
+    state !== "idle" &&
+    eventIndex === totalEvents - 1
+  ) {
+    return "active";
+  }
+
+  return "done";
+}
+
+function buildTimeline(
+  presence: NexusPresenceStateModel,
+): TimelineEvent[] {
+  const events = presence.events;
+
+  if (events.length === 0) {
+    return [];
+  }
+
+  /*
+   * ============================================================
+   * 9.12C — TIMELINE CYCLE ISOLATION
+   * ============================================================
+   */
+
+  let cycleEvents = events;
+
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === "user_request") {
+      cycleEvents = events.slice(index);
+      break;
+    }
+  }
+
+  return cycleEvents.map((event, index) => {
+    const state = event.type as NexusPresenceState;
+
+    return {
+      id: event.id,
+      time: formatTime(event.timestamp),
+      label: eventLabel(event.type, event.message),
+      status: getTimelineStatus(
+        index,
+        cycleEvents.length,
+        presence.state,
+      ),
+      state,
+      eventType: event.type,
+      data: event.data,
+      detail: getEventDetail(
+        event.type,
+        event.data,
+      ),
+    };
+  });
+}
+
+function getCycleEventData(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+  type: string,
+): unknown {
+  if (!cycle) {
+    return undefined;
+  }
+
+  return cycle.events.find((event) => event.type === type)?.data;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function textValue(value: unknown): string {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return "—";
+}
+
+function formatComparisonData(
+  type: string,
+  data: unknown,
+): string {
+  const record = asRecord(data);
+
+  if (!record) {
+    return "—";
+  }
+
+  switch (type) {
+    case "user_request":
+      return textValue(
+        record.text ??
+          record.original_text ??
+          record.request,
+      );
+
+    case "intent":
+      return [
+        `action=${textValue(record.name ?? record.intent)}`,
+        `confidence=${textValue(record.confidence)}`,
+      ].join(" · ");
+
+    case "decision":
+      return [
+        `action=${textValue(record.selected_action ?? record.type)}`,
+        `confidence=${textValue(record.confidence)}`,
+        record.requires_execution !== undefined
+          ? `execute=${textValue(record.requires_execution)}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+    case "objective":
+      return [
+        textValue(record.title ?? record.description),
+        record.status
+          ? `status=${textValue(record.status)}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+    case "plan": {
+      const steps = Array.isArray(record.steps)
+        ? record.steps
+            .map((step) => {
+              const stepRecord = asRecord(step);
+              return textValue(
+                stepRecord?.name ??
+                  stepRecord?.description ??
+                  stepRecord?.id,
+              );
+            })
+            .filter((step) => step !== "—")
+        : [];
+
+      return [
+        steps.length > 0
+          ? `${steps.length} steps`
+          : "",
+        record.current_step !== undefined
+          ? `current=${textValue(record.current_step)}`
+          : "",
+        record.completed !== undefined
+          ? `completed=${textValue(record.completed)}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—";
+    }
+
+    case "plan_final":
+      return [
+        record.completed !== undefined
+          ? `completed=${textValue(record.completed)}`
+          : "",
+        Array.isArray(record.steps)
+          ? `${record.steps.length} steps`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ") || "—";
+
+    case "execution_result": {
+      const output = asRecord(record.output);
+
+      return [
+        `success=${textValue(record.success)}`,
+        record.message
+          ? `message=${textValue(record.message)}`
+          : "",
+        output?.application
+          ? `app=${textValue(output.application)}`
+          : "",
+        output?.status
+          ? `status=${textValue(output.status)}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    }
+
+    case "verification":
+    case "verification_failure":
+      return [
+        `verified=${textValue(record.verified)}`,
+        `confidence=${textValue(record.confidence)}`,
+        record.reason
+          ? `reason=${textValue(record.reason)}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+
+    case "episode": {
+      const lesson =
+        record.lesson ??
+        record.learning ??
+        record.summary;
+
+      return lesson
+        ? textValue(lesson)
+        : Object.keys(record).length > 0
+          ? `${Object.keys(record).length} fields`
+          : "—";
+    }
+
+    default:
+      return Object.keys(record).length > 0
+        ? `${Object.keys(record).length} fields`
+        : "—";
+  }
+}
+
+function buildCycleComparisonRows(
+  leftCycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+  rightCycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): CycleComparisonRow[] {
+  const definitions = [
+    ["request", "REQUEST", "user_request"],
+    ["intent", "INTENT", "intent"],
+    ["decision", "DECISION", "decision"],
+    ["objective", "OBJECTIVE", "objective"],
+    ["plan", "PLAN", "plan"],
+    ["plan_final", "PLAN FINAL", "plan_final"],
+    ["execution", "EXECUTION", "execution_result"],
+    ["verification", "VERIFICATION", "verification"],
+    ["episode", "MEMORY / EPISODE", "episode"],
+  ] as const;
+
+  return definitions.map(([key, label, eventType]) => {
+    const left = formatComparisonData(
+      eventType,
+      getCycleEventData(leftCycle, eventType),
+    );
+
+    const right = formatComparisonData(
+      eventType,
+      getCycleEventData(rightCycle, eventType),
+    );
+
+    return {
+      key,
+      label,
+      left,
+      right,
+      changed: left !== right,
+    };
+  });
+}
+
+function getCycleStringField(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+  eventType: string,
+  fields: string[],
+): string | null {
+  const record = asRecord(getCycleEventData(cycle, eventType));
+
+  if (!record) {
+    return null;
+  }
+
+  for (const field of fields) {
+    const value = record[field];
+
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
+function getCycleExecutionApplication(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): string | null {
+  const record = asRecord(
+    getCycleEventData(cycle, "execution_result"),
+  );
+
+  const output = asRecord(record?.output);
+
+  return typeof output?.application === "string"
+    ? output.application
+    : null;
+}
+
+function getCycleExecutionSuccess(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): boolean | null {
+  const record = asRecord(
+    getCycleEventData(cycle, "execution_result"),
+  );
+
+  return typeof record?.success === "boolean"
+    ? record.success
+    : null;
+}
+
+function getCyclePlanSignature(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): string {
+  const record = asRecord(
+    getCycleEventData(cycle, "plan"),
+  );
+
+  const steps = Array.isArray(record?.steps)
+    ? record.steps
+        .map((step) => {
+          const stepRecord = asRecord(step);
+
+          return (
+            stepRecord?.action ??
+            stepRecord?.name ??
+            stepRecord?.description ??
+            stepRecord?.id
+          );
+        })
+        .filter(
+          (value): value is string =>
+            typeof value === "string" && value.trim().length > 0,
+        )
+        .map((value) => value.trim())
+    : [];
+
+  return steps.join(" → ");
+}
+
+function getCycleVerificationSignature(
+  cycle: {
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): string {
+  const record = asRecord(
+    getCycleEventData(cycle, "verification"),
+  );
+
+  if (!record) {
+    return "";
+  }
+
+  return [
+    typeof record.verified === "boolean"
+      ? String(record.verified)
+      : "",
+    typeof record.confidence === "number"
+      ? record.confidence.toFixed(2)
+      : "",
+    typeof record.reason === "string"
+      ? record.reason.trim()
+      : "",
+  ].join("|");
+}
+
+function buildCycleInsights(
+  leftCycle: {
+    id: string;
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+  rightCycle: {
+    id: string;
+    events: Array<{
+      type: string;
+      data?: unknown;
+    }>;
+  } | null,
+): CycleInsight[] {
+  if (!leftCycle || !rightCycle || leftCycle.id === rightCycle.id) {
+    return [];
+  }
+
+  const insights: CycleInsight[] = [];
+
+  const leftIntent = getCycleStringField(
+    leftCycle,
+    "intent",
+    ["name", "intent", "action"],
+  );
+  const rightIntent = getCycleStringField(
+    rightCycle,
+    "intent",
+    ["name", "intent", "action"],
+  );
+
+  const leftDecision = getCycleStringField(
+    leftCycle,
+    "decision",
+    ["selected_action", "type", "action"],
+  );
+  const rightDecision = getCycleStringField(
+    rightCycle,
+    "decision",
+    ["selected_action", "type", "action"],
+  );
+
+  const leftApp = getCycleExecutionApplication(leftCycle);
+  const rightApp = getCycleExecutionApplication(rightCycle);
+
+  const leftSuccess = getCycleExecutionSuccess(leftCycle);
+  const rightSuccess = getCycleExecutionSuccess(rightCycle);
+
+  const leftPlan = getCyclePlanSignature(leftCycle);
+  const rightPlan = getCyclePlanSignature(rightCycle);
+
+  const leftVerification = getCycleVerificationSignature(leftCycle);
+  const rightVerification = getCycleVerificationSignature(rightCycle);
+
+  const leftObjective = getCycleStringField(
+    leftCycle,
+    "objective",
+    ["title", "description"],
+  );
+  const rightObjective = getCycleStringField(
+    rightCycle,
+    "objective",
+    ["title", "description"],
+  );
+
+  if (
+    leftIntent &&
+    rightIntent &&
+    leftIntent === rightIntent &&
+    leftApp &&
+    rightApp &&
+    leftApp !== rightApp
+  ) {
+    insights.push({
+      id: "same-intent-different-execution",
+      label: "PATTERN",
+      title: "Mismo intento · distinta ejecución",
+      detail: `Ambos ciclos interpretaron el intento como “${leftIntent}”, pero la ejecución terminó sobre ${leftApp} y ${rightApp}.`,
+      tone: "difference",
+      evidenceKeys: ["intent", "execution"],
+    });
+  }
+
+  if (
+    leftDecision &&
+    rightDecision &&
+    leftDecision === rightDecision &&
+    leftSuccess !== null &&
+    rightSuccess !== null &&
+    leftSuccess !== rightSuccess
+  ) {
+    insights.push({
+      id: "same-decision-different-result",
+      label: "PATTERN",
+      title: "Misma decisión · distinto resultado",
+      detail: `La decisión seleccionada fue “${leftDecision}” en ambos ciclos, mientras el resultado de ejecución fue ${leftSuccess ? "exitoso" : "no exitoso"} y ${rightSuccess ? "exitoso" : "no exitoso"}.`,
+      tone: "difference",
+      evidenceKeys: ["decision", "execution"],
+    });
+  }
+
+  if (leftPlan && rightPlan && leftPlan !== rightPlan) {
+    insights.push({
+      id: "plan-changed",
+      label: "CHANGE",
+      title: "El plan cambió",
+      detail: `La secuencia de pasos difiere entre los ciclos: “${leftPlan}” frente a “${rightPlan}”.`,
+      tone: "change",
+      evidenceKeys: ["plan"],
+    });
+  }
+
+  if (
+    leftObjective &&
+    rightObjective &&
+    leftObjective !== rightObjective
+  ) {
+    insights.push({
+      id: "objective-changed",
+      label: "CHANGE",
+      title: "El objetivo cambió",
+      detail: `El objetivo registrado fue “${leftObjective}” en un ciclo y “${rightObjective}” en el otro.`,
+      tone: "change",
+      evidenceKeys: ["objective"],
+    });
+  }
+
+  if (
+    leftVerification &&
+    rightVerification &&
+    leftVerification !== rightVerification
+  ) {
+    insights.push({
+      id: "verification-changed",
+      label: "EVIDENCE",
+      title: "La verificación difiere",
+      detail: "Los datos de verificación no son iguales entre los dos ciclos comparados.",
+      tone: "difference",
+      evidenceKeys: ["verification"],
+    });
+  }
+
+  if (
+    leftIntent &&
+    rightIntent &&
+    leftIntent === rightIntent &&
+    leftDecision &&
+    rightDecision &&
+    leftDecision === rightDecision
+  ) {
+    insights.push({
+      id: "reasoning-stable",
+      label: "STABLE",
+      title: "Razonamiento estable",
+      detail: `El intento “${leftIntent}” condujo a la misma decisión “${leftDecision}” en ambos ciclos.`,
+      tone: "stable",
+      evidenceKeys: ["intent", "decision"],
+    });
+  }
+
+  if (insights.length === 0) {
+    insights.push({
+      id: "no-pattern",
+      label: "OBSERVATION",
+      title: "No se detectaron patrones definidos",
+      detail: "Los datos disponibles no muestran una coincidencia o diferencia suficientemente clara para generar un insight específico.",
+      tone: "stable",
+      evidenceKeys: [],
+    });
+  }
+
+  return insights;
+}
+
+function buildHistoricalReplayEvents(
+  cycle: {
+    events: Array<{
+      id: string;
+      type: string;
+      timestamp: string;
+      message?: string;
+      data?: unknown;
+    }>;
+  } | null,
+): HistoricalReplayEvent[] {
+  if (!cycle) {
+    return [];
+  }
+
+  return cycle.events.map((event) => ({
+    id: event.id,
+    time: formatTime(event.timestamp),
+    label: eventLabel(event.type, event.message),
+    eventType: event.type,
+    data: event.data,
+    detail: getEventDetail(event.type, event.data),
+  }));
+}
+
+function Core({
+  state,
+}: {
+  state: NexusPresenceState;
+}) {
+  const isCompleted = state === "completed";
+  const isVerifying = state === "verifying";
+  const isFailed = state === "failed";
+
+  return (
+    <div className={`core-stage state-${state}`}>
+      <div className="core-grid" />
+
+      <div className="core-orbit orbit-one" />
+      <div className="core-orbit orbit-two" />
+      <div className="core-orbit orbit-three" />
+
+      <div className="core-particles">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+
+      <div className="core">
+        <div className="core-inner">
+          {isCompleted || isVerifying ? (
+            <span className="core-check">✓</span>
+          ) : isFailed ? (
+            <span className="core-check">!</span>
+          ) : (
+            <span className="core-point" />
+          )}
+        </div>
+      </div>
+
+      <div className="core-label">
+        {stateLabels[state]}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [activeSection, setActiveSection] =
+    useState("overview");
+
+  const [presence, setPresence] =
+    useState<NexusPresenceStateModel>(
+      presenceAdapter.getCurrentState(),
+    );
+
+  const [command, setCommand] = useState("");
+
+  const [isSubmitting, setIsSubmitting] =
+    useState(false);
+
+  const [commandError, setCommandError] =
+    useState<string | null>(null);
+
+  const [selectedTimelineEventId, setSelectedTimelineEventId] =
+    useState<string | null>(null);
+
+  /*
+   * ============================================================
+   * 9.19 — COGNITIVE CYCLE HISTORY
+   * ============================================================
+   */
+
+  const [selectedHistoryCycleId, setSelectedHistoryCycleId] =
+    useState<string | null>(null);
+
+  /*
+   * ============================================================
+   * 9.19D — CYCLE COMPARISON
+   *
+   * Compara dos ciclos históricos sin alterar sus eventos ni
+   * ejecutar ninguna acción.
+   * ============================================================
+   */
+
+  const [comparisonLeftCycleId, setComparisonLeftCycleId] =
+    useState<string | null>(null);
+
+  const [comparisonRightCycleId, setComparisonRightCycleId] =
+    useState<string | null>(null);
+
+  /*
+   * ============================================================
+   * 9.19F — INSIGHT TRACE
+   *
+   * Selecciona un insight y hace visible la evidencia concreta
+   * que lo originó dentro de la comparación.
+   * ============================================================
+   */
+
+  const [selectedInsightId, setSelectedInsightId] =
+    useState<string | null>(null);
+
+  /*
+   * ============================================================
+   * 9.19G — INSIGHT LEARNING CANDIDATE
+   *
+   * Registra en la sesión un insight como candidato de aprendizaje.
+   * No persiste conocimiento ni modifica el razonamiento.
+   * ============================================================
+   */
+
+  const [learningCandidate, setLearningCandidate] =
+    useState<InsightLearningCandidate | null>(null);
+
+  const [learningCandidates, setLearningCandidates] =
+    useState<InsightLearningCandidate[]>(() => loadLearningCandidates());
+
+  /*
+   * ============================================================
+   * 9.19C — HISTORICAL CYCLE REPLAY
+   *
+   * Reproduce únicamente los eventos almacenados del ciclo
+   * histórico seleccionado. Nunca ejecuta acciones ni publica
+   * nuevos eventos en Presence.
+   * ============================================================
+   */
+
+  const [historyReplayActive, setHistoryReplayActive] =
+    useState(false);
+
+  const [historyReplayPlaying, setHistoryReplayPlaying] =
+    useState(false);
+
+  const [historyReplayIndex, setHistoryReplayIndex] =
+    useState(0);
+
+  const historyReplayTimerRef =
+    useRef<number | null>(null);
+
+  function stopHistoryReplayTimer(): void {
+    if (historyReplayTimerRef.current !== null) {
+      window.clearTimeout(historyReplayTimerRef.current);
+      historyReplayTimerRef.current = null;
+    }
+  }
+
+  function resetHistoryReplay(): void {
+    stopHistoryReplayTimer();
+    setHistoryReplayPlaying(false);
+    setHistoryReplayActive(false);
+    setHistoryReplayIndex(0);
+  }
+
+  /*
+   * ============================================================
+   * 9.17 — COGNITIVE FOCUS AUTO-FOLLOW
+   *
+   * focusManualSelection:
+   *   true  -> usuário assumiu controle manual do Focus.
+   *
+   * focusAutoFollow:
+   *   true  -> o Focus pode acompanhar um ciclo novo.
+   *
+   * autoFollowTimerRef:
+   *   controla uma única reprodução do ciclo.
+   *
+   * Não usamos setInterval.
+   * ============================================================
+   */
+
+  const [focusManualSelection, setFocusManualSelection] =
+    useState(false);
+
+  const [focusAutoFollow, setFocusAutoFollow] =
+    useState(true);
+
+  const autoFollowTimerRef =
+    useRef<number | null>(null);
+
+  const autoFollowCycleRef =
+    useRef<string | null>(null);
+
+  /*
+   * ============================================================
+   * 9.18 — COGNITIVE FOCUS REPLAY
+   *
+   * Replay recorre el último ciclo ya aislado por Timeline.
+   * No genera eventos ni ejecuta nuevamente ninguna acción.
+   * ============================================================
+   */
+
+  const [replayActive, setReplayActive] =
+    useState(false);
+
+  const [replayPlaying, setReplayPlaying] =
+    useState(false);
+
+  const [replayIndex, setReplayIndex] =
+    useState(0);
+
+  const replayTimerRef =
+    useRef<number | null>(null);
+
+  function stopReplayTimer(): void {
+    if (replayTimerRef.current !== null) {
+      window.clearTimeout(replayTimerRef.current);
+      replayTimerRef.current = null;
+    }
+  }
+
+  function resetReplay(): void {
+    stopReplayTimer();
+    setReplayPlaying(false);
+    setReplayActive(false);
+    setReplayIndex(0);
+  }
+
+  useEffect(() => {
+    return presenceAdapter.subscribe(setPresence);
+  }, []);
+
+  const timeline = buildTimeline(presence);
+
+  const cycleHistory = buildCycleHistory(presence);
+  const historicalCycles = getHistoricalCycles(presence);
+  const currentCycle = getCurrentCycle(presence);
+
+  useEffect(() => {
+    if (historicalCycles.length < 2) {
+      setComparisonLeftCycleId(null);
+      setComparisonRightCycleId(null);
+      return;
+    }
+
+    setComparisonLeftCycleId((current) =>
+      current && historicalCycles.some((cycle) => cycle.id === current)
+        ? current
+        : historicalCycles[1]?.id ?? null,
+    );
+
+    setComparisonRightCycleId((current) =>
+      current && historicalCycles.some((cycle) => cycle.id === current)
+        ? current
+        : historicalCycles[0]?.id ?? null,
+    );
+  }, [historicalCycles.map((cycle) => cycle.id).join("|")]);
+
+  const comparisonLeftCycle =
+    historicalCycles.find(
+      (cycle) => cycle.id === comparisonLeftCycleId,
+    ) ?? null;
+
+  const comparisonRightCycle =
+    historicalCycles.find(
+      (cycle) => cycle.id === comparisonRightCycleId,
+    ) ?? null;
+
+  const cycleComparisonRows =
+    buildCycleComparisonRows(
+      comparisonLeftCycle,
+      comparisonRightCycle,
+    );
+
+  const comparisonChangedCount =
+    cycleComparisonRows.filter((row) => row.changed).length;
+
+  const cycleInsights = buildCycleInsights(
+    comparisonLeftCycle,
+    comparisonRightCycle,
+  );
+
+  const selectedInsight =
+    cycleInsights.find(
+      (insight) => insight.id === selectedInsightId,
+    ) ?? null;
+
+  function registerLearningCandidate(): void {
+    const candidate = buildInsightLearningCandidate(
+      selectedInsight,
+      comparisonLeftCycle,
+      comparisonRightCycle,
+    );
+
+    if (!candidate) {
+      return;
+    }
+
+    saveLearningCandidate(candidate);
+    setLearningCandidate(candidate);
+    setLearningCandidates(loadLearningCandidates());
+  }
+
+  function clearLearningCandidate(): void {
+    if (learningCandidate) {
+      removeLearningCandidate(learningCandidate);
+    }
+
+    setLearningCandidate(null);
+    setLearningCandidates(loadLearningCandidates());
+  }
+
+  async function promoteLearningCandidate(): Promise<void> {
+    if (!learningCandidate || learningCandidate.status === "promoted") {
+      return;
+    }
+
+    try {
+      const response = await fetch("http://127.0.0.1:8765/api/learning/candidates/promote", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(learningCandidate),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Learning promotion failed: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as {
+        success?: boolean;
+        memory_key?: string;
+        promoted_at?: string;
+      };
+
+      const promoted = {
+        ...learningCandidate,
+        status: "promoted" as const,
+        promotedAt: payload.promoted_at ?? new Date().toISOString(),
+        memoryKey: payload.memory_key,
+      };
+
+      updateLearningCandidate(promoted);
+      setLearningCandidate(promoted);
+      setLearningCandidates(loadLearningCandidates());
+    } catch (error) {
+      console.error("NEXUS learning candidate promotion failed", error);
+    }
+  }
+
+  useEffect(() => {
+    if (
+      selectedInsightId &&
+      !cycleInsights.some(
+        (insight) => insight.id === selectedInsightId,
+      )
+    ) {
+      setSelectedInsightId(null);
+    }
+  }, [
+    selectedInsightId,
+    cycleInsights.map((insight) => insight.id).join("|"),
+  ]);
+
+  useEffect(() => {
+    if (!selectedInsight || !comparisonLeftCycle || !comparisonRightCycle) {
+      setLearningCandidate(null);
+      return;
+    }
+
+    const stored = learningCandidates.find(
+      (candidate) =>
+        candidate.insightId === selectedInsight.id &&
+        candidate.sourceCycleIds.includes(comparisonLeftCycle.id) &&
+        candidate.sourceCycleIds.includes(comparisonRightCycle.id),
+    );
+
+    setLearningCandidate(stored ?? null);
+  }, [
+    selectedInsight?.id,
+    comparisonLeftCycle?.id,
+    comparisonRightCycle?.id,
+    learningCandidates,
+  ]);
+
+  const selectedHistoryCycle =
+    historicalCycles.find(
+      (cycle) => cycle.id === selectedHistoryCycleId,
+    ) ?? null;
+
+  const historicalReplayEvents =
+    buildHistoricalReplayEvents(selectedHistoryCycle);
+
+  const selectedHistoricalReplayEvent =
+    historyReplayActive
+      ? historicalReplayEvents[historyReplayIndex] ?? null
+      : null;
+
+  const selectedTimelineEventIndex = timeline.findIndex(
+    (event) => event.id === selectedTimelineEventId,
+  );
+
+  const canNavigateFocusPrevious =
+    selectedTimelineEventIndex > 0;
+
+  const canNavigateFocusNext =
+    selectedTimelineEventIndex >= 0 &&
+    selectedTimelineEventIndex < timeline.length - 1;
+
+  function stopAutoFollow(): void {
+    if (autoFollowTimerRef.current !== null) {
+      window.clearTimeout(autoFollowTimerRef.current);
+      autoFollowTimerRef.current = null;
+    }
+  }
+
+  function selectPreviousTimelineEvent(): void {
+    if (!canNavigateFocusPrevious) {
+      return;
+    }
+
+    stopAutoFollow();
+    resetReplay();
+
+    setFocusManualSelection(true);
+    setFocusAutoFollow(false);
+
+    setSelectedTimelineEventId(
+      timeline[selectedTimelineEventIndex - 1].id,
+    );
+  }
+
+  function selectNextTimelineEvent(): void {
+    if (!canNavigateFocusNext) {
+      return;
+    }
+
+    stopAutoFollow();
+    resetReplay();
+
+    setFocusManualSelection(true);
+    setFocusAutoFollow(false);
+
+    setSelectedTimelineEventId(
+      timeline[selectedTimelineEventIndex + 1].id,
+    );
+  }
+
+  const selectedTimelineEvent =
+    replayActive
+      ? timeline[replayIndex] ?? null
+      : timeline.find(
+          (event) => event.id === selectedTimelineEventId,
+        ) ?? null;
+
+  function startReplay(): void {
+    if (timeline.length === 0) {
+      return;
+    }
+
+    stopAutoFollow();
+    stopReplayTimer();
+
+    autoFollowCycleRef.current = timeline[0].id;
+
+    setFocusManualSelection(true);
+    setFocusAutoFollow(false);
+    setReplayActive(true);
+    setReplayPlaying(true);
+    setReplayIndex(0);
+    setSelectedTimelineEventId(timeline[0].id);
+  }
+
+  function toggleReplayPlayback(): void {
+    if (!replayActive || timeline.length === 0) {
+      return;
+    }
+
+    setReplayPlaying((playing) => !playing);
+  }
+
+  /*
+   * ============================================================
+   * 9.18A — REPLAY ENGINE
+   *
+   * Reproduce un ciclo ya existente en la Timeline.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (!replayActive || !replayPlaying) {
+      stopReplayTimer();
+      return;
+    }
+
+    if (timeline.length === 0) {
+      stopReplayTimer();
+      setReplayPlaying(false);
+      return;
+    }
+
+    if (replayIndex >= timeline.length - 1) {
+      stopReplayTimer();
+      setReplayPlaying(false);
+      return;
+    }
+
+    replayTimerRef.current = window.setTimeout(() => {
+      const nextIndex = replayIndex + 1;
+
+      setReplayIndex(nextIndex);
+      setSelectedTimelineEventId(
+        timeline[nextIndex].id,
+      );
+    }, 650);
+
+    return () => {
+      stopReplayTimer();
+    };
+  }, [
+    replayActive,
+    replayPlaying,
+    replayIndex,
+    timeline.length,
+    timeline[replayIndex]?.id,
+  ]);
+
+  /*
+   * ============================================================
+   * 9.17B — AUTO-FOLLOW REAL
+   *
+   * El ciclo se reproduce una sola vez cuando aparece un nuevo
+   * ciclo cognitivo.
+   *
+   * La Timeline puede llegar completa en un snapshot; eso no
+   * significa que el Focus deba saltar directamente al último
+   * evento.
+   *
+   * El Focus avanza:
+   *
+   * 1 -> 2 -> 3 -> ... -> N
+   *
+   * usando timeouts encadenados.
+   *
+   * Una interacción manual cancela inmediatamente el proceso.
+   * ============================================================
+   */
+
+  useEffect(() => {
+    if (!focusAutoFollow || focusManualSelection) {
+      return;
+    }
+
+    if (timeline.length === 0) {
+      return;
+    }
+
+    const cycleId = timeline[0].id;
+
+    if (autoFollowCycleRef.current === cycleId) {
+      return;
+    }
+
+    autoFollowCycleRef.current = cycleId;
+
+    stopAutoFollow();
+
+    let currentIndex = 0;
+    let cancelled = false;
+
+    setSelectedTimelineEventId(timeline[0].id);
+
+    function advance(): void {
+      if (cancelled) {
+        return;
+      }
+
+      if (!focusAutoFollow || focusManualSelection) {
+        return;
+      }
+
+      currentIndex += 1;
+
+      if (currentIndex >= timeline.length) {
+        autoFollowTimerRef.current = null;
+        return;
+      }
+
+      setSelectedTimelineEventId(
+        timeline[currentIndex].id,
+      );
+
+      autoFollowTimerRef.current =
+        window.setTimeout(advance, 450);
+    }
+
+    autoFollowTimerRef.current =
+      window.setTimeout(advance, 450);
+
+    return () => {
+      cancelled = true;
+      stopAutoFollow();
+    };
+  }, [
+    timeline.length,
+    timeline[0]?.id,
+    focusAutoFollow,
+    focusManualSelection,
+  ]);
+
+  function startHistoryReplay(): void {
+    if (!selectedHistoryCycle || historicalReplayEvents.length === 0) {
+      return;
+    }
+
+    stopHistoryReplayTimer();
+
+    setHistoryReplayActive(true);
+    setHistoryReplayPlaying(true);
+    setHistoryReplayIndex(0);
+  }
+
+  function toggleHistoryReplayPlayback(): void {
+    if (!historyReplayActive || historicalReplayEvents.length === 0) {
+      return;
+    }
+
+    setHistoryReplayPlaying((playing) => !playing);
+  }
+
+  useEffect(() => {
+    if (!historyReplayActive || !historyReplayPlaying) {
+      stopHistoryReplayTimer();
+      return;
+    }
+
+    if (historicalReplayEvents.length === 0) {
+      stopHistoryReplayTimer();
+      setHistoryReplayPlaying(false);
+      return;
+    }
+
+    if (historyReplayIndex >= historicalReplayEvents.length - 1) {
+      stopHistoryReplayTimer();
+      setHistoryReplayPlaying(false);
+      return;
+    }
+
+    historyReplayTimerRef.current = window.setTimeout(() => {
+      setHistoryReplayIndex((index) => index + 1);
+    }, 650);
+
+    return () => {
+      stopHistoryReplayTimer();
+    };
+  }, [
+    historyReplayActive,
+    historyReplayPlaying,
+    historyReplayIndex,
+    historicalReplayEvents.length,
+    selectedHistoryCycleId,
+  ]);
+
+  const online = true;
+
+  const requestText =
+    presence.request?.text ?? "No active request";
+
+  const intentName =
+    presence.intent?.name ?? "—";
+
+  const intentConfidence =
+    presence.intent
+      ? presence.intent.confidence.toFixed(2)
+      : "—";
+
+  const decisionType =
+    presence.decision?.type ?? "—";
+
+  const objectiveDescription =
+    presence.objective?.description ?? "—";
+
+  const primaryPlanAction =
+    presence.plan?.steps?.[0]?.action ?? "—";
+
+  const executionStatus =
+    presence.execution?.status ?? "pending";
+
+  const verificationStatus =
+    presence.verification?.status ?? "pending";
+
+  const verificationMessage =
+    presence.verification?.message ??
+    "Verification pending.";
+
+  const isCompleted =
+    presence.state === "completed";
+
+  const resultTitle =
+    presence.state === "failed"
+      ? "FAILED"
+      : isCompleted
+        ? "COMPLETED"
+        : presence.state.toUpperCase();
+
+  async function executeCommand(
+    event?: React.FormEvent,
+  ): Promise<void> {
+    event?.preventDefault();
+
+    const text = command.trim();
+
+    if (!text || isSubmitting) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setCommandError(null);
+
+    /*
+     * Una nueva solicitud significa un nuevo ciclo.
+     * Permitimos que Auto-Follow vuelva a tomar control.
+     */
+
+    stopAutoFollow();
+    resetReplay();
+    resetHistoryReplay();
+    autoFollowCycleRef.current = null;
+    setFocusManualSelection(false);
+    setFocusAutoFollow(true);
+    setSelectedTimelineEventId(null);
+    setSelectedHistoryCycleId(null);
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8765/api/execute",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            text,
+          }),
+        },
+      );
+
+      let payload: unknown = null;
+
+      try {
+        payload = await response.json();
+      } catch {
+        payload = null;
+      }
+
+      if (!response.ok) {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : `NEXUS returned HTTP ${response.status}`;
+
+        throw new Error(message);
+      }
+
+      setCommand("");
+
+      await new Promise((resolve) =>
+        setTimeout(resolve, 100),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to execute request.";
+
+      setCommandError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  /*
+   * ============================================================
+   * 9.16 — KEYBOARD NAVIGATION
+   * ============================================================
+   */
+
+  useEffect(() => {
+    function handleTimelineKeyboard(
+      event: KeyboardEvent,
+    ): void {
+      if (!selectedTimelineEventId) {
+        return;
+      }
+
+      const target =
+        event.target as HTMLElement | null;
+
+      if (
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+
+      if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        selectPreviousTimelineEvent();
+        return;
+      }
+
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        selectNextTimelineEvent();
+        return;
+      }
+
+      if (event.key === "Escape") {
+        event.preventDefault();
+
+        stopAutoFollow();
+        resetReplay();
+
+        setSelectedTimelineEventId(null);
+        setFocusManualSelection(true);
+        setFocusAutoFollow(false);
+      }
+    }
+
+    window.addEventListener(
+      "keydown",
+      handleTimelineKeyboard,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        handleTimelineKeyboard,
+      );
+    };
+  }, [
+    selectedTimelineEventId,
+    canNavigateFocusPrevious,
+    canNavigateFocusNext,
+  ]);
+
+  return (
+    <main className="app-shell">
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
+
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-name">NEXUS</span>
+
+          <span className="brand-subtitle">
+            COGNITIVE RUNTIME
+          </span>
+        </div>
+
+        <div className="system-status">
+          <span
+            className={`status-dot ${
+              online ? "online" : ""
+            }`}
+          />
+
+          <span>
+            {online ? "ONLINE" : "OFFLINE"}
+          </span>
+        </div>
+      </header>
+
+      <div className="workspace">
+        <aside className="sidebar">
+          <div className="sidebar-title">
+            COGNITIVE SYSTEM
+          </div>
+
+          <nav>
+            {navigation.map((item) => (
+              <button
+                key={item.id}
+                className={`nav-item ${
+                  activeSection === item.id
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setActiveSection(item.id)
+                }
+              >
+                <span className="nav-icon">
+                  {item.icon}
+                </span>
+
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="sidebar-footer">
+            <div className="runtime-version">
+              NEXUS V1
+            </div>
+
+            <div className="runtime-mode">
+              LOCAL RUNTIME
+            </div>
+          </div>
+        </aside>
+
+        <section className="main-area">
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">
+                SYSTEM OVERVIEW
+              </div>
+
+              <h1>Presence</h1>
+            </div>
+
+            <div className="session">
+              <span className="session-label">
+                SESSION
+              </span>
+
+              <span className="session-value">
+                LOCAL-01
+              </span>
+            </div>
+          </div>
+
+          <div className="dashboard-grid">
+            <section className="panel core-panel">
+              <div className="panel-header">
+                <span>CORE STATE</span>
+
+                <span className="panel-indicator">
+                  LIVE
+                </span>
+              </div>
+
+              <Core state={presence.state} />
+
+              <div className="core-state-detail">
+                <span className="detail-label">
+                  CURRENT STATE
+                </span>
+
+                <strong>
+                  {presence.state.toUpperCase()}
+                </strong>
+              </div>
+            </section>
+
+            <section className="panel request-panel">
+              <div className="panel-header">
+                <span>CURRENT REQUEST</span>
+
+                <span className="request-time">
+                  {formatTime(
+                    presence.request?.timestamp,
+                  )}
+                </span>
+              </div>
+
+              <div className="request-text">
+                "{requestText}"
+              </div>
+
+              <div className="data-stack">
+                <div className="data-row">
+                  <span>INTENT</span>
+
+                  <strong>{intentName}</strong>
+
+                  <small>
+                    {intentConfidence}
+                  </small>
+                </div>
+
+                <div className="data-row">
+                  <span>DECISION</span>
+
+                  <strong>{decisionType}</strong>
+                </div>
+
+                <div className="data-row">
+                  <span>OBJECTIVE</span>
+
+                  <strong>
+                    {objectiveDescription}
+                  </strong>
+                </div>
+
+                <div className="data-row">
+                  <span>PLAN</span>
+
+                  <strong>
+                    {primaryPlanAction}
+                  </strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel timeline-panel">
+              <div className="panel-header">
+                <span>COGNITIVE TIMELINE</span>
+
+                <span className="panel-indicator">
+                  REAL TIME
+                </span>
+              </div>
+
+              <div className="timeline">
+                {timeline.map((event) => {
+                  const isSelected =
+                    selectedTimelineEventId === event.id;
+
+                  return (
+                    <button
+                      type="button"
+                      className={`timeline-item timeline-${event.status}${
+                        isSelected
+                          ? " timeline-selected"
+                          : ""
+                      }`}
+                      key={event.id}
+                      onClick={() => {
+                        if (
+                          selectedTimelineEventId ===
+                          event.id
+                        ) {
+                          stopAutoFollow();
+                          resetReplay();
+
+                          setSelectedTimelineEventId(
+                            null,
+                          );
+
+                          setFocusManualSelection(
+                            true,
+                          );
+
+                          setFocusAutoFollow(false);
+
+                          return;
+                        }
+
+                        stopAutoFollow();
+                        resetReplay();
+
+                        setSelectedTimelineEventId(
+                          event.id,
+                        );
+
+                        setFocusManualSelection(
+                          true,
+                        );
+
+                        setFocusAutoFollow(false);
+                      }}
+                      aria-pressed={isSelected}
+                    >
+                      <span
+                        className={`timeline-node ${event.status}`}
+                        aria-hidden="true"
+                      >
+                        {event.status === "done"
+                          ? "✓"
+                          : event.status ===
+                              "failed"
+                            ? "!"
+                            : ""}
+                      </span>
+
+                      <span className="timeline-content">
+                        <span className="timeline-main">
+                          <span className="timeline-time">
+                            {event.time}
+                          </span>
+
+                          <span className="timeline-label">
+                            {event.label}
+                          </span>
+                        </span>
+
+                        {event.detail && (
+                          <span className="timeline-detail">
+                            {event.detail}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedTimelineEvent && (
+                <div
+                  className="timeline-focus"
+                  aria-live="polite"
+                >
+                  <div className="timeline-focus-header">
+                    <span>FOCUS</span>
+
+                    <button
+                      type="button"
+                      className="timeline-focus-close"
+                      onClick={() => {
+                        stopAutoFollow();
+                        resetReplay();
+
+                        setSelectedTimelineEventId(
+                          null,
+                        );
+
+                        setFocusManualSelection(
+                          true,
+                        );
+
+                        setFocusAutoFollow(false);
+                      }}
+                      aria-label="Close timeline focus"
+                    >
+                      ×
+                    </button>
+                  </div>
+
+                  <div
+                    className="timeline-focus-semantic"
+                    data-semantic={
+                      getFocusSemantic(
+                        selectedTimelineEvent.eventType,
+                      ).label
+                    }
+                  >
+                    {
+                      getFocusSemantic(
+                        selectedTimelineEvent.eventType,
+                      ).label
+                    }
+                  </div>
+
+                  <div className="timeline-focus-state">
+                    {selectedTimelineEvent.state.toUpperCase()}
+                  </div>
+
+                  <div className="timeline-focus-label">
+                    {selectedTimelineEvent.label}
+                  </div>
+
+                  <div className="timeline-focus-fields">
+                    {getFocusFields(
+                      selectedTimelineEvent.eventType,
+                      selectedTimelineEvent.data,
+                    ).map((field) => (
+                      <div
+                        key={`${field.label}-${field.value}`}
+                        className="timeline-focus-field"
+                      >
+                        <span>{field.label}</span>
+
+                        <strong>
+                          {field.value}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="timeline-focus-time">
+                    {selectedTimelineEvent.time}
+                  </div>
+
+                  <div className="timeline-focus-replay">
+                    <button
+                      type="button"
+                      className="timeline-focus-replay-button"
+                      onClick={
+                        replayPlaying
+                          ? toggleReplayPlayback
+                          : replayActive
+                            ? toggleReplayPlayback
+                            : startReplay
+                      }
+                      disabled={timeline.length === 0}
+                      aria-label={
+                        replayPlaying
+                          ? "Pause cognitive replay"
+                          : replayActive
+                            ? "Resume cognitive replay"
+                            : "Replay cognitive cycle"
+                      }
+                    >
+                      {replayPlaying
+                        ? "Ⅱ PAUSE"
+                        : replayActive
+                          ? "▶ RESUME"
+                          : "▶ REPLAY"}
+                    </button>
+
+                    {replayActive && (
+                      <span className="timeline-focus-replay-status">
+                        REPLAY {replayIndex + 1} / {timeline.length}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="timeline-focus-navigation">
+                    <button
+                      type="button"
+                      className="timeline-focus-nav-button"
+                      onClick={
+                        selectPreviousTimelineEvent
+                      }
+                      disabled={
+                        !canNavigateFocusPrevious
+                      }
+                      aria-label="Previous cognitive event"
+                    >
+                      ← PREV
+                    </button>
+
+                    <span className="timeline-focus-nav-position">
+                      {selectedTimelineEventIndex +
+                        1}{" "}
+                      / {timeline.length}
+                    </span>
+
+                    <button
+                      type="button"
+                      className="timeline-focus-nav-button"
+                      onClick={
+                        selectNextTimelineEvent
+                      }
+                      disabled={
+                        !canNavigateFocusNext
+                      }
+                      aria-label="Next cognitive event"
+                    >
+                      NEXT →
+                    </button>
+                  </div>
+                </div>
+              )}
+            </section>
+
+            <section className="panel cycle-history-panel">
+              <div className="panel-header">
+                <span>COGNITIVE CYCLES</span>
+
+                <span className="panel-indicator">
+                  {cycleHistory.length} CYCLES
+                </span>
+              </div>
+
+              <div className="cycle-history-layout">
+                <div className="cycle-history-list">
+                  <div className="cycle-history-current">
+                    <span className="cycle-history-marker">●</span>
+
+                    <div className="cycle-history-summary">
+                      <span className="cycle-history-label">CURRENT</span>
+                      <strong>
+                        {getCycleRequestText(currentCycle)}
+                      </strong>
+                      <small>
+                        {currentCycle?.eventCount ?? timeline.length} EVENTS · {
+                          currentCycle?.status.toUpperCase() ??
+                          presence.state.toUpperCase()
+                        } · {formatTime(currentCycle?.startedAt)}
+                      </small>
+                    </div>
+                  </div>
+
+                  {historicalCycles.length === 0 ? (
+                    <div className="cycle-history-empty">
+                      No previous cognitive cycles.
+                    </div>
+                  ) : (
+                    historicalCycles
+                      .slice()
+                      .reverse()
+                      .map((cycle) => {
+                        const isSelected =
+                          selectedHistoryCycleId === cycle.id;
+
+                        return (
+                          <button
+                            key={cycle.id}
+                            type="button"
+                            className={`cycle-history-item${
+                              isSelected
+                                ? " cycle-history-selected"
+                                : ""
+                            }`}
+                            onClick={() => {
+                              resetHistoryReplay();
+                              setSelectedHistoryCycleId(
+                                isSelected ? null : cycle.id,
+                              );
+                            }}
+                            aria-pressed={isSelected}
+                          >
+                            <span className="cycle-history-marker">○</span>
+
+                            <span className="cycle-history-summary">
+                              <span className="cycle-history-label">
+                                PREVIOUS
+                              </span>
+                              <strong>{getCycleRequestText(cycle)}</strong>
+                              <small>
+                                {cycle.eventCount} EVENTS · {
+                                  cycle.status.toUpperCase()
+                                } · {formatTime(cycle.startedAt)}
+                              </small>
+                            </span>
+                          </button>
+                        );
+                      })
+                  )}
+                </div>
+
+                {selectedHistoryCycle && (
+                  <div className="cycle-history-detail" aria-live="polite">
+                    <div className="cycle-history-detail-header">
+                      <span>HISTORY FOCUS</span>
+                      <button
+                        type="button"
+                        className="cycle-history-detail-close"
+                        onClick={() => {
+                          resetHistoryReplay();
+                          setSelectedHistoryCycleId(null);
+                        }}
+                        aria-label="Close history focus"
+                      >
+                        ×
+                      </button>
+                    </div>
+
+                    <div className="cycle-history-detail-status">
+                      {selectedHistoryCycle.status.toUpperCase()}
+                    </div>
+
+                    <div className="cycle-history-detail-request">
+                      {getCycleRequestText(selectedHistoryCycle)}
+                    </div>
+
+                    <div className="cycle-history-detail-fields">
+                      <div>
+                        <span>EVENTS</span>
+                        <strong>
+                          {selectedHistoryCycle.eventCount}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>STARTED</span>
+                        <strong>
+                          {formatTime(
+                            selectedHistoryCycle.startedAt,
+                          )}
+                        </strong>
+                      </div>
+                      <div>
+                        <span>ENDED</span>
+                        <strong>
+                          {formatTime(
+                            selectedHistoryCycle.endedAt,
+                          )}
+                        </strong>
+                      </div>
+                    </div>
+
+                    <div className="cycle-history-replay-controls">
+                      <button
+                        type="button"
+                        className="timeline-focus-replay-button"
+                        onClick={
+                          historyReplayPlaying
+                            ? toggleHistoryReplayPlayback
+                            : historyReplayActive
+                              ? toggleHistoryReplayPlayback
+                              : startHistoryReplay
+                        }
+                        disabled={historicalReplayEvents.length === 0}
+                        aria-label={
+                          historyReplayPlaying
+                            ? "Pause historical cognitive replay"
+                            : historyReplayActive
+                              ? "Resume historical cognitive replay"
+                              : "Replay historical cognitive cycle"
+                        }
+                      >
+                        {historyReplayPlaying
+                          ? "Ⅱ PAUSE"
+                          : historyReplayActive
+                            ? "▶ RESUME"
+                            : "▶ REPLAY HISTORY"}
+                      </button>
+
+                      {historyReplayActive && (
+                        <span className="timeline-focus-replay-status">
+                          REPLAY {historyReplayIndex + 1} / {historicalReplayEvents.length}
+                        </span>
+                      )}
+                    </div>
+
+                    {selectedHistoricalReplayEvent && (
+                      <div
+                        className="cycle-history-replay-focus"
+                        aria-live="polite"
+                      >
+                        <div className="timeline-focus-header">
+                          <span>HISTORY FOCUS</span>
+                        </div>
+
+                        <div
+                          className="timeline-focus-semantic"
+                          data-semantic={
+                            getFocusSemantic(
+                              selectedHistoricalReplayEvent.eventType,
+                            ).label
+                          }
+                        >
+                          {getFocusSemantic(
+                            selectedHistoricalReplayEvent.eventType,
+                          ).label}
+                        </div>
+
+                        <div className="timeline-focus-state">
+                          {selectedHistoricalReplayEvent.eventType.toUpperCase()}
+                        </div>
+
+                        <div className="timeline-focus-label">
+                          {selectedHistoricalReplayEvent.label}
+                        </div>
+
+                        <div className="timeline-focus-fields">
+                          {getFocusFields(
+                            selectedHistoricalReplayEvent.eventType,
+                            selectedHistoricalReplayEvent.data,
+                          ).map((field) => (
+                            <div
+                              key={`${field.label}-${field.value}`}
+                              className="timeline-focus-field"
+                            >
+                              <span>{field.label}</span>
+                              <strong>{field.value}</strong>
+                            </div>
+                          ))}
+                        </div>
+
+                        {selectedHistoricalReplayEvent.detail && (
+                          <div className="timeline-focus-time">
+                            {selectedHistoricalReplayEvent.detail}
+                          </div>
+                        )}
+
+                        <div className="timeline-focus-time">
+                          {selectedHistoricalReplayEvent.time}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="cycle-history-detail-events">
+                      {selectedHistoryCycle.events.map(
+                        (event, index) => {
+                          const replaySelected =
+                            historyReplayActive &&
+                            historyReplayIndex === index;
+
+                          return (
+                            <button
+                              type="button"
+                              key={event.id}
+                              className={`cycle-history-event${
+                                replaySelected
+                                  ? " cycle-history-event-selected"
+                                  : ""
+                              }`}
+                              onClick={() => {
+                                stopHistoryReplayTimer();
+                                setHistoryReplayActive(true);
+                                setHistoryReplayPlaying(false);
+                                setHistoryReplayIndex(index);
+                              }}
+                              aria-pressed={replaySelected}
+                            >
+                              <span>
+                                {String(index + 1).padStart(2, "0")}
+                              </span>
+                              <strong>
+                                {eventLabel(
+                                  event.type,
+                                  event.message,
+                                )}
+                              </strong>
+                              <small>
+                                {formatTime(event.timestamp)}
+                              </small>
+                            </button>
+                          );
+                        },
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section className="panel cycle-comparison-panel">
+              {/*
+               * 9.19F — INSIGHT TRACE
+               * Los insights pueden señalar directamente las
+               * dimensiones que los sustentan.
+               */}
+              <div className="panel-header">
+                <span>COGNITIVE CYCLE COMPARISON</span>
+                <span className="panel-indicator">
+                  {historicalCycles.length >= 2
+                    ? `${comparisonChangedCount} CHANGED`
+                    : "NEEDS 2 CYCLES"}
+                </span>
+              </div>
+
+              {historicalCycles.length < 2 ? (
+                <div className="cycle-comparison-empty">
+                  At least two historical cognitive cycles are required
+                  for comparison.
+                </div>
+              ) : (
+                <div className="cycle-comparison-content">
+                  <div className="cycle-comparison-selectors">
+                    <label className="cycle-comparison-selector">
+                      <span>CYCLE A</span>
+                      <select
+                        value={comparisonLeftCycleId ?? ""}
+                        onChange={(event) =>
+                          setComparisonLeftCycleId(
+                            event.target.value || null,
+                          )
+                        }
+                      >
+                        {historicalCycles
+                          .slice()
+                          .reverse()
+                          .map((cycle) => (
+                            <option
+                              key={cycle.id}
+                              value={cycle.id}
+                            >
+                              {getCycleRequestText(cycle)} ·{" "}
+                              {formatTime(cycle.startedAt)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+
+                    <div className="cycle-comparison-vs">
+                      VS
+                    </div>
+
+                    <label className="cycle-comparison-selector">
+                      <span>CYCLE B</span>
+                      <select
+                        value={comparisonRightCycleId ?? ""}
+                        onChange={(event) =>
+                          setComparisonRightCycleId(
+                            event.target.value || null,
+                          )
+                        }
+                      >
+                        {historicalCycles
+                          .slice()
+                          .reverse()
+                          .map((cycle) => (
+                            <option
+                              key={cycle.id}
+                              value={cycle.id}
+                            >
+                              {getCycleRequestText(cycle)} ·{" "}
+                              {formatTime(cycle.startedAt)}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  {comparisonLeftCycle &&
+                    comparisonRightCycle &&
+                    comparisonLeftCycle.id ===
+                      comparisonRightCycle.id ? (
+                    <div className="cycle-comparison-empty">
+                      Select two different cycles to compare them.
+                    </div>
+                  ) : (
+                    <>
+                      <div className="cycle-comparison-summary">
+                        <div>
+                          <span>CYCLE A</span>
+                          <strong>
+                            {comparisonLeftCycle
+                              ? getCycleRequestText(
+                                  comparisonLeftCycle,
+                                )
+                              : "—"}
+                          </strong>
+                        </div>
+
+                        <div>
+                          <span>CYCLE B</span>
+                          <strong>
+                            {comparisonRightCycle
+                              ? getCycleRequestText(
+                                  comparisonRightCycle,
+                                )
+                              : "—"}
+                          </strong>
+                        </div>
+                      </div>
+
+                      <div className="cycle-comparison-table">
+                        <div className="cycle-comparison-table-head">
+                          <span>DIMENSION</span>
+                          <span>CYCLE A</span>
+                          <span>CYCLE B</span>
+                        </div>
+
+                        {cycleComparisonRows.map((row) => (
+                          <div
+                            key={row.key}
+                            className={`cycle-comparison-row${
+                              row.changed
+                                ? " cycle-comparison-changed"
+                                : ""
+                            }${
+                              selectedInsight?.evidenceKeys.includes(
+                                row.key,
+                              )
+                                ? " cycle-comparison-insight-highlight"
+                                : ""
+                            }`}
+                          >
+                            <span className="cycle-comparison-label">
+                              {row.label}
+                            </span>
+
+                            <span>{row.left}</span>
+                            <span>{row.right}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="panel cycle-insights-panel">
+              <div className="panel-header">
+                <span>COGNITIVE CYCLE INSIGHTS</span>
+                <span className="panel-indicator">
+                  {cycleInsights.length > 0
+                    ? `${cycleInsights.length} INSIGHTS`
+                    : "NO DATA"}
+                </span>
+              </div>
+
+              {historicalCycles.length < 2 ||
+              !comparisonLeftCycle ||
+              !comparisonRightCycle ||
+              comparisonLeftCycle.id === comparisonRightCycle.id ? (
+                <div className="cycle-insights-empty">
+                  Select two different cycles to generate descriptive insights.
+                </div>
+              ) : (
+                <div className="cycle-insights-content">
+                  <div className="cycle-insights-context">
+                    <span>COMPARING</span>
+                    <strong>
+                      {getCycleRequestText(comparisonLeftCycle)}
+                      <span> ↔ </span>
+                      {getCycleRequestText(comparisonRightCycle)}
+                    </strong>
+                  </div>
+
+                  <div className="cycle-insights-list">
+                    {cycleInsights.map((insight) => {
+                      const isSelected =
+                        selectedInsightId === insight.id;
+
+                      return (
+                        <button
+                          key={insight.id}
+                          type="button"
+                          className={`cycle-insight-card cycle-insight-${insight.tone}${
+                            isSelected
+                              ? " cycle-insight-selected"
+                              : ""
+                          }`}
+                          aria-pressed={isSelected}
+                          onClick={() =>
+                            setSelectedInsightId(
+                              isSelected ? null : insight.id,
+                            )
+                          }
+                        >
+                          <div className="cycle-insight-meta">
+                            <span>{insight.label}</span>
+                            <span>
+                              {insight.evidenceKeys.length > 0
+                                ? `${insight.evidenceKeys.length} EVIDENCE`
+                                : "OBSERVATION"}
+                            </span>
+                          </div>
+                          <strong>{insight.title}</strong>
+                          <p>{insight.detail}</p>
+                          <span className="cycle-insight-action">
+                            {isSelected
+                              ? "HIDE EVIDENCE"
+                              : "SHOW EVIDENCE"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {selectedInsight && (
+                    <div className="cycle-insight-trace">
+                      <div className="cycle-insight-trace-header">
+                        <span>INSIGHT TRACE</span>
+                        <span>
+                          {selectedInsight.evidenceKeys.length > 0
+                            ? `${selectedInsight.evidenceKeys.length} DIMENSIONS`
+                            : "NO DIRECT EVIDENCE"}
+                        </span>
+                      </div>
+
+                      <strong>{selectedInsight.title}</strong>
+
+                      {selectedInsight.evidenceKeys.length > 0 ? (
+                        <div className="cycle-insight-evidence-list">
+                          {selectedInsight.evidenceKeys.map(
+                            (key) => {
+                              const row =
+                                cycleComparisonRows.find(
+                                  (item) => item.key === key,
+                                );
+
+                              if (!row) {
+                                return null;
+                              }
+
+                              return (
+                                <div
+                                  key={key}
+                                  className="cycle-insight-evidence-row"
+                                >
+                                  <span>{row.label}</span>
+                                  <span>{row.left}</span>
+                                  <span>→</span>
+                                  <span>{row.right}</span>
+                                </div>
+                              );
+                            },
+                          )}
+                        </div>
+                      ) : (
+                        <p>
+                          Este insight es una observación general y
+                          no tiene una dimensión específica asociada.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="panel cycle-learning-panel">
+              <div className="panel-header">
+                <span>LEARNING CANDIDATE</span>
+                <span className="panel-indicator">
+                  {learningCandidate ? "REGISTERED" : "DRAFT"}
+                </span>
+              </div>
+
+              {!selectedInsight || !comparisonLeftCycle || !comparisonRightCycle ? (
+                <div className="cycle-learning-empty">
+                  Select an insight from the comparison to prepare a learning candidate.
+                </div>
+              ) : (
+                <div className="cycle-learning-content">
+                  <div className="cycle-learning-source">
+                    <span>SOURCE INSIGHT</span>
+                    <strong>{selectedInsight.title}</strong>
+                    <small>
+                      {getCycleRequestText(comparisonLeftCycle)} ↔ {getCycleRequestText(comparisonRightCycle)}
+                    </small>
+                  </div>
+
+                  {learningCandidate?.insightId === selectedInsight.id ? (
+                    <>
+                      <div className="cycle-learning-status">
+                        <span>LEARNING STATUS</span>
+                        <strong>{learningCandidate.status === "promoted" ? "PROMOTED TO SEMANTIC MEMORY" : "STAGED FOR LEARNING"}</strong>
+                      </div>
+
+                      <div className="cycle-learning-knowledge">
+                        <span>REUSABLE KNOWLEDGE</span>
+                        <p>{learningCandidate.knowledge}</p>
+                      </div>
+
+                      <div className="cycle-learning-evidence">
+                        <span>EVIDENCE</span>
+                        <strong>{learningCandidate.evidenceKeys.length} DIMENSIONS · {learningCandidate.status === "promoted" ? "SEMANTIC MEMORY" : "LOCAL STORE"}</strong>
+                      </div>
+
+                      {learningCandidate.status === "promoted" ? (
+                        <div className="cycle-learning-promoted">
+                          <strong>LEARNING PROMOTED</strong>
+                          <span>Stored in NEXUS semantic memory.</span>
+                          {learningCandidate.memoryKey ? (
+                            <small>{learningCandidate.memoryKey}</small>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="cycle-learning-button"
+                          onClick={promoteLearningCandidate}
+                        >
+                          PROMOTE TO SEMANTIC MEMORY
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        className="cycle-learning-button secondary"
+                        onClick={clearLearningCandidate}
+                      >
+                        CLEAR CANDIDATE
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <div className="cycle-learning-note">
+                        Registering this candidate stores it in the local Learning Candidate Store. It does not write episodic memory or alter NEXUS reasoning.
+                      </div>
+
+                      <button
+                        type="button"
+                        className="cycle-learning-button"
+                        onClick={registerLearningCandidate}
+                      >
+                        REGISTER LEARNING CANDIDATE
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="panel cycle-learning-store-panel">
+              <div className="panel-header">
+                <span>LEARNING CANDIDATE STORE</span>
+                <span className="panel-indicator">
+                  {learningCandidates.length} STORED
+                </span>
+              </div>
+
+              {learningCandidates.length === 0 ? (
+                <div className="cycle-learning-empty">
+                  No learning candidates have been staged yet.
+                </div>
+              ) : (
+                <div className="cycle-learning-store-list">
+                  {learningCandidates.map((candidate) => (
+                    <button
+                      key={`${candidate.insightId}-${candidate.createdAt}-${candidate.sourceCycleIds.join("-")}`}
+                      type="button"
+                      className={`cycle-learning-store-item ${
+                        learningCandidate === candidate
+                          ? "cycle-learning-store-item-selected"
+                          : ""
+                      }`}
+                      onClick={() => setLearningCandidate(candidate)}
+                    >
+                      <span className="cycle-learning-store-marker">✦</span>
+                      <span className="cycle-learning-store-summary">
+                        <strong>{candidate.title}</strong>
+                        <small>
+                          {candidate.sourceCycleIds.length} CYCLES · {candidate.evidenceKeys.length} EVIDENCE · {candidate.status === "promoted" ? "PROMOTED" : "STAGED"} · {new Date(candidate.createdAt).toLocaleTimeString()}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="cycle-learning-store-note">
+                STAGED KNOWLEDGE · PROMOTION TO SEMANTIC MEMORY REMAINS EXPLICIT
+              </div>
+            </section>
+
+            <section className="panel result-panel">
+              <div className="panel-header">
+                <span>RESULT</span>
+              </div>
+
+              <div className="result-content">
+                <div className="result-icon">
+                  {presence.state === "failed"
+                    ? "!"
+                    : "✓"}
+                </div>
+
+                <div>
+                  <div className="result-title">
+                    {resultTitle}
+                  </div>
+
+                  <p>
+                    {presence.execution?.result
+                      ? "Execution completed."
+                      : executionStatus ===
+                          "running"
+                        ? "NEXUS is executing the requested action."
+                        : verificationMessage}
+                  </p>
+                </div>
+              </div>
+
+              <div className="verification-badge">
+                <span>
+                  {verificationStatus ===
+                  "verified"
+                    ? "✓"
+                    : "•"}
+                </span>
+
+                {verificationStatus
+                  .replaceAll("_", " ")
+                  .toUpperCase()}
+              </div>
+            </section>
+          </div>
+
+          <form
+            className="command-bar"
+            onSubmit={executeCommand}
+          >
+            <div className="command-prefix">
+              NEXUS
+            </div>
+
+            <input
+              type="text"
+              placeholder={
+                isSubmitting
+                  ? "NEXUS está ejecutando..."
+                  : "Escribí una solicitud..."
+              }
+              aria-label="NEXUS request"
+              value={command}
+              onChange={(event) =>
+                setCommand(event.target.value)
+              }
+              disabled={isSubmitting}
+            />
+
+            <button
+              type="submit"
+              className="command-button"
+              aria-label="Send request"
+              disabled={
+                isSubmitting ||
+                command.trim().length === 0
+              }
+            >
+              {isSubmitting ? "…" : "↑"}
+            </button>
+          </form>
+
+          {commandError && (
+            <div
+              role="alert"
+              className="command-error"
+            >
+              {commandError}
+            </div>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+export default App;
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

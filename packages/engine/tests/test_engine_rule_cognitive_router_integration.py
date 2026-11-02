@@ -91,3 +91,24 @@ async def test_engine_rule_capability_uses_assistant_context():
 
     assert cognitive_result.rules == (rule,)
     assert cognitive_result.metadata["count"] == 1
+
+        # La consulta debe producir una respuesta final útil.
+    assert result.success is True
+    assert result.output["operation"] == "rules.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.output["rules"] == [
+        {
+            "id": rule.id,
+            "name": rule.name,
+            "description": rule.description,
+            "status": "active",
+        }
+    ]
+
+    response = result.metadata["response"]
+    assert rule.name in response
+    assert rule.description in response
+    assert "active" in response
+
+    # La capability ya resolvió la consulta: Runtime no debe ejecutarla.
+    runtime.execute.assert_not_awaited()

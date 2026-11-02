@@ -5,6 +5,8 @@ import pytest
 from engine.engine import Engine
 from planner.intent import Intent
 from runtime.execution_result import ExecutionResult
+from documents.cognitive import DocumentCognitiveResult
+from documents.query import DocumentQueryResult
 
 
 @pytest.mark.asyncio
@@ -37,7 +39,33 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
     invocation.operation = "find_relevant"
     invocation.parameters = {}
 
-    cognitive_result = MagicMock()
+    document_one = MagicMock()
+    document_one.name = "manual.pdf"
+    document_one.mime_type = "application/pdf"
+    document_one.description = "Manual de usuario"
+    document_one.source = "local"
+
+    document_two = MagicMock()
+    document_two.name = "guia.pdf"
+    document_two.mime_type = "application/pdf"
+    document_two.description = "Guía de referencia"
+    document_two.source = "local"
+
+    query_result = DocumentQueryResult.from_documents(
+        (document_one, document_two),
+        total=2,
+        offset=0,
+        limit=10,
+    )
+
+    cognitive_result = DocumentCognitiveResult(
+        query=query_result,
+        documents=(document_one, document_two),
+        metadata={
+            "operation": "find_relevant",
+            "count": 2,
+        },
+    )
 
     cognitive_summary = {
         "operation": "documents.find_relevant",
@@ -75,7 +103,7 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
         return_value=decision,
     )
 
-    await engine.execute("busca el manual")
+    result = await engine.execute("busca el manual")
 
     decision_context = (
         engine.decision_engine.decide.call_args.kwargs["context"]
@@ -85,4 +113,10 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
     assert decision.requires_execution is True
     assert decision.selected_action == "documents.find_relevant"
 
-    runtime.execute.assert_awaited_once()
+    runtime.execute.assert_not_awaited()
+
+    assert result.success is True
+    assert result.output["operation"] == "documents.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.metadata["response"]
+    runtime.execute.assert_not_awaited()

@@ -1,0 +1,1698 @@
+﻿
+================================================================================
+ARCHIVO: packages\security\src\security\assignments.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.models import Actor
+from security.roles import Role
+
+
+@dataclass(frozen=True, slots=True)
+class ActorRoleAssignment:
+    """
+    Asociación entre un actor y un rol de seguridad.
+    """
+
+    actor: Actor
+    role: Role
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\authorization.py
+================================================================================
+
+from __future__ import annotations
+
+from security.assignment_store import AssignmentStore
+from security.models import Actor
+from security.permissions import Permission
+
+
+class AuthorizationService:
+    """
+    Evalúa los permisos efectivos de un actor mediante sus roles.
+
+    Política: denegación por defecto.
+    Consulta las asignaciones actuales en cada autorización.
+    """
+
+    def __init__(self, assignment_store: AssignmentStore) -> None:
+        self._assignment_store = assignment_store
+
+    def is_allowed(
+        self,
+        actor: Actor,
+        permission: Permission,
+    ) -> bool:
+        for assignment in self._assignment_store.list():
+            assigned_actor = assignment.actor
+
+            same_identity = (
+                assigned_actor.id == actor.id
+                and assigned_actor.actor_type == actor.actor_type
+            )
+
+            if (
+                same_identity
+                and assignment.role.has_permission(permission)
+            ):
+                return True
+
+        return False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class ActorType(StrEnum):
+    USER = "user"
+    SYSTEM = "system"
+    SERVICE = "service"
+
+
+@dataclass(frozen=True, slots=True)
+class Actor:
+    """
+    Identidad que realiza una operación dentro de NEXUS.
+
+    Security no decide permisos aquí.
+    Este modelo solamente representa quién ejecuta la acción.
+    """
+
+    id: str
+    actor_type: ActorType
+    name: str | None = None
+
+    @classmethod
+    def user(
+        cls,
+        actor_id: str,
+        *,
+        name: str | None = None,
+    ) -> Actor:
+        return cls(
+            id=actor_id,
+            actor_type=ActorType.USER,
+            name=name,
+        )
+
+    @classmethod
+    def system(
+        cls,
+        actor_id: str = "system",
+        *,
+        name: str | None = None,
+    ) -> Actor:
+        return cls(
+            id=actor_id,
+            actor_type=ActorType.SYSTEM,
+            name=name,
+        )
+
+    @classmethod
+    def service(
+        cls,
+        actor_id: str,
+        *,
+        name: str | None = None,
+    ) -> Actor:
+        return cls(
+            id=actor_id,
+            actor_type=ActorType.SERVICE,
+            name=name,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\permissions.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import StrEnum
+
+
+class PermissionAction(StrEnum):
+    READ = "read"
+    CREATE = "create"
+    UPDATE = "update"
+    DELETE = "delete"
+    EXECUTE = "execute"
+
+
+@dataclass(frozen=True, slots=True)
+class Permission:
+    """
+    Permiso elemental sobre un recurso de NEXUS.
+    """
+
+    resource: str
+    action: PermissionAction
+
+    @property
+    def key(self) -> str:
+        return f"{self.resource}:{self.action.value}"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\role_capability.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.role_store import RoleStore
+from security.roles import Role
+
+
+@dataclass(slots=True)
+class RoleCapability:
+    """Operaciones disponibles para gestionar roles de seguridad."""
+
+    store: RoleStore
+
+    def create(self, role: Role) -> Role:
+        self.store.add(role)
+        return role
+
+    def get(self, role_id: str) -> Role | None:
+        return self.store.get(role_id)
+
+    def list(self) -> tuple[Role, ...]:
+        return self.store.list()
+
+    def update(self, role: Role) -> Role:
+        self.store.update(role)
+        return role
+
+    def remove(self, role_id: str) -> bool:
+        return self.store.remove(role_id)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\role_store.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from security.roles import Role
+
+
+@dataclass(slots=True)
+class RoleStore:
+    """Almacena roles de seguridad en memoria, identificados por ID."""
+
+    _roles: dict[str, Role] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+    )
+
+    def add(self, role: Role) -> None:
+        if role.id in self._roles:
+            raise ValueError(f"Role already exists: {role.id}")
+
+        self._roles[role.id] = role
+
+    def get(self, role_id: str) -> Role | None:
+        return self._roles.get(role_id)
+
+    def list(self) -> tuple[Role, ...]:
+        return tuple(self._roles.values())
+
+    def remove(self, role_id: str) -> bool:
+        return self._roles.pop(role_id, None) is not None
+
+    def update(self, role: Role) -> None:
+        if role.id not in self._roles:
+            raise KeyError(f"Role not found: {role.id}")
+
+        self._roles[role.id] = role
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\roles.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from security.permissions import Permission
+
+
+@dataclass(frozen=True, slots=True)
+class Role:
+    """
+    Conjunto de permisos asignado a un actor.
+    """
+
+    id: str
+    name: str
+    permissions: frozenset[Permission]
+
+    def has_permission(
+        self,
+        permission: Permission,
+    ) -> bool:
+        return permission in self.permissions
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\sqlite_security_store.py
+================================================================================
+
+
+from __future__ import annotations
+
+import sqlite3
+import uuid
+from pathlib import Path
+
+from security.assignments import ActorRoleAssignment
+from security.models import Actor, ActorType
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+class SQLiteSecurityStore:
+    """Persistencia local de roles y asignaciones de Security."""
+
+    def __init__(self, database_path: str | Path) -> None:
+        requested_path = str(database_path)
+        self._uri = requested_path == ":memory:"
+        self._anchor: sqlite3.Connection | None = None
+
+        if self._uri:
+            self._database_path = (
+                f"file:nexus_security_{uuid.uuid4().hex}"
+                "?mode=memory&cache=shared"
+            )
+            # Mantiene viva la base compartida mientras exista el store.
+            self._anchor = sqlite3.connect(
+                self._database_path,
+                uri=True,
+            )
+        else:
+            self._database_path = requested_path
+            Path(self._database_path).parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(
+            self._database_path,
+            uri=self._uri,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as connection:
+            connection.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS security_roles (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS security_role_permissions (
+                    role_id TEXT NOT NULL,
+                    resource TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    PRIMARY KEY (role_id, resource, action),
+                    FOREIGN KEY (role_id)
+                        REFERENCES security_roles(id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS security_assignments (
+                    actor_id TEXT NOT NULL,
+                    actor_type TEXT NOT NULL,
+                    actor_name TEXT,
+                    role_id TEXT NOT NULL,
+                    PRIMARY KEY (actor_id, actor_type, role_id),
+                    FOREIGN KEY (role_id)
+                        REFERENCES security_roles(id)
+                        ON DELETE CASCADE
+                );
+                """
+            )
+
+    def save_role(self, role: Role) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO security_roles (id, name)
+                VALUES (?, ?)
+                ON CONFLICT(id) DO UPDATE SET name = excluded.name
+                """,
+                (role.id, role.name),
+            )
+
+            connection.execute(
+                """
+                DELETE FROM security_role_permissions
+                WHERE role_id = ?
+                """,
+                (role.id,),
+            )
+
+            connection.executemany(
+                """
+                INSERT INTO security_role_permissions
+                    (role_id, resource, action)
+                VALUES (?, ?, ?)
+                """,
+                [
+                    (role.id, permission.resource, permission.action.value)
+                    for permission in sorted(
+                        role.permissions,
+                        key=lambda item: (
+                            item.resource,
+                            item.action.value,
+                        ),
+                    )
+                ],
+            )
+
+    def get_role(self, role_id: str) -> Role | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT id, name FROM security_roles WHERE id = ?",
+                (role_id,),
+            ).fetchone()
+
+            if row is None:
+                return None
+
+            permission_rows = connection.execute(
+                """
+                SELECT resource, action
+                FROM security_role_permissions
+                WHERE role_id = ?
+                ORDER BY resource, action
+                """,
+                (role_id,),
+            ).fetchall()
+
+        permissions = frozenset(
+            Permission(
+                resource=item["resource"],
+                action=PermissionAction(item["action"]),
+            )
+            for item in permission_rows
+        )
+
+        return Role(
+            id=row["id"],
+            name=row["name"],
+            permissions=permissions,
+        )
+
+    def list_roles(self) -> tuple[Role, ...]:
+        with self._connect() as connection:
+            role_ids = connection.execute(
+                "SELECT id FROM security_roles ORDER BY rowid"
+            ).fetchall()
+
+        roles = (self.get_role(row["id"]) for row in role_ids)
+        return tuple(role for role in roles if role is not None)
+
+    def delete_role(self, role_id: str) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM security_roles WHERE id = ?",
+                (role_id,),
+            )
+            return cursor.rowcount > 0
+
+    def save_assignment(
+        self,
+        assignment: ActorRoleAssignment,
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO security_assignments
+                    (actor_id, actor_type, actor_name, role_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    assignment.actor.id,
+                    assignment.actor.actor_type.value,
+                    assignment.actor.name,
+                    assignment.role.id,
+                ),
+            )
+
+    def list_assignments(self) -> tuple[ActorRoleAssignment, ...]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT actor_id, actor_type, actor_name, role_id
+                FROM security_assignments
+                ORDER BY rowid
+                """
+            ).fetchall()
+
+        assignments: list[ActorRoleAssignment] = []
+
+        for row in rows:
+            role = self.get_role(row["role_id"])
+            if role is None:
+                continue
+
+            assignments.append(
+                ActorRoleAssignment(
+                    actor=Actor(
+                        id=row["actor_id"],
+                        actor_type=ActorType(row["actor_type"]),
+                        name=row["actor_name"],
+                    ),
+                    role=role,
+                )
+            )
+
+        return tuple(assignments)
+
+    def delete_assignment(
+        self,
+        assignment: ActorRoleAssignment,
+    ) -> bool:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM security_assignments
+                WHERE actor_id = ?
+                  AND actor_type = ?
+                  AND role_id = ?
+                """,
+                (
+                    assignment.actor.id,
+                    assignment.actor.actor_type.value,
+                    assignment.role.id,
+                ),
+            )
+            return cursor.rowcount > 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\src\security\sqlite_stores.py
+================================================================================
+
+
+from __future__ import annotations
+
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.role_store import RoleStore
+from security.roles import Role
+from security.sqlite_security_store import SQLiteSecurityStore
+
+
+class SQLiteRoleStore:
+    """Implementa el contrato de RoleStore con persistencia SQLite."""
+
+    def __init__(self, store: SQLiteSecurityStore) -> None:
+        self._store = store
+
+    def add(self, role: Role) -> None:
+        if self._store.get_role(role.id) is not None:
+            raise ValueError(f"Role already exists: {role.id}")
+
+        self._store.save_role(role)
+
+    def get(self, role_id: str) -> Role | None:
+        return self._store.get_role(role_id)
+
+    def list(self) -> tuple[Role, ...]:
+        return self._store.list_roles()
+
+    def remove(self, role_id: str) -> bool:
+        return self._store.delete_role(role_id)
+
+    def update(self, role: Role) -> None:
+        if self._store.get_role(role.id) is None:
+            raise KeyError(role.id)
+
+        self._store.save_role(role)
+
+
+class SQLiteAssignmentStore:
+    """Implementa el contrato de AssignmentStore con persistencia SQLite."""
+
+    def __init__(self, store: SQLiteSecurityStore) -> None:
+        self._store = store
+
+    def add(self, assignment: ActorRoleAssignment) -> None:
+        # Una asignación debe referenciar un rol persistido.
+        # Si ya existe, conservamos su definición canónica.
+        if self._store.get_role(assignment.role.id) is None:
+            self._store.save_role(assignment.role)
+
+        self._store.save_assignment(assignment)
+
+    def list(self) -> tuple[ActorRoleAssignment, ...]:
+        return self._store.list_assignments()
+
+    def remove(self, assignment: ActorRoleAssignment) -> bool:
+        return self._store.delete_assignment(assignment)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_action_authorization.py
+================================================================================
+
+from security.action_authorization import ActionAuthorization
+from security.action_policy import ActionPolicy
+from security.action_policy_store import ActionPolicyStore
+from security.assignment_capability import AssignmentCapability
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.authorization import AuthorizationService
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+def make_service() -> tuple[ActionAuthorization, Actor]:
+    actor = Actor.user("user-1")
+    permission = Permission("system", PermissionAction.EXECUTE)
+
+    role = Role(
+        id="role-1",
+        name="Ejecutor del sistema",
+        permissions=frozenset({permission}),
+    )
+
+    assignment_store = AssignmentStore()
+    AssignmentCapability(assignment_store).assign(
+        ActorRoleAssignment(actor=actor, role=role)
+    )
+
+    policy_store = ActionPolicyStore()
+    policy_store.register(
+        ActionPolicy(
+            action_name="system.open_app",
+            permission=permission,
+        )
+    )
+
+    authorization = AuthorizationService(assignment_store)
+
+    return ActionAuthorization(
+        policy_store=policy_store,
+        authorization=authorization,
+    ), actor
+
+
+def test_authorize_action_with_required_permission() -> None:
+    service, actor = make_service()
+
+    assert service.is_allowed(actor, "system.open_app") is True
+
+
+def test_deny_action_without_policy() -> None:
+    service, actor = make_service()
+
+    assert service.is_allowed(actor, "system.close_app") is False
+
+
+def test_deny_action_without_required_permission() -> None:
+    service, _ = make_service()
+    actor_without_role = Actor.user("user-2")
+
+    assert service.is_allowed(
+        actor_without_role,
+        "system.open_app",
+    ) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_action_policy.py
+================================================================================
+
+from security.action_policy import ActionPolicy
+from security.permissions import Permission, PermissionAction
+
+
+def test_action_policy_declares_required_permission() -> None:
+    policy = ActionPolicy(
+        action_name="system.open_app",
+        permission=Permission(
+            resource="system",
+            action=PermissionAction.EXECUTE,
+        ),
+    )
+
+    assert policy.action_name == "system.open_app"
+    assert policy.permission.key == "system:execute"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_action_policy_store.py
+================================================================================
+
+import pytest
+
+from security.action_policy import ActionPolicy
+from security.action_policy_store import ActionPolicyStore
+from security.permissions import Permission, PermissionAction
+
+
+def make_policy(
+    action_name: str = "system.open_app",
+) -> ActionPolicy:
+    return ActionPolicy(
+        action_name=action_name,
+        permission=Permission(
+            resource="system",
+            action=PermissionAction.EXECUTE,
+        ),
+    )
+
+
+def test_register_and_get_policy() -> None:
+    store = ActionPolicyStore()
+    policy = make_policy()
+
+    store.register(policy)
+
+    assert store.get(policy.action_name) == policy
+
+
+def test_reject_duplicate_policy() -> None:
+    store = ActionPolicyStore()
+    store.register(make_policy())
+
+    with pytest.raises(ValueError, match="already registered"):
+        store.register(make_policy())
+
+
+def test_list_policies() -> None:
+    store = ActionPolicyStore()
+    first = make_policy()
+    second = make_policy("system.close_app")
+
+    store.register(first)
+    store.register(second)
+
+    assert store.list() == (first, second)
+
+
+def test_remove_policy() -> None:
+    store = ActionPolicyStore()
+    store.register(make_policy())
+
+    assert store.remove("system.open_app") is True
+    assert store.get("system.open_app") is None
+
+
+def test_remove_missing_policy() -> None:
+    store = ActionPolicyStore()
+
+    assert store.remove("inexistente") is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_assignment_capability.py
+================================================================================
+
+from security.assignment_capability import AssignmentCapability
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+def make_assignment() -> ActorRoleAssignment:
+    actor = Actor.user("user-1")
+    permission = Permission("processes", PermissionAction.READ)
+    role = Role(
+        id="role-1",
+        name="Lector de procesos",
+        permissions=frozenset({permission}),
+    )
+    return ActorRoleAssignment(actor=actor, role=role)
+
+
+def test_assign_and_list_roles() -> None:
+    capability = AssignmentCapability(AssignmentStore())
+    assignment = make_assignment()
+
+    capability.assign(assignment)
+
+    assert capability.list() == (assignment,)
+
+
+def test_assign_duplicate_is_idempotent() -> None:
+    capability = AssignmentCapability(AssignmentStore())
+    assignment = make_assignment()
+
+    capability.assign(assignment)
+    capability.assign(assignment)
+
+    assert capability.list() == (assignment,)
+
+
+def test_revoke_assignment() -> None:
+    capability = AssignmentCapability(AssignmentStore())
+    assignment = make_assignment()
+    capability.assign(assignment)
+
+    assert capability.revoke(assignment) is True
+    assert capability.list() == ()
+
+
+def test_revoke_missing_assignment() -> None:
+    capability = AssignmentCapability(AssignmentStore())
+
+    assert capability.revoke(make_assignment()) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_assignment_store.py
+================================================================================
+
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+def make_assignment() -> ActorRoleAssignment:
+    actor = Actor.user("user-1")
+    permission = Permission("processes", PermissionAction.READ)
+    role = Role(
+        id="role-1",
+        name="Lector de procesos",
+        permissions=frozenset({permission}),
+    )
+    return ActorRoleAssignment(actor=actor, role=role)
+
+
+def test_add_and_list_assignment() -> None:
+    store = AssignmentStore()
+    assignment = make_assignment()
+
+    store.add(assignment)
+
+    assert store.list() == (assignment,)
+
+
+def test_duplicate_assignment_is_not_added() -> None:
+    store = AssignmentStore()
+    assignment = make_assignment()
+
+    store.add(assignment)
+    store.add(assignment)
+
+    assert store.list() == (assignment,)
+
+
+def test_remove_existing_assignment() -> None:
+    store = AssignmentStore()
+    assignment = make_assignment()
+    store.add(assignment)
+
+    assert store.remove(assignment) is True
+    assert store.list() == ()
+
+
+def test_remove_missing_assignment() -> None:
+    store = AssignmentStore()
+
+    assert store.remove(make_assignment()) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_assignments.py
+================================================================================
+
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.assignments import ActorRoleAssignment
+from security.roles import Role
+
+
+def test_assign_role_to_actor() -> None:
+    actor = Actor.user("user-1")
+
+    permission = Permission(
+        resource="processes",
+        action=PermissionAction.READ,
+    )
+
+    role = Role(
+        id="role-1",
+        name="Procesos - lectura",
+        permissions=frozenset({permission}),
+    )
+
+    assignment = ActorRoleAssignment(
+        actor=actor,
+        role=role,
+    )
+
+    assert assignment.actor == actor
+    assert assignment.role == role
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_authorization.py
+================================================================================
+
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.authorization import AuthorizationService
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+def make_role(permission: Permission) -> Role:
+    return Role(
+        id="role-1",
+        name="Rol de prueba",
+        permissions=frozenset({permission}),
+    )
+
+
+def test_authorize_actor_with_assigned_permission() -> None:
+    actor = Actor.user("user-1")
+    permission = Permission("processes", PermissionAction.READ)
+    store = AssignmentStore()
+    store.add(ActorRoleAssignment(actor, make_role(permission)))
+
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(actor, permission) is True
+
+
+def test_deny_permission_not_granted() -> None:
+    actor = Actor.user("user-1")
+    read_permission = Permission("processes", PermissionAction.READ)
+    execute_permission = Permission("processes", PermissionAction.EXECUTE)
+    store = AssignmentStore()
+    store.add(ActorRoleAssignment(actor, make_role(read_permission)))
+
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(actor, execute_permission) is False
+
+
+def test_deny_actor_without_assignment() -> None:
+    actor = Actor.user("user-1")
+    another_actor = Actor.user("user-2")
+    permission = Permission("rules", PermissionAction.READ)
+    store = AssignmentStore()
+    store.add(
+        ActorRoleAssignment(another_actor, make_role(permission))
+    )
+
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(actor, permission) is False
+
+
+def test_authorization_is_independent_of_actor_display_name() -> None:
+    assigned_actor = Actor.user("user-1", name="Nombre anterior")
+    current_actor = Actor.user("user-1", name="Nombre actualizado")
+    permission = Permission("processes", PermissionAction.READ)
+    store = AssignmentStore()
+    store.add(
+        ActorRoleAssignment(assigned_actor, make_role(permission))
+    )
+
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(current_actor, permission) is True
+
+
+def test_different_actor_types_do_not_share_permissions() -> None:
+    assigned_actor = Actor.user("shared-id")
+    service_actor = Actor.service("shared-id")
+    permission = Permission("processes", PermissionAction.READ)
+    store = AssignmentStore()
+    store.add(
+        ActorRoleAssignment(assigned_actor, make_role(permission))
+    )
+
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(service_actor, permission) is False
+
+
+def test_revoked_assignment_denies_permission_immediately() -> None:
+    actor = Actor.user("user-1")
+    permission = Permission("processes", PermissionAction.READ)
+    assignment = ActorRoleAssignment(actor, make_role(permission))
+    store = AssignmentStore()
+    store.add(assignment)
+    service = AuthorizationService(store)
+
+    assert service.is_allowed(actor, permission) is True
+
+    store.remove(assignment)
+
+    assert service.is_allowed(actor, permission) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_models.py
+================================================================================
+
+from security.models import Actor, ActorType
+
+
+def test_create_user_actor() -> None:
+    actor = Actor.user(
+        "user-1",
+        name="Usuario de prueba",
+    )
+
+    assert actor.id == "user-1"
+    assert actor.actor_type == ActorType.USER
+    assert actor.name == "Usuario de prueba"
+
+
+def test_create_system_actor() -> None:
+    actor = Actor.system()
+
+    assert actor.id == "system"
+    assert actor.actor_type == ActorType.SYSTEM
+
+
+def test_create_service_actor() -> None:
+    actor = Actor.service(
+        "service-1",
+        name="Servicio de prueba",
+    )
+
+    assert actor.id == "service-1"
+    assert actor.actor_type == ActorType.SERVICE
+    assert actor.name == "Servicio de prueba"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_permissions.py
+================================================================================
+
+from security.permissions import Permission, PermissionAction
+
+
+def test_create_permission() -> None:
+    permission = Permission(
+        resource="processes",
+        action=PermissionAction.READ,
+    )
+
+    assert permission.resource == "processes"
+    assert permission.action == PermissionAction.READ
+    assert permission.key == "processes:read"
+
+
+def test_permission_key_is_stable() -> None:
+    permission = Permission(
+        resource="rules",
+        action=PermissionAction.EXECUTE,
+    )
+
+    assert permission.key == "rules:execute"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_role_capability.py
+================================================================================
+
+import pytest
+
+from security.permissions import Permission, PermissionAction
+from security.role_capability import RoleCapability
+from security.role_store import RoleStore
+from security.roles import Role
+
+
+def make_role(
+    role_id: str = "role-1",
+    name: str = "Lector de procesos",
+) -> Role:
+    permission = Permission("processes", PermissionAction.READ)
+    return Role(
+        id=role_id,
+        name=name,
+        permissions=frozenset({permission}),
+    )
+
+
+def test_create_and_get_role() -> None:
+    capability = RoleCapability(RoleStore())
+    role = make_role()
+
+    assert capability.create(role) == role
+    assert capability.get(role.id) == role
+
+
+def test_list_roles() -> None:
+    capability = RoleCapability(RoleStore())
+    first = make_role()
+    second = make_role("role-2", "Administrador")
+
+    capability.create(first)
+    capability.create(second)
+
+    assert capability.list() == (first, second)
+
+
+def test_update_role() -> None:
+    capability = RoleCapability(RoleStore())
+    capability.create(make_role())
+
+    updated = make_role(name="Lector actualizado")
+
+    assert capability.update(updated) == updated
+    assert capability.get("role-1") == updated
+
+
+def test_update_missing_role_raises() -> None:
+    capability = RoleCapability(RoleStore())
+
+    with pytest.raises(KeyError, match="Role not found"):
+        capability.update(make_role())
+
+
+def test_remove_role() -> None:
+    capability = RoleCapability(RoleStore())
+    capability.create(make_role())
+
+    assert capability.remove("role-1") is True
+    assert capability.get("role-1") is None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_role_store.py
+================================================================================
+
+import pytest
+
+from security.permissions import Permission, PermissionAction
+from security.role_store import RoleStore
+from security.roles import Role
+
+
+def make_role(
+    role_id: str = "role-1",
+    name: str = "Lector de procesos",
+) -> Role:
+    permission = Permission("processes", PermissionAction.READ)
+    return Role(
+        id=role_id,
+        name=name,
+        permissions=frozenset({permission}),
+    )
+
+
+def test_add_and_get_role() -> None:
+    store = RoleStore()
+    role = make_role()
+
+    store.add(role)
+
+    assert store.get(role.id) == role
+
+
+def test_reject_duplicate_role_id() -> None:
+    store = RoleStore()
+    store.add(make_role())
+
+    with pytest.raises(ValueError, match="Role already exists"):
+        store.add(make_role())
+
+
+def test_list_roles() -> None:
+    store = RoleStore()
+    first = make_role("role-1")
+    second = make_role("role-2", "Administrador")
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == (first, second)
+
+
+def test_update_existing_role() -> None:
+    store = RoleStore()
+    store.add(make_role())
+
+    updated = make_role(name="Lector actualizado")
+    store.update(updated)
+
+    assert store.get("role-1") == updated
+
+
+def test_update_missing_role_raises() -> None:
+    store = RoleStore()
+
+    with pytest.raises(KeyError, match="Role not found"):
+        store.update(make_role())
+
+
+def test_remove_role() -> None:
+    store = RoleStore()
+    store.add(make_role())
+
+    assert store.remove("role-1") is True
+    assert store.get("role-1") is None
+
+
+def test_remove_missing_role() -> None:
+    store = RoleStore()
+
+    assert store.remove("inexistente") is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_roles.py
+================================================================================
+
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+
+
+def test_role_contains_permission() -> None:
+    permission = Permission(
+        resource="processes",
+        action=PermissionAction.READ,
+    )
+
+    role = Role(
+        id="role-1",
+        name="Procesos - lectura",
+        permissions=frozenset({permission}),
+    )
+
+    assert role.has_permission(permission) is True
+
+
+def test_role_rejects_missing_permission() -> None:
+    read_permission = Permission(
+        resource="processes",
+        action=PermissionAction.READ,
+    )
+
+    execute_permission = Permission(
+        resource="processes",
+        action=PermissionAction.EXECUTE,
+    )
+
+    role = Role(
+        id="role-1",
+        name="Procesos - lectura",
+        permissions=frozenset({read_permission}),
+    )
+
+    assert role.has_permission(execute_permission) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_sqlite_security_store.py
+================================================================================
+
+
+from security.assignments import ActorRoleAssignment
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.roles import Role
+from security.sqlite_security_store import SQLiteSecurityStore
+
+
+def make_role() -> Role:
+    return Role(
+        id="operator",
+        name="Operador local",
+        permissions=frozenset(
+            {
+                Permission("system.open_app", PermissionAction.EXECUTE),
+                Permission("processes", PermissionAction.READ),
+            }
+        ),
+    )
+
+
+def test_role_survives_reopening_database(tmp_path):
+    database = tmp_path / "security.db"
+    role = make_role()
+
+    SQLiteSecurityStore(database).save_role(role)
+
+    reopened = SQLiteSecurityStore(database)
+
+    assert reopened.get_role(role.id) == role
+
+
+def test_assignment_survives_reopening_database(tmp_path):
+    database = tmp_path / "security.db"
+    role = make_role()
+    actor = Actor.user("user-123", name="Usuario de prueba")
+    assignment = ActorRoleAssignment(actor=actor, role=role)
+
+    store = SQLiteSecurityStore(database)
+    store.save_role(role)
+    store.save_assignment(assignment)
+
+    reopened = SQLiteSecurityStore(database)
+
+    assert reopened.list_assignments() == (assignment,)
+
+
+def test_deleting_role_removes_its_assignments(tmp_path):
+    store = SQLiteSecurityStore(tmp_path / "security.db")
+    role = make_role()
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123"),
+        role=role,
+    )
+
+    store.save_role(role)
+    store.save_assignment(assignment)
+
+    assert store.delete_role(role.id) is True
+    assert store.list_assignments() == ()
+
+
+def test_duplicate_assignment_is_ignored(tmp_path):
+    store = SQLiteSecurityStore(tmp_path / "security.db")
+    role = make_role()
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123"),
+        role=role,
+    )
+
+    store.save_role(role)
+    store.save_assignment(assignment)
+    store.save_assignment(assignment)
+
+    assert store.list_assignments() == (assignment,)
+
+
+def test_delete_missing_assignment_returns_false(tmp_path):
+    store = SQLiteSecurityStore(tmp_path / "security.db")
+    role = make_role()
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123"),
+        role=role,
+    )
+
+    store.save_role(role)
+
+    assert store.delete_assignment(assignment) is False
+
+def test_in_memory_database_supports_multiple_operations():
+    store = SQLiteSecurityStore(":memory:")
+    role = make_role()
+
+    store.save_role(role)
+
+    assert store.get_role(role.id) == role
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\security\tests\test_sqlite_stores.py
+================================================================================
+
+
+import pytest
+
+from security.assignment_store import AssignmentStore
+from security.assignments import ActorRoleAssignment
+from security.models import Actor
+from security.permissions import Permission, PermissionAction
+from security.role_store import RoleStore
+from security.roles import Role
+from security.sqlite_security_store import SQLiteSecurityStore
+from security.sqlite_stores import (
+    SQLiteAssignmentStore,
+    SQLiteRoleStore,
+)
+from security.authorization import AuthorizationService
+
+
+def make_role(
+    role_id: str = "operator",
+    name: str = "Operador",
+) -> Role:
+    return Role(
+        id=role_id,
+        name=name,
+        permissions=frozenset(
+            {
+                Permission("processes", PermissionAction.READ),
+            }
+        ),
+    )
+
+
+def test_sqlite_role_store_preserves_role_store_contract(tmp_path):
+    database = SQLiteSecurityStore(tmp_path / "security.db")
+    roles = SQLiteRoleStore(database)
+    role = make_role()
+
+    roles.add(role)
+
+    assert roles.get(role.id) == role
+    assert roles.list() == (role,)
+    assert roles.remove(role.id) is True
+    assert roles.get(role.id) is None
+    assert roles.remove(role.id) is False
+
+
+def test_sqlite_role_store_rejects_duplicate_roles(tmp_path):
+    roles = SQLiteRoleStore(
+        SQLiteSecurityStore(tmp_path / "security.db")
+    )
+    role = make_role()
+    roles.add(role)
+
+    with pytest.raises(ValueError):
+        roles.add(role)
+
+
+def test_sqlite_role_store_update_requires_existing_role(tmp_path):
+    roles = SQLiteRoleStore(
+        SQLiteSecurityStore(tmp_path / "security.db")
+    )
+
+    with pytest.raises(KeyError):
+        roles.update(make_role())
+
+
+def test_sqlite_role_store_persists_updates(tmp_path):
+    database_path = tmp_path / "security.db"
+    roles = SQLiteRoleStore(SQLiteSecurityStore(database_path))
+    original = make_role()
+    updated = Role(
+        id=original.id,
+        name="Operador actualizado",
+        permissions=frozenset(
+            {
+                Permission("processes", PermissionAction.READ),
+                Permission("system", PermissionAction.EXECUTE),
+            }
+        ),
+    )
+
+    roles.add(original)
+    roles.update(updated)
+
+    reopened_roles = SQLiteRoleStore(
+        SQLiteSecurityStore(database_path)
+    )
+    assert reopened_roles.get(updated.id) == updated
+
+
+def test_sqlite_assignment_store_persists_assignments(tmp_path):
+    database_path = tmp_path / "security.db"
+    database = SQLiteSecurityStore(database_path)
+    roles = SQLiteRoleStore(database)
+    assignments = SQLiteAssignmentStore(database)
+
+    role = make_role()
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123", name="Usuario de prueba"),
+        role=role,
+    )
+    roles.add(role)
+    assignments.add(assignment)
+
+    reopened_database = SQLiteSecurityStore(database_path)
+    reopened_assignments = SQLiteAssignmentStore(reopened_database)
+
+    assert reopened_assignments.list() == (assignment,)
+
+
+def test_sqlite_assignment_store_add_is_idempotent(tmp_path):
+    database = SQLiteSecurityStore(tmp_path / "security.db")
+    assignments = SQLiteAssignmentStore(database)
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123"),
+        role=make_role(),
+    )
+
+    assignments.add(assignment)
+    assignments.add(assignment)
+
+    assert assignments.list() == (assignment,)
+
+
+def test_sqlite_assignment_store_removes_assignment(tmp_path):
+    database = SQLiteSecurityStore(tmp_path / "security.db")
+    assignments = SQLiteAssignmentStore(database)
+    assignment = ActorRoleAssignment(
+        actor=Actor.user("user-123"),
+        role=make_role(),
+    )
+
+    assignments.add(assignment)
+
+    assert assignments.remove(assignment) is True
+    assert assignments.list() == ()
+    assert assignments.remove(assignment) is False
+
+
+def test_existing_memory_stores_remain_available():
+    assert RoleStore is not SQLiteRoleStore
+    assert AssignmentStore is not SQLiteAssignmentStore
+
+
+def test_authorization_allows_persisted_permission_after_reopening_database(
+    tmp_path,
+):
+    database_path = tmp_path / "security.db"
+    actor = Actor.user("user-123")
+    role = make_role()
+    assignment = ActorRoleAssignment(actor=actor, role=role)
+
+    initial_database = SQLiteSecurityStore(database_path)
+    SQLiteAssignmentStore(initial_database).add(assignment)
+
+    reopened_database = SQLiteSecurityStore(database_path)
+    authorization = AuthorizationService(
+        SQLiteAssignmentStore(reopened_database)
+    )
+
+    assert authorization.is_allowed(
+        actor,
+        Permission("processes", PermissionAction.READ),
+    ) is True
+
+
+def test_authorization_denies_actor_without_persisted_assignment(
+    tmp_path,
+):
+    database_path = tmp_path / "security.db"
+    assigned_actor = Actor.user("user-123")
+    other_actor = Actor.user("user-456")
+    role = make_role()
+
+    database = SQLiteSecurityStore(database_path)
+    SQLiteAssignmentStore(database).add(
+        ActorRoleAssignment(actor=assigned_actor, role=role)
+    )
+
+    reopened_database = SQLiteSecurityStore(database_path)
+    authorization = AuthorizationService(
+        SQLiteAssignmentStore(reopened_database)
+    )
+
+    assert authorization.is_allowed(
+        other_actor,
+        Permission("processes", PermissionAction.READ),
+    ) is False
+
+
+def test_authorization_denies_permission_not_granted_by_persisted_role(
+    tmp_path,
+):
+    database_path = tmp_path / "security.db"
+    actor = Actor.user("user-123")
+    role = make_role()
+
+    database = SQLiteSecurityStore(database_path)
+    SQLiteAssignmentStore(database).add(
+        ActorRoleAssignment(actor=actor, role=role)
+    )
+
+    reopened_database = SQLiteSecurityStore(database_path)
+    authorization = AuthorizationService(
+        SQLiteAssignmentStore(reopened_database)
+    )
+
+    assert authorization.is_allowed(
+        actor,
+        Permission("system.shutdown", PermissionAction.EXECUTE),
+    ) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\pyproject.toml
+================================================================================
+
+[project]
+name = "shared"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "diego", email = "dinsaurralde@yahoo.com.ar" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+shared = "shared:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\src\shared\__init__.py
+================================================================================
+
+"""
+Shared models used across NEXUS.
+"""
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

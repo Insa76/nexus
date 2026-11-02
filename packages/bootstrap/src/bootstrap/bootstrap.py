@@ -7,6 +7,7 @@ from pathlib import Path
 from core.kernel import Kernel
 
 from engine.engine import Engine
+from memory.semantic_memory import SemanticMemory
 
 from runtime.runtime import Runtime
 from runtime.executor import Executor
@@ -36,10 +37,13 @@ from security.sqlite_stores import (
 )
 
 from actions.open_app import OpenAppAction
+from actions.open_file import OpenFileAction
 
 from actions.set_volume import SetVolumeAction
 
 from actions.get_volume import GetVolumeAction
+
+from actions.get_time import GetTimeAction
 
 from actions.mute import MuteAction
 
@@ -259,6 +263,12 @@ def build_engine(
     )
 
     registry.register(
+        OpenFileAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
         CloseAppAction()
     )
 
@@ -281,6 +291,8 @@ def build_engine(
     registry.register(
         InspectCaptureAction()
     )
+
+    registry.register(GetTimeAction())
 
     #
     # Episodic Memory
@@ -587,9 +599,16 @@ def build_engine(
     # Engine
     #
 
+    semantic_memory_db_path = os.environ.get(
+        "NEXUS_SEMANTIC_MEMORY_DB_PATH",
+        str(Path.home() / ".nexus" / "semantic_memory.db"),
+    )
+    semantic_memory = SemanticMemory(db_path=semantic_memory_db_path)
+
     return Engine(
         runtime,
         intent_provider=intent_provider,
+        semantic_memory=semantic_memory,
         memory=memory,
         assistant_context=assistant_context,
         document_capability=document_capability,
@@ -733,53 +752,56 @@ async def _interactive_loop(
         print()
 
 
+
 async def _main_async() -> None:
     """
-    Inicializa NEXUS y mantiene una sesión
-    interactiva persistente.
+    Inicializa NEXUS, mantiene una sesión interactiva
+    persistente y gestiona el ciclo de vida de sus servicios.
     """
 
     print()
-
     print("=" * 50)
-
     print("          NEXUS Cognitive OS")
-
     print("=" * 50)
-
     print()
 
-    engine = build_engine()
+    engine, services, lifecycle = build_assistant_runtime()
 
     print("✓ Kernel")
-
     print("✓ Runtime")
-
     print("✓ Providers")
-
     print("✓ Actions")
-
     print("✓ Intent Providers")
-
     print("✓ Executor")
-
     print("✓ Engine")
-
+    print("✓ Reminder Store")
+    print("✓ Reminder Scheduler")
     print()
 
-    print("=" * 50)
+    try:
+        await lifecycle.start()
 
-    print("NEXUS READY")
+        print("=" * 50)
+        print("NEXUS READY")
+        print("=" * 50)
 
-    print("=" * 50)
+        await _interactive_loop(engine)
 
-    await _interactive_loop(
-        engine
-    )
+    finally:
+        await lifecycle.stop()
 
-    print()
+        close_semantic_memory = getattr(
+            engine.semantic_memory,
+            "close",
+            None,
+        )
 
-    print("NEXUS detenido.")
+        if callable(close_semantic_memory):
+            close_semantic_memory()
+
+        print()
+        print("NEXUS detenido.")
+
 
 
 def main() -> None:

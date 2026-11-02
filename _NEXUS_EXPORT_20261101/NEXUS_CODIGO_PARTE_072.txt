@@ -1,0 +1,1847 @@
+﻿
+================================================================================
+ARCHIVO: packages\providers\src\providers\local_provider.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from adapters.windows.app_launcher import (
+    WindowsAppLauncher,
+)
+from adapters.windows.file_opener import WindowsFileOpener
+
+from adapters.windows.process_manager import (
+    WindowsProcessManager,
+)
+
+from adapters.windows.screen_capture import (
+    WindowsScreenCapture,
+)
+
+from adapters.windows.volume_control import (
+    WindowsVolumeControl,
+)
+
+from providers.provider import ToolProvider
+from providers.tool import Tool
+
+
+class LocalProvider(ToolProvider):
+    """
+    Proveedor local de NEXUS.
+
+    Utiliza exclusivamente adapters del sistema operativo
+    para ejecutar herramientas locales.
+
+    El LocalProvider no conoce Actions y nunca debe
+    invocar Action.execute() ni Action.execute_local().
+
+    Flujo:
+
+        Action
+            ↓
+        ProviderManager
+            ↓
+        LocalProvider
+            ↓
+        Windows Adapter
+    """
+
+    name = "local"
+
+    def __init__(self) -> None:
+
+        self._launcher = WindowsAppLauncher()
+        self._file_opener = WindowsFileOpener()
+
+        self._process_manager = (
+            WindowsProcessManager()
+        )
+
+        self._screen_capture = (
+            WindowsScreenCapture()
+        )
+
+        self._volume_control = (
+            WindowsVolumeControl()
+        )
+
+    def tools(self) -> list[Tool]:
+        """
+        Devuelve las herramientas disponibles
+        en el proveedor local.
+        """
+
+        return [
+            Tool(
+                name="windows.open_file",
+                action="system.open_file",
+                description="Busca y abre un archivo con la aplicación predeterminada.",
+                provider=self.name,
+                parameters={
+                    "file_name": {"type": "string", "required": True, "description": "Nombre del archivo."},
+                    "location": {"type": "string", "required": True, "description": "desktop, documents o downloads."},
+                    "extension": {"type": "string", "required": False, "description": "Extensión opcional."},
+                },
+            ),
+
+            Tool(
+                name="windows.open_app",
+                action="system.open_app",
+                description="Abre una aplicación de Windows.",
+                provider=self.name,
+                parameters={
+                    "application": {
+                        "type": "string",
+                        "required": True,
+                        "description": (
+                            "Nombre de la aplicación."
+                        ),
+                    },
+                },
+            ),
+
+            Tool(
+                name="windows.list_processes",
+                action="system.process_list",
+                description=(
+                    "Obtiene los procesos activos de Windows."
+                ),
+                provider=self.name,
+                parameters={},
+            ),
+
+            Tool(
+                name="windows.close_app",
+                action="system.close_app",
+                description=(
+                    "Cierra una aplicación en ejecución."
+                ),
+                provider=self.name,
+                parameters={
+                    "application": {
+                        "type": "string",
+                        "required": True,
+                        "description": (
+                            "Nombre de la aplicación."
+                        ),
+                    },
+                },
+            ),
+
+            Tool(
+                name="windows.capture_screen",
+                action="system.screen_capture",
+                description="Captura la pantalla actual.",
+                provider=self.name,
+                parameters={},
+                produces=[
+                    "image",
+                ],
+            ),
+
+            Tool(
+                name="windows.set_volume",
+                action="system.set_volume",
+                description=(
+                    "Establece el volumen maestro de Windows."
+                ),
+                provider=self.name,
+                parameters={
+                    "level": {
+                        "type": "number",
+                        "required": True,
+                        "description": (
+                            "Volumen entre 0 y 100."
+                        ),
+                    },
+                },
+            ),
+
+            Tool(
+                name="windows.get_volume",
+                action="system.get_volume",
+                description=(
+                    "Obtiene el volumen actual de Windows."
+                ),
+                provider=self.name,
+                parameters={},
+            ),
+
+            Tool(
+                name="windows.mute",
+                action="system.mute",
+                description=(
+                    "Silencia el volumen de Windows."
+                ),
+                provider=self.name,
+                parameters={},
+            ),
+
+            Tool(
+                name="windows.unmute",
+                action="system.unmute",
+                description=(
+                    "Quita el silencio de Windows."
+                ),
+                provider=self.name,
+                parameters={},
+            ),
+
+            Tool(
+                name="windows.get_mute",
+                action="system.get_mute",
+                description=(
+                    "Obtiene el estado actual de silencio "
+                    "de Windows."
+                ),
+                provider=self.name,
+                parameters={},
+            ),
+        ]
+
+    async def execute(
+        self,
+        tool: str,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        if tool == "windows.open_file":
+            return self._file_opener.open(
+                parameters.get("file_name", ""),
+                parameters.get("location", "desktop"),
+                parameters.get("extension"),
+            )
+
+        if tool == "windows.open_app":
+            return await self._open_app(
+                parameters
+            )
+
+        if tool == "windows.list_processes":
+            return await self._list_processes()
+
+        if tool == "windows.close_app":
+            return await self._close_app(
+                parameters
+            )
+
+        if tool == "windows.capture_screen":
+            return await self._capture_screen()
+
+        if tool == "windows.set_volume":
+            return await self._set_volume(
+                parameters
+            )
+
+        if tool == "windows.get_volume":
+            return await self._get_volume()
+
+        if tool == "windows.mute":
+            return await self._mute()
+
+        if tool == "windows.unmute":
+            return await self._unmute()
+
+        if tool == "windows.get_mute":
+            return await self._get_mute()
+
+        raise KeyError(
+            f"Tool '{tool}' not available "
+            f"in provider '{self.name}'."
+        )
+
+    async def _open_app(
+        self,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        application = parameters.get(
+            "application"
+        )
+
+        if not application:
+            return False
+
+        return self._launcher.open(
+            application
+        )
+
+    async def _list_processes(self) -> Any:
+
+        return self._process_manager.list()
+
+    async def _close_app(
+        self,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        application = parameters.get(
+            "application"
+        )
+
+        if not application:
+            return False
+
+        return self._process_manager.close(
+            application
+        )
+
+    async def _capture_screen(self) -> Any:
+
+        return self._screen_capture.capture()
+
+    async def _set_volume(
+        self,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        level = parameters.get("level")
+
+        if level is None:
+            return False
+
+        return self._volume_control.set(
+            float(level)
+        )
+
+    async def _get_volume(self) -> Any:
+
+        return self._volume_control.get()
+
+    async def _mute(self) -> Any:
+
+        return self._volume_control.mute()
+
+    async def _unmute(self) -> Any:
+
+        return self._volume_control.unmute()
+
+    async def _get_mute(self) -> Any:
+
+        return self._volume_control.is_muted()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\mcp_provider.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from providers.provider import ToolProvider
+
+
+class MCPProvider(ToolProvider):
+    """
+    Proveedor para herramientas expuestas
+    mediante servidores MCP.
+    """
+
+    name = "mcp"
+
+    async def execute(
+        self,
+        tool: str,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        raise NotImplementedError(
+            "MCP provider not implemented yet."
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\provider.py
+================================================================================
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+
+class ToolProvider(ABC):
+    """
+    Contrato base para cualquier proveedor de herramientas.
+
+    Un proveedor puede ser:
+
+    - MCP
+    - Windows Local
+    - Linux
+    - Cloud
+    """
+
+    name: str
+
+    @abstractmethod
+    async def execute(
+        self,
+        tool: str,
+        parameters: dict[str, Any],
+    ) -> Any:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\provider_manager.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from providers.provider import ToolProvider
+from providers.tool import Tool
+
+
+class ProviderManager:
+    """
+    Administra todos los proveedores registrados.
+
+    Es el único componente que sabe qué proveedor
+    puede ejecutar una herramienta determinada.
+    """
+
+    def __init__(self) -> None:
+
+        self._providers: dict[str, ToolProvider] = {}
+
+    def register(
+        self,
+        provider: ToolProvider,
+    ) -> None:
+
+        self._providers[
+            provider.name
+        ] = provider
+
+    def unregister(
+        self,
+        name: str,
+    ) -> None:
+
+        self._providers.pop(
+            name,
+            None,
+        )
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._providers
+
+    def get(
+        self,
+        name: str,
+    ) -> ToolProvider:
+
+        if name not in self._providers:
+
+            raise KeyError(
+                f"Provider '{name}' not registered."
+            )
+
+        return self._providers[name]
+
+    async def execute(
+        self,
+        provider: str,
+        tool: str,
+        parameters: dict[str, Any],
+    ) -> Any:
+
+        selected_provider = self.get(
+            provider
+        )
+
+        return await selected_provider.execute(
+            tool,
+            parameters,
+        )
+
+    def tools(self) -> list[Tool]:
+        """
+        Devuelve todas las herramientas disponibles
+        en todos los proveedores registrados.
+        """
+
+        tools: list[Tool] = []
+
+        for provider in self._providers.values():
+
+            provider_tools = getattr(
+                provider,
+                "tools",
+                None,
+            )
+
+            if provider_tools is None:
+                continue
+
+            tools.extend(
+                provider_tools()
+            )
+
+        return tools
+
+    def list_tools(self) -> list[str]:
+        """
+        Devuelve los nombres de todas las herramientas
+        disponibles.
+        """
+
+        return sorted(
+            tool.name
+            for tool in self.tools()
+        )
+
+    def list(self) -> list[str]:
+
+        return sorted(
+            self._providers.keys()
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\tool.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class Tool(BaseModel):
+    """
+    Describe una herramienta ejecutable por NEXUS.
+
+    Una herramienta puede declarar los artifacts que
+    produce y consume para permitir que el Planner
+    construya relaciones entre pasos sin conocer
+    la implementación concreta.
+    """
+
+    name: str
+
+    description: str
+
+    provider: str
+
+    action: str | None = None
+
+    parameters: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    produces: list[str] = Field(
+        default_factory=list
+    )
+
+    consumes: list[str] = Field(
+        default_factory=list
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\providers\src\providers\tool_registry.py
+================================================================================
+
+from __future__ import annotations
+
+from providers.tool import Tool
+
+
+class ToolRegistry:
+    """
+    Registro central de herramientas disponibles
+    para NEXUS.
+
+    El Registry describe las herramientas.
+    No ejecuta herramientas.
+    """
+
+    def __init__(self) -> None:
+
+        self._tools: dict[str, Tool] = {}
+
+    def register(
+        self,
+        tool: Tool,
+    ) -> None:
+
+        self._tools[tool.name] = tool
+
+    def register_many(
+        self,
+        tools: list[Tool],
+    ) -> None:
+
+        for tool in tools:
+
+            self.register(
+                tool
+            )
+
+    def unregister(
+        self,
+        name: str,
+    ) -> None:
+
+        self._tools.pop(
+            name,
+            None,
+        )
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._tools
+
+    def get(
+        self,
+        name: str,
+    ) -> Tool:
+
+        if name not in self._tools:
+
+            raise KeyError(
+                f"Tool '{name}' not registered."
+            )
+
+        return self._tools[name]
+
+    def find_by_action(
+        self,
+        action: str,
+    ) -> Tool | None:
+        """
+        Busca la herramienta asociada
+        a una Action.
+        """
+
+        for tool in self._tools.values():
+
+            if tool.action == action:
+
+                return tool
+
+        return None
+
+    def resolve(
+        self,
+        action: str,
+    ) -> Tool | None:
+        """
+        Resuelve una Action contra la herramienta
+        registrada que la implementa.
+
+        El Planner utiliza este método para comprobar
+        que una intención pueda convertirse en un plan.
+
+        El Registry solamente resuelve capacidades.
+        No ejecuta herramientas.
+        """
+
+        return self.find_by_action(
+            action
+        )
+
+    def list(self) -> list[str]:
+
+        return sorted(
+            self._tools.keys()
+        )
+
+    def all(self) -> list[Tool]:
+
+        return list(
+            self._tools.values()
+        )
+
+    def describe(self) -> list[dict]:
+        """
+        Devuelve una descripción serializable
+        de todas las capacidades disponibles
+        para NEXUS.
+        """
+
+        capabilities = []
+
+        for tool in self._tools.values():
+
+            capabilities.append(
+                {
+                    "name": tool.name,
+                    "action": tool.action,
+                    "description": tool.description,
+                    "provider": tool.provider,
+                    "parameters": tool.parameters,
+                }
+            )
+
+        return sorted(
+            capabilities,
+            key=lambda item: item["name"],
+        )
+
+    def clear(self) -> None:
+
+        self._tools.clear()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\response\pyproject.toml
+================================================================================
+
+[project]
+name = "response"
+version = "0.1.0"
+description = "NEXUS Response Layer"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\response\README.md
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\response\src\response\__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\response\src\response\formatter.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from runtime.execution_result import ExecutionResult
+
+
+class ResponseFormatter:
+    """
+    Convierte resultados técnicos de NEXUS
+    en respuestas legibles para el usuario.
+
+    No interpreta intenciones.
+    No consulta memoria.
+    No ejecuta acciones.
+
+    Solamente transforma un ExecutionResult
+    en lenguaje humano.
+    """
+
+    def format(
+        self,
+        result: ExecutionResult,
+    ) -> str:
+        """
+        Convierte un ExecutionResult en una
+        respuesta textual para el usuario.
+        """
+
+        if not result.success:
+            if result.message:
+                return result.message
+
+            return "No pude completar la operación."
+
+        output = result.output
+
+        if not isinstance(output, dict):
+            if output:
+                return str(output)
+
+            return "Listo."
+
+        #
+        # Consulta de memoria episódica
+        #
+        if "episode_query_result" in output:
+            query_result = output.get(
+                "episode_query_result",
+                {},
+            )
+
+            if query_result.get("status") != "found":
+                return (
+                    "No encontré la información "
+                    "que buscabas en la memoria."
+                )
+
+            action = query_result.get("action")
+            value = query_result.get("value")
+
+            if action == "system.open_app":
+                if value:
+                    return (
+                        f"La última aplicación que abriste "
+                        f"fue {value}."
+                    )
+
+                return (
+                    "Encontré la acción, "
+                    "pero no pude identificar "
+                    "la aplicación."
+                )
+
+            if action == "system.close_app":
+                if value:
+                    return (
+                        f"La última aplicación que cerraste "
+                        f"fue {value}."
+                    )
+
+                return (
+                    "Encontré la acción, "
+                    "pero no pude identificar "
+                    "la aplicación."
+                )
+
+            if action == "system.set_volume":
+                if value is not None:
+                    return (
+                        f"El último volumen que pusiste "
+                        f"fue {self._format_number(value)}%."
+                    )
+
+                return (
+                    "Encontré el cambio de volumen, "
+                    "pero no pude recuperar el valor."
+                )
+
+            if action == "system.screen_capture":
+                if value == "captured":
+                    return "La última acción fue una captura de pantalla."
+
+                return (
+                    "Encontré la última captura, "
+                    "pero no pude determinar su estado."
+                )
+
+            return (
+                "Encontré la información en la memoria, "
+                "pero todavía no puedo expresarla "
+                "de forma natural."
+            )
+
+                # Búsqueda cognitiva de documentos
+        if output.get("operation") == "documents.find_relevant":
+            documents = output.get("documents", [])
+
+            if not documents:
+                return "No encontré documentos que coincidan con tu búsqueda."
+
+            names = [
+                document.get("name")
+                for document in documents
+                if isinstance(document, dict) and document.get("name")
+            ]
+
+            if not names:
+                return f"Encontré {len(documents)} documento(s) relevante(s)."
+
+            if len(names) == 1:
+                return f"Encontré un documento relevante: {names[0]}."
+
+            return (
+                f"Encontré {len(names)} documentos relevantes: "
+                + ", ".join(names)
+                + "."
+            )
+
+        # Búsqueda cognitiva de reglas y procesos
+        operation = output.get("operation")
+
+        cognitive_collections = {
+            "rules.find_relevant": ("rules", "reglas"),
+            "processes.find_relevant": ("processes", "procesos"),
+        }
+
+        if operation in cognitive_collections:
+            collection_name, label = cognitive_collections[operation]
+            items = output.get(collection_name, [])
+
+            if not items:
+                return f"No encontré {label} relevantes para tu búsqueda."
+
+            names = [
+                item.get("name")
+                for item in items
+                if isinstance(item, dict) and item.get("name")
+            ]
+
+            if not names:
+                return (
+                    f"Encontré {len(items)} {label} relevantes, "
+                    "pero no tienen nombres disponibles."
+                )
+
+            if len(names) == 1:
+                response = f"Encontré una {label[:-1]} relevante: {names[0]}."
+            else:
+                response = (
+                    f"Encontré {len(names)} {label} relevantes: "
+                    + ", ".join(names)
+                    + "."
+                )
+
+            details = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+
+                name = item.get("name")
+                description = item.get("description")
+                status = item.get("status")
+
+                detail = name or "Sin nombre"
+                if description:
+                    detail += f" — {description}"
+                if status:
+                    detail += f" (estado: {status})"
+
+                details.append(detail)
+
+            if details:
+                response += "\n\n" + "\n".join(
+                    f"- {detail}" for detail in details
+                )
+
+            return response
+
+
+        if not output:
+            return "Listo."
+
+        #
+        # Captura + inspección
+        #
+        # La inspección utiliza el resultado producido
+        # por system.inspect_capture.
+        #
+        if "capture_inspection" in output:
+            inspection = output.get("capture_inspection")
+
+            if isinstance(inspection, dict):
+                width = inspection.get("width")
+                height = inspection.get("height")
+
+                if width is not None and height is not None:
+                    return (
+                        "Inspeccioné la pantalla. "
+                        f"La captura tiene "
+                        f"{self._format_number(width)} × "
+                        f"{self._format_number(height)} píxeles."
+                    )
+
+            width = output.get("width")
+            height = output.get("height")
+
+            if width is not None and height is not None:
+                return (
+                    "Inspeccioné la pantalla. "
+                    f"La captura tiene "
+                    f"{self._format_number(width)} × "
+                    f"{self._format_number(height)} píxeles."
+                )
+
+            return "Inspeccioné la pantalla."
+
+        #
+        # Captura de pantalla
+        #
+        if output.get("status") == "captured":
+            return "Capturé la pantalla."
+
+        #
+        # Episodios recientes
+        #
+        if (
+            output.get("status") == "read"
+            and "episodes" in output
+        ):
+            return self._format_recent_episodes(
+                output.get("episodes", [])
+            )
+
+        #
+        # Episodio individual
+        #
+        if (
+            output.get("status") == "read"
+            and "episode" in output
+        ):
+            episode = output.get("episode")
+
+            if not episode:
+                if output.get("mode") == "previous":
+                    return "No registré una acción anterior."
+
+                return "No registré ninguna acción recientemente."
+
+            action = episode.get("action")
+            parameters = episode.get(
+                "parameters",
+                {},
+            )
+
+            if output.get("mode") == "previous":
+                description = self._describe_episode_noun(
+                    action,
+                    parameters,
+                )
+
+                if not description:
+                    return (
+                        "Registré una acción anterior, "
+                        "pero no pude describirla."
+                    )
+
+                return (
+                    "La acción anterior fue "
+                    f"{description}."
+                )
+
+            if output.get("mode") == "last":
+                description = self._describe_episode(
+                    action,
+                    parameters,
+                )
+
+                if not description:
+                    return (
+                        "Registré una última acción, "
+                        "pero no pude describirla."
+                    )
+
+                return (
+                    "Tu última acción fue "
+                    f"{description}."
+                )
+
+        #
+        # Último episodio
+        #
+        if (
+            output.get("status") == "read"
+            and "episode" in output
+        ):
+            episode = output.get("episode")
+
+            if not episode:
+                return (
+                    "No registré ninguna acción "
+                    "recientemente."
+                )
+
+            if not episode.get(
+                "success",
+                True,
+            ):
+                return (
+                    "La última acción registrada "
+                    "no se completó correctamente."
+                )
+
+            description = (
+                self._describe_episode_infinitive(
+                    episode.get("action"),
+                    episode.get(
+                        "parameters",
+                        {},
+                    ),
+                )
+            )
+
+            if description:
+                return (
+                    "Tu última acción fue "
+                    f"{description}."
+                )
+
+            original_text = episode.get(
+                "original_text"
+            )
+
+            if original_text:
+                return (
+                    "Tu última acción fue: "
+                    f"{original_text}."
+                )
+
+            return (
+                "Encontré la última acción, "
+                "pero no puedo describirla."
+            )
+
+        #
+        # Volumen actual
+        #
+        if (
+            output.get("status") == "read"
+            and "volume" in output
+        ):
+            volume = output["volume"]
+
+            return (
+                f"El volumen está al "
+                f"{self._format_number(volume)}%."
+            )
+
+        #
+        # Historial del volumen
+        #
+        if (
+            "found" in output
+            and "mode" in output
+        ):
+            found = output.get("found")
+            value = output.get("value")
+            mode = output.get("mode")
+
+            if not found:
+                return self._format_history_not_found(
+                    mode
+                )
+
+            if mode == "previous":
+                return (
+                    "El volumen anterior era "
+                    f"{self._format_number(value)}%."
+                )
+
+            if mode == "find":
+                return (
+                    "Sí. El volumen estuvo en "
+                    f"{self._format_number(value)}%."
+                )
+
+        #
+        # Volumen establecido
+        #
+        if (
+            output.get("status") == "set"
+            and "volume" in output
+        ):
+            volume = output["volume"]
+
+            return (
+                f"Volumen establecido al "
+                f"{self._format_number(volume)}%."
+            )
+
+        #
+        # Volumen restaurado
+        #
+        if (
+            output.get("status") == "restored"
+            and "volume" in output
+        ):
+            volume = output["volume"]
+
+            return (
+                f"Volumen restaurado al "
+                f"{self._format_number(volume)}%."
+            )
+
+        #
+        # Aplicación abierta
+        #
+        if (
+            output.get("status") == "opened"
+            and "application" in output
+        ):
+            application = output["application"]
+
+            return (
+                f"Abrí {application}."
+            )
+
+        #
+        # Aplicación cerrada
+        #
+        if (
+            output.get("status") == "closed"
+            and "application" in output
+        ):
+            application = output["application"]
+
+            return (
+                f"Cerré {application}."
+            )
+
+        #
+        # Mute / Unmute / Restore
+        #
+        if (
+            output.get("status") == "muted"
+            and output.get("muted") is True
+        ):
+            return "Silencié el sistema."
+
+        if (
+            output.get("status") == "unmuted"
+            and output.get("muted") is False
+        ):
+            return "Activé el sonido."
+
+        if (
+            output.get("status") == "restored"
+            and "muted" in output
+        ):
+            muted = output["muted"]
+
+            if muted is True:
+                return "Restauré el silencio."
+
+            if muted is False:
+                return "Restauré el sonido."
+
+        #
+        # Estado actual de mute
+        #
+        if (
+            output.get("status") == "read"
+            and "muted" in output
+        ):
+            if output["muted"] is True:
+                return "El sistema está silenciado."
+
+            if output["muted"] is False:
+                return "El sonido está activado."
+
+        #
+        # Hora actual
+        #
+        if output.get("status") == "read" and "time" in output:
+            if "date" in output:
+                return f"Hoy es {output['date']} y son las {output['time']}."
+            return f"Son las {output['time']}."
+
+        #
+        # Fallback
+        #
+        return str(output)
+
+    @staticmethod
+    def _format_number(value: Any) -> str:
+        """
+        Formatea números evitando .0 innecesarios.
+        """
+
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+
+        return str(value)
+
+    @staticmethod
+    def _format_recent_episodes(
+        episodes: list[dict[str, Any]],
+    ) -> str:
+        """
+        Formatea una lista de episodios recientes.
+        """
+
+        if not episodes:
+            return "No registré acciones recientemente."
+
+        descriptions: list[str] = []
+
+        for episode in episodes:
+            description = ResponseFormatter._describe_episode(
+                episode.get("action"),
+                episode.get("parameters", {}),
+            )
+
+            if description:
+                descriptions.append(description)
+                continue
+
+            original_text = episode.get("original_text")
+
+            if original_text:
+                descriptions.append(original_text)
+
+        if not descriptions:
+            return "Encontré acciones recientes, pero no pude describirlas."
+
+        if len(descriptions) == 1:
+            return (
+                "La acción reciente fue "
+                f"{descriptions[0]}."
+            )
+
+        return (
+            "Las acciones recientes fueron: "
+            + "; ".join(descriptions)
+            + "."
+        )
+
+    @staticmethod
+    def _describe_episode(
+        action: str | None,
+        parameters: dict[str, Any],
+    ) -> str | None:
+        """
+        Describe un episodio en lenguaje natural.
+        """
+
+        if action == "system.open_app":
+            application = parameters.get("application")
+
+            if application:
+                return f"abrir {application}"
+
+        if action == "system.close_app":
+            application = parameters.get("application")
+
+            if application:
+                return f"cerrar {application}"
+
+        if action == "system.screen_capture":
+            return "capturar la pantalla"
+
+        if action == "system.set_volume":
+            level = parameters.get("level")
+
+            if level is not None:
+                return (
+                    "establecer el volumen al "
+                    f"{ResponseFormatter._format_number(level)}%"
+                )
+
+        if action == "system.mute":
+            return "silenciar el sistema"
+
+        if action == "system.unmute":
+            return "activar el sonido"
+
+        if action == "system.process_list":
+            return "consultar los procesos activos"
+
+        return None
+
+    @staticmethod
+    def _describe_episode_noun(
+        action: str | None,
+        parameters: dict[str, Any],
+    ) -> str | None:
+        """
+        Describe un episodio como sustantivo.
+        """
+
+        if action == "system.open_app":
+            application = parameters.get("application")
+
+            if application:
+                return f"abrir {application}"
+
+        if action == "system.close_app":
+            application = parameters.get("application")
+
+            if application:
+                return f"cerrar {application}"
+
+        if action == "system.screen_capture":
+            return "capturar la pantalla"
+
+        if action == "system.set_volume":
+            level = parameters.get("level")
+
+            if level is not None:
+                return (
+                    "establecer el volumen al "
+                    f"{ResponseFormatter._format_number(level)}%"
+                )
+
+        if action == "system.mute":
+            return "silenciar el sistema"
+
+        if action == "system.unmute":
+            return "activar el sonido"
+
+        if action == "system.process_list":
+            return "consultar los procesos activos"
+
+        return None
+
+    @staticmethod
+    def _describe_episode_infinitive(
+        action: str | None,
+        parameters: dict[str, Any],
+    ) -> str | None:
+        """
+        Describe un episodio usando infinitivo.
+        """
+
+        return ResponseFormatter._describe_episode(
+            action,
+            parameters,
+        )
+
+    @staticmethod
+    def _format_history_not_found(
+        mode: str | None,
+    ) -> str:
+        if mode == "previous":
+            return "No encontré un volumen anterior registrado."
+
+        if mode == "find":
+            return "No encontré ese valor en el historial del volumen."
+
+        return "No encontré información en el historial del volumen."
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\pyproject.toml
+================================================================================
+
+[project]
+name = "nexus-rules"
+version = "0.1.0"
+description = "NEXUS assistant rules subsystem"
+requires-python = ">=3.12"
+dependencies = [
+    "nexus-context",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rules"]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\__init__.py
+================================================================================
+
+from .capability import RuleCapability
+from .models import Rule, RuleStatus
+from .resolver import RuleResolver
+from .store import RuleStore
+from .cognitive import (
+    RuleCognitiveAccess,
+    RuleCognitiveResult,
+)
+
+__all__ = [
+    "Rule",
+    "RuleStatus",
+    "RuleResolver",
+    "RuleStore",
+    "RuleCapability",
+    "RuleCognitiveAccess",
+    "RuleCognitiveResult",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\capability.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from context import AssistantContext
+
+from rules.models import Rule
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
+
+
+@dataclass(slots=True)
+class RuleCapability:
+    """
+    Interfaz de acceso a reglas para el Assistant/Cognitive Core.
+
+    Oculta stores y detalles internos del subsistema Rules.
+    """
+
+    store: RuleStore
+    resolver: RuleResolver
+
+    def create(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> Rule:
+        rule = Rule.create(
+            name=name,
+            description=description,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+        return self.store.add(rule)
+
+    def get(
+        self,
+        rule_id: str,
+    ) -> Rule | None:
+        return self.store.get(rule_id)
+
+    def list(
+        self,
+    ) -> list[Rule]:
+        return self.store.list()
+
+    def relevant(
+        self,
+        *,
+        context: AssistantContext,
+    ) -> list[Rule]:
+        return self.resolver.resolve(context)
+
+    def update(
+        self,
+        rule: Rule,
+    ) -> Rule:
+        return self.store.update(rule)
+
+    def remove(
+        self,
+        rule_id: str,
+    ) -> Rule | None:
+        return self.store.remove(rule_id)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\cognitive.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from rules.capability import RuleCapability
+from rules.models import Rule
+
+
+@dataclass(frozen=True, slots=True)
+class RuleCognitiveResult:
+    """
+    Resultado de una operación cognitiva sobre Rules.
+
+    Expone información que el Cognitive Core puede utilizar
+    sin conocer stores ni detalles internos del subsistema.
+    """
+
+    rules: tuple[Rule, ...]
+    metadata: dict[str, Any]
+
+
+class RuleCognitiveAccess:
+    """
+    Punto de acceso cognitivo a Rules.
+
+    Traduce una necesidad cognitiva del Assistant
+    en una operación sobre RuleCapability.
+    """
+
+    def __init__(
+        self,
+        capability: RuleCapability,
+    ) -> None:
+        self._capability = capability
+
+    def find_relevant(
+        self,
+        *,
+        context: object,
+    ) -> RuleCognitiveResult:
+        rules = self._capability.relevant(
+            context=context,
+        )
+
+        return RuleCognitiveResult(
+            rules=tuple(rules),
+            metadata={
+                "operation": "rules.find_relevant",
+                "count": len(rules),
+            },
+        )
+
+    def get(
+        self,
+        rule_id: str,
+        *,
+        context: object,
+    ) -> Rule | None:
+        rules = self._capability.relevant(
+            context=context,
+        )
+
+        return next(
+            (
+                rule
+                for rule in rules
+                if rule.id == rule_id
+            ),
+            None,
+        )
+
+    def list(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Rule, ...]:
+        return tuple(
+            self._capability.relevant(
+                context=context,
+            )
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class RuleStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+@dataclass(frozen=True)
+class Rule:
+    id: str
+    name: str
+    description: str | None = None
+    status: RuleStatus = RuleStatus.ACTIVE
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> Rule:
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            description=description,
+            status=RuleStatus.ACTIVE,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from context import AssistantContext
+
+from rules.models import Rule
+from rules.store import RuleStore
+
+
+class RuleResolver:
+    """Resolves rules relevant to an assistant context."""
+
+    def __init__(self, store: RuleStore) -> None:
+        self._store = store
+
+    def resolve(
+        self,
+        context: AssistantContext,
+    ) -> list[Rule]:
+        rules = self._store.list()
+
+        user = context.user
+        organization = context.organization
+        project_ids = {
+            project.id
+            for project in context.projects
+        }
+
+        resolved: list[Rule] = []
+
+        for rule in rules:
+            if user is not None and rule.user_id == user.id:
+                resolved.append(rule)
+                continue
+
+            if (
+                organization is not None
+                and rule.organization_id == organization.id
+            ):
+                resolved.append(rule)
+                continue
+
+            if (
+                rule.project_id is not None
+                and rule.project_id in project_ids
+            ):
+                resolved.append(rule)
+
+        return resolved
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\rules\src\rules\store.py
+================================================================================
+
+from __future__ import annotations
+
+from rules.models import Rule
+
+
+class RuleStore:
+    """In-memory store for assistant rules."""
+
+    def __init__(self) -> None:
+        self._rules: dict[str, Rule] = {}
+
+    def add(self, rule: Rule) -> Rule:
+        self._rules[rule.id] = rule
+        return rule
+
+    def get(self, rule_id: str) -> Rule | None:
+        return self._rules.get(rule_id)
+
+    def list(self) -> list[Rule]:
+        return list(self._rules.values())
+
+    def update(self, rule: Rule) -> Rule:
+        if rule.id not in self._rules:
+            raise KeyError(
+                f"Rule not found: {rule.id}"
+            )
+
+        self._rules[rule.id] = rule
+        return rule
+
+    def remove(self, rule_id: str) -> Rule | None:
+        return self._rules.pop(rule_id, None)
+
+    def clear(self) -> None:
+        self._rules.clear()
+
+    def count(self) -> int:
+        return len(self._rules)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

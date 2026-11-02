@@ -1,0 +1,1997 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_type.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentType,
+    DocumentTypeResolver,
+)
+
+
+def test_document_type_normalizes_mime_type():
+    document_type = DocumentType.from_mime_type(
+        " TEXT/PLAIN "
+    )
+
+    assert document_type.mime_type == "text/plain"
+
+
+def test_document_type_exposes_category():
+    document_type = DocumentType.from_mime_type(
+        "text/plain"
+    )
+
+    assert document_type.category == "text"
+
+
+def test_document_type_exposes_subtype():
+    document_type = DocumentType.from_mime_type(
+        "application/pdf"
+    )
+
+    assert document_type.subtype == "pdf"
+
+
+def test_document_type_rejects_empty_mime_type():
+    with pytest.raises(ValueError):
+        DocumentType.from_mime_type("")
+
+
+def test_document_type_rejects_mime_type_without_separator():
+    with pytest.raises(ValueError):
+        DocumentType.from_mime_type(
+            "application-pdf"
+        )
+
+
+def test_document_type_rejects_incomplete_mime_type():
+    with pytest.raises(ValueError):
+        DocumentType.from_mime_type(
+            "application/"
+        )
+
+
+def test_resolver_returns_document_type():
+    resolver = DocumentTypeResolver()
+
+    result = resolver.resolve(
+        "application/pdf"
+    )
+
+    assert isinstance(result, DocumentType)
+    assert result.mime_type == "application/pdf"
+
+
+def test_resolver_normalizes_mime_type():
+    resolver = DocumentTypeResolver()
+
+    result = resolver.resolve(
+        " Application/PDF "
+    )
+
+    assert result.mime_type == "application/pdf"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_documents_access.py
+================================================================================
+
+from documents import (
+    Document,
+    DocumentArtifact,
+    DocumentsAccess,
+    DocumentServices,
+    build_document_services,
+)
+
+
+def test_document_services_expose_access():
+    services = build_document_services()
+
+    assert isinstance(services.access, DocumentsAccess)
+
+
+def test_access_uses_document_service():
+    services = build_document_services()
+
+    assert services.access.service is services.document_service
+
+
+def test_access_can_create_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="test.txt",
+        mime_type="text/plain",
+        source="local:test.txt",
+    )
+
+    assert services.document_store.get(document.id) == document
+
+
+def test_access_can_add_artifact():
+    services = build_document_services()
+
+    artifact = DocumentArtifact.create(
+        location="local:test.txt",
+    )
+
+    result = services.access.add_artifact(artifact)
+
+    assert result == artifact
+    assert services.artifact_store.get(artifact.id) == artifact
+
+
+def test_access_can_resolve_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="test.txt",
+        mime_type="text/plain",
+        source="local:test.txt",
+    )
+
+    result = services.access.resolve(document.id)
+
+    assert result is not None
+    assert result.document == document
+
+
+def test_access_returns_none_for_unknown_document():
+    services = build_document_services()
+
+    result = services.access.resolve("missing")
+
+    assert result is None
+
+def test_access_reports_supported_content_types():
+    services = build_document_services()
+
+    services.ingestion_registry.register(
+        "text/plain",
+        object(),
+    )
+
+    services.ingestion_registry.register(
+        "application/pdf",
+        object(),
+    )
+
+    assert services.access.supported_content_types() == [
+        "text/plain",
+        "application/pdf",
+    ]
+
+def test_access_can_list_knowledge_history():
+    services = build_document_services()
+
+    result = services.access.list_knowledge_history(
+        "missing",
+    )
+
+    assert result == []
+
+def test_access_can_list_persisted_knowledge_history(tmp_path):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    extraction = services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    history = services.access.list_knowledge_history(
+        document.id,
+    )
+
+    assert len(history) == len(extraction.knowledge)
+
+    assert all(
+        record.document_id == document.id
+        for record in history
+    )
+
+    assert [
+        record.knowledge
+        for record in history
+    ] == list(extraction.knowledge)
+
+def test_access_can_list_latest_knowledge_for_document(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    extraction = services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    latest = services.access.list_latest_knowledge(
+        document.id,
+    )
+
+    assert len(latest) == len(extraction.knowledge)
+
+    assert [
+        record.knowledge
+        for record in latest
+    ] == list(extraction.knowledge)
+
+def test_access_can_list_knowledge_for_specific_version(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    extraction = services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    result = services.access.list_knowledge_for_version(
+        document_id=document.id,
+        version=2,
+    )
+
+    assert len(result) == len(extraction.knowledge)
+
+    assert [
+        record.knowledge
+        for record in result
+    ] == list(extraction.knowledge)
+
+def test_access_reports_latest_knowledge_state(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    assert services.access.has_latest_knowledge(
+        document.id,
+    ) is False
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.has_latest_knowledge(
+        document.id,
+    ) is True
+
+def test_access_reports_latest_knowledge_count(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    assert services.access.knowledge_count(
+        document.id,
+    ) == 0
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    extraction = services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.knowledge_count(
+        document.id,
+    ) == len(extraction.knowledge)
+
+def test_access_validates_latest_knowledge(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    assert services.access.validate_latest_knowledge(
+        document.id,
+    ) is True
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.validate_latest_knowledge(
+        document.id,
+    ) is True
+
+def test_access_detects_orphaned_knowledge(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.has_orphaned_knowledge(
+        document.id,
+    ) is False
+
+    version = (
+        services.content_version_store
+        .get_latest_for_document(document.id)
+    )
+
+    assert version is not None
+
+    services.content_version_store.remove(
+        version.id,
+    )
+
+    assert services.access.has_orphaned_knowledge(
+        document.id,
+    ) is True
+
+def test_access_lists_orphaned_knowledge(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.list_orphaned_knowledge(
+        document.id,
+    ) == []
+
+    version = (
+        services.content_version_store
+        .get_latest_for_document(document.id)
+    )
+
+    assert version is not None
+
+    services.content_version_store.remove(
+        version.id,
+    )
+
+    orphaned = services.access.list_orphaned_knowledge(
+        document.id,
+    )
+
+    assert len(orphaned) == 1
+    assert orphaned[0].document_id == document.id
+    assert orphaned[0].content_version_id == version.id
+
+def test_remove_orphaned_knowledge_delegates_to_service():
+    services = build_document_services()
+
+    document = Document.create(
+        name="access-orphaned.txt",
+        mime_type="text/plain",
+        source="memory://access-orphaned.txt",
+    )
+
+    services.document_store.add(document)
+
+    assert (
+        services.access.remove_orphaned_knowledge(
+            document.id
+        )
+        == 0
+    )
+
+def test_remove_knowledge_for_version_through_access(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "versioned.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido modificado.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    services.document_service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert services.access.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    removed = services.access.remove_knowledge_for_version(
+        document_id=document.id,
+        version=2,
+    )
+
+    assert removed == 1
+
+    assert services.access.list_knowledge_for_version(
+        document.id,
+        2,
+    ) == []
+
+def test_refresh_version_knowledge_through_access(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "refresh-access.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Vigencia: 24 meses.",
+        encoding="utf-8",
+    )
+
+    services.document_service.ingest(document)
+
+    result = services.access.refresh_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.knowledge
+
+    records = services.access.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    assert len(records) == len(result.knowledge)
+
+def test_remove_document_through_access_cleans_document_data(
+    tmp_path,
+):
+    services = build_document_services()
+
+    source = tmp_path / "access-delete.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.access.add_artifact(artifact)
+
+    document = services.access.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    current_document = services.document_store.get(
+        document.id
+    )
+
+    assert current_document is not None
+
+    services.document_service.ingest(
+        current_document
+    )
+
+    removed = services.access.remove_document(
+        document.id
+    )
+
+    assert removed is not None
+    assert removed.id == document.id
+
+    assert services.access.resolve(
+        document.id
+    ) is None
+
+    assert (
+        services.content_version_store.list_for_document(
+            document.id
+        )
+        == []
+    )
+
+    assert (
+        services.ingestion_record_store.list_for_document(
+            document.id
+        )
+        == []
+    )
+
+    assert services.artifact_store.get(
+        artifact.id
+    ) is artifact
+
+def test_access_can_list_documents_for_user():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    result = services.access.list_documents_for_user(
+        "user-a"
+    )
+
+    assert result == [document]
+
+
+def test_access_can_list_documents_for_organization():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        organization_id="organization-a",
+    )
+
+    result = services.access.list_documents_for_organization(
+        "organization-a"
+    )
+
+    assert result == [document]
+
+
+def test_access_can_list_documents_for_project():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        project_id="project-a",
+    )
+
+    result = services.access.list_documents_for_project(
+        "project-a"
+    )
+
+    assert result == [document]
+
+def test_access_can_list_documents_for_context():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    result = services.access.list_documents_for_context(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    assert result == [document]
+
+def test_access_can_get_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="document.txt",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    result = services.access.get_document(
+        document.id,
+    )
+
+    assert result == document
+
+
+def test_access_returns_none_for_unknown_document():
+    services = build_document_services()
+
+    result = services.access.get_document(
+        "missing-document",
+    )
+
+    assert result is None
+
+def test_access_can_update_document():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="document.txt",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    updated = Document(
+        id=document.id,
+        name="updated.txt",
+        mime_type=document.mime_type,
+        source=document.source,
+        description=document.description,
+        user_id=document.user_id,
+        organization_id=document.organization_id,
+        project_id=document.project_id,
+        artifact_id=document.artifact_id,
+        content_id=document.content_id,
+        metadata=document.metadata,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+        ingestion_evidence=document.ingestion_evidence,
+    )
+
+    result = services.access.update_document(updated)
+
+    assert result == updated
+    assert services.access.get_document(document.id) == updated
+
+
+def test_access_can_count_documents():
+    services = build_document_services()
+
+    assert services.access.count_documents() == 0
+
+    services.access.create_document(
+        name="one.txt",
+        mime_type="text/plain",
+        source="one.txt",
+    )
+
+    services.access.create_document(
+        name="two.txt",
+        mime_type="text/plain",
+        source="two.txt",
+    )
+
+    assert services.access.count_documents() == 2
+
+
+def test_access_can_list_documents():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="one.txt",
+        mime_type="text/plain",
+        source="one.txt",
+    )
+
+    second = services.access.create_document(
+        name="two.txt",
+        mime_type="text/plain",
+        source="two.txt",
+    )
+
+    result = services.access.list_documents()
+
+    assert result == [first, second]
+
+def test_document_context_types_are_public():
+    from documents import (
+        DocumentContext,
+        DocumentContextAccess,
+        DocumentContextResolver,
+        DocumentContextSelection,
+    )
+
+    assert DocumentContext is not None
+    assert DocumentContextAccess is not None
+    assert DocumentContextResolver is not None
+    assert DocumentContextSelection is not None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_format_ingestion.py
+================================================================================
+
+from documents import (
+    DocumentArtifact,
+    DocumentType,
+    FormatIngestionService,
+    FormatReaderRegistry,
+)
+
+
+class FakeFormatReader:
+    def __init__(self, text: str = "document content") -> None:
+        self.text = text
+
+    def supports(self, document_type):
+        return True
+
+    def read(self, artifact, document_type):
+        return self.text
+
+
+def test_format_ingestion_reads_registered_format():
+    registry = FormatReaderRegistry()
+
+    reader = FakeFormatReader(
+        text="hello nexus"
+    )
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:C:/documents/test.txt",
+    )
+
+    result = service.ingest(
+        artifact=artifact,
+        document_type="text/plain",
+    )
+
+    assert result.artifact is artifact
+    assert result.content.text == "hello nexus"
+    assert result.content.content_type == "text/plain"
+
+
+def test_format_ingestion_accepts_document_type():
+    registry = FormatReaderRegistry()
+
+    reader = FakeFormatReader(
+        text="typed content"
+    )
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:C:/documents/test.txt",
+    )
+
+    document_type = DocumentType.from_mime_type(
+        "TEXT/PLAIN"
+    )
+
+    result = service.ingest(
+        artifact=artifact,
+        document_type=document_type,
+    )
+
+    assert result.content.text == "typed content"
+    assert result.content.content_type == "text/plain"
+
+
+def test_format_ingestion_normalizes_content_type():
+    registry = FormatReaderRegistry()
+
+    reader = FakeFormatReader()
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:C:/documents/test.txt",
+    )
+
+    result = service.ingest(
+        artifact=artifact,
+        document_type=" TEXT/PLAIN ",
+    )
+
+    assert result.content.content_type == "text/plain"
+
+
+def test_format_ingestion_rejects_unsupported_format():
+    registry = FormatReaderRegistry()
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:C:/documents/test.pdf",
+    )
+
+    try:
+        service.ingest(
+            artifact=artifact,
+            document_type="application/pdf",
+        )
+    except ValueError as exc:
+        assert (
+            "No format reader registered"
+            in str(exc)
+        )
+    else:
+        raise AssertionError(
+            "Expected ValueError"
+        )
+
+
+def test_format_ingestion_lists_supported_formats():
+    registry = FormatReaderRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeFormatReader(),
+    )
+
+    registry.register(
+        "application/pdf",
+        FakeFormatReader(),
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    assert service.supported_content_types() == [
+        "text/plain",
+        "application/pdf",
+    ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_format_ingestion_auto_type.py
+================================================================================
+
+from documents import (
+    ArtifactTypeResolver,
+    DocumentArtifact,
+    FormatIngestionService,
+    FormatReaderRegistry,
+)
+
+
+class FakeFormatReader:
+    def read(self, artifact, document_type):
+        return "auto detected content"
+
+
+def test_format_ingestion_resolves_type_from_artifact():
+    registry = FormatReaderRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeFormatReader(),
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+        type_resolver=ArtifactTypeResolver(),
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = service.ingest(
+        artifact=artifact,
+    )
+
+    assert result.content.text == "auto detected content"
+    assert result.content.content_type == "text/plain"
+
+
+def test_explicit_type_overrides_artifact_detection():
+    registry = FormatReaderRegistry()
+
+    reader = FakeFormatReader()
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    service = FormatIngestionService(
+        reader_registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = service.ingest(
+        artifact=artifact,
+        document_type="text/plain",
+    )
+
+    assert result.content.content_type == "text/plain"
+
+
+def test_composed_services_share_artifact_type_resolver():
+    from documents import build_document_services
+
+    services = build_document_services()
+
+    assert (
+        services.format_ingestion_service._type_resolver
+        is services.artifact_type_resolver
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_format_ingestion_validation.py
+================================================================================
+
+from documents import (
+    ArtifactTypeResolver,
+    DocumentArtifact,
+    FormatIngestionResult,
+    FormatIngestionService,
+    FormatReaderRegistry,
+    DocumentType,
+)
+
+
+class FakeFormatReader:
+    def read(self, artifact, document_type):
+        return "validated content"
+
+
+def build_service():
+    registry = FormatReaderRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeFormatReader(),
+    )
+
+    return FormatIngestionService(
+        reader_registry=registry,
+        type_resolver=ArtifactTypeResolver(),
+    )
+
+
+def test_ingestion_validation_reports_match():
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = service.ingest_with_validation(
+        artifact=artifact,
+        declared_type="text/plain",
+    )
+
+    assert isinstance(
+        result,
+        FormatIngestionResult,
+    )
+    assert result.type_validation is not None
+    assert result.type_validation.matches
+    assert (
+        result.ingestion.content.text
+        == "validated content"
+    )
+
+
+def test_ingestion_validation_reports_mismatch():
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = service.ingest_with_validation(
+        artifact=artifact,
+        declared_type="application/pdf",
+    )
+
+    assert result.type_validation is not None
+    assert result.type_validation.mismatch
+    assert (
+        result.type_validation.declared_type.mime_type
+        == "application/pdf"
+    )
+    assert (
+        result.type_validation.detected_type.mime_type
+        == "text/plain"
+    )
+
+
+def test_ingestion_still_completes_on_type_mismatch():
+    service = build_service()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = service.ingest_with_validation(
+        artifact=artifact,
+        declared_type="application/pdf",
+    )
+
+    assert result.ingestion.content.text == (
+        "validated content"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_format_reader.py
+================================================================================
+
+from documents import (
+    DocumentArtifact,
+    DocumentType,
+    LocalArtifactReader,
+    TextFormatReader,
+)
+
+
+def test_text_format_reader_supports_text_plain():
+    reader = TextFormatReader(
+        artifact_reader=LocalArtifactReader()
+    )
+
+    assert reader.supports(
+        DocumentType.from_mime_type(
+            "text/plain"
+        )
+    )
+
+
+def test_text_format_reader_does_not_support_pdf():
+    reader = TextFormatReader(
+        artifact_reader=LocalArtifactReader()
+    )
+
+    assert not reader.supports(
+        DocumentType.from_mime_type(
+            "application/pdf"
+        )
+    )
+
+
+def test_text_format_reader_reads_text(
+    tmp_path,
+):
+    path = tmp_path / "document.txt"
+
+    path.write_text(
+        "Contenido del documento.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=str(path),
+    )
+
+    reader = TextFormatReader(
+        artifact_reader=LocalArtifactReader()
+    )
+
+    result = reader.read(
+        artifact,
+        DocumentType.from_mime_type(
+            "text/plain"
+        ),
+    )
+
+    assert result == "Contenido del documento."
+
+
+def test_text_format_reader_rejects_unsupported_type(
+    tmp_path,
+):
+    path = tmp_path / "document.txt"
+
+    path.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=str(path),
+    )
+
+    reader = TextFormatReader(
+        artifact_reader=LocalArtifactReader()
+    )
+
+    try:
+        reader.read(
+            artifact,
+            DocumentType.from_mime_type(
+                "application/pdf"
+            ),
+        )
+    except ValueError:
+        return
+
+    raise AssertionError(
+        "Expected ValueError for unsupported type"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_format_reader_registry.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentType,
+    FormatReaderRegistry,
+)
+
+
+class FakeFormatReader:
+    def supports(self, document_type):
+        return True
+
+    def read(self, artifact, document_type):
+        return "content"
+
+
+def test_registry_registers_reader():
+    registry = FormatReaderRegistry()
+    reader = FakeFormatReader()
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    assert registry.get(
+        "text/plain"
+    ) is reader
+
+
+def test_registry_accepts_document_type():
+    registry = FormatReaderRegistry()
+    reader = FakeFormatReader()
+
+    registry.register(
+        DocumentType.from_mime_type(
+            "TEXT/PLAIN"
+        ),
+        reader,
+    )
+
+    assert registry.get(
+        "text/plain"
+    ) is reader
+
+
+def test_registry_normalizes_mime_type():
+    registry = FormatReaderRegistry()
+    reader = FakeFormatReader()
+
+    registry.register(
+        " TEXT/PLAIN ",
+        reader,
+    )
+
+    assert registry.supports(
+        "text/plain"
+    )
+
+
+def test_registry_supports_document_type():
+    registry = FormatReaderRegistry()
+    reader = FakeFormatReader()
+
+    registry.register(
+        "application/pdf",
+        reader,
+    )
+
+    assert registry.supports(
+        DocumentType.from_mime_type(
+            "APPLICATION/PDF"
+        )
+    )
+
+
+def test_registry_removes_reader():
+    registry = FormatReaderRegistry()
+    reader = FakeFormatReader()
+
+    registry.register(
+        "text/plain",
+        reader,
+    )
+
+    removed = registry.remove(
+        " TEXT/PLAIN "
+    )
+
+    assert removed is reader
+    assert not registry.supports(
+        "text/plain"
+    )
+
+
+def test_registry_lists_content_types():
+    registry = FormatReaderRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeFormatReader(),
+    )
+
+    registry.register(
+        "application/pdf",
+        FakeFormatReader(),
+    )
+
+    assert registry.content_types() == [
+        "text/plain",
+        "application/pdf",
+    ]
+
+
+def test_registry_clear():
+    registry = FormatReaderRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeFormatReader(),
+    )
+
+    registry.clear()
+
+    assert registry.content_types() == []
+
+
+def test_registry_rejects_invalid_document_type():
+    registry = FormatReaderRegistry()
+
+    with pytest.raises(ValueError):
+        registry.register(
+            "invalid",
+            FakeFormatReader(),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_ingestion_evidence.py
+================================================================================
+
+from pathlib import Path
+
+from documents import (
+    DocumentArtifact,
+    DocumentIngestionResult,
+    build_document_services,
+)
+
+
+def test_document_ingestion_exposes_detection_strategy(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "nexus evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="text/plain",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    assert isinstance(
+        result,
+        DocumentIngestionResult,
+    )
+
+    assert result.detection_evidence is not None
+
+    assert (
+        result.detection_evidence.detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert (
+        result.detection_strategy
+        == "ExtensionTypeDetectionStrategy"
+    )
+
+
+def test_document_ingestion_exposes_detection_and_validation(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "nexus mismatch evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="application/pdf",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    assert result.detection_strategy == (
+        "ExtensionTypeDetectionStrategy"
+    )
+
+    assert result.detected_type.mime_type == (
+        "text/plain"
+    )
+
+    assert result.type_mismatch
+
+    assert result.content is not None
+    assert result.content.text == (
+        "nexus mismatch evidence"
+    )
+
+def test_document_persists_ingestion_evidence(
+    tmp_path: Path,
+):
+    from documents import DocumentIngestionEvidence
+
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "persistent evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="text/plain",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    persisted_document = (
+        services.document_store.get(document.id)
+    )
+
+    assert persisted_document is not None
+
+    assert isinstance(
+        persisted_document.ingestion_evidence,
+        DocumentIngestionEvidence,
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .declared_type.mime_type
+        == "text/plain"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .detection_strategy
+        == "ExtensionTypeDetectionStrategy"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence.matches
+    )
+
+    assert result.document.id == document.id
+
+
+def test_document_persists_type_mismatch_evidence(
+    tmp_path: Path,
+):
+    from documents import DocumentIngestionEvidence
+
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "mismatch evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="application/pdf",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest_with_validation(
+        document
+    )
+
+    persisted_document = (
+        services.document_store.get(document.id)
+    )
+
+    assert persisted_document is not None
+    assert persisted_document.ingestion_evidence is not None
+
+    evidence = (
+        persisted_document.ingestion_evidence
+    )
+
+    assert (
+        evidence.declared_type.mime_type
+        == "application/pdf"
+    )
+
+    assert (
+        evidence.detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert evidence.mismatch
+    assert not evidence.matches
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_ingestion_record.py
+================================================================================
+
+from documents import (
+    DocumentIngestionRecord,
+    DocumentIngestionRecordStore,
+)
+
+
+def test_ingestion_record_creation():
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+        detected_type="text/plain",
+        detection_strategy="ExtensionTypeDetectionStrategy",
+    )
+
+    assert record.id
+    assert record.document_id == "document-1"
+    assert record.artifact_id == "artifact-1"
+    assert record.content_id == "content-1"
+
+    assert record.declared_type.mime_type == "text/plain"
+    assert record.detected_type is not None
+    assert record.detected_type.mime_type == "text/plain"
+
+    assert (
+        record.detection_strategy
+        == "ExtensionTypeDetectionStrategy"
+    )
+
+    assert record.type_matches is True
+    assert record.type_mismatch is False
+    assert record.created_at is not None
+
+
+def test_ingestion_record_detects_mismatch():
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+        detected_type="application/json",
+        detection_strategy="ExtensionTypeDetectionStrategy",
+    )
+
+    assert record.type_matches is False
+    assert record.type_mismatch is True
+
+
+def test_ingestion_record_supports_legacy_ingestion_without_detection():
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    assert record.declared_type.mime_type == "text/plain"
+    assert record.detected_type is None
+    assert record.detection_strategy is None
+    assert record.type_matches is None
+    assert record.type_mismatch is None
+
+
+def test_ingestion_record_is_immutable():
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    try:
+        record.document_id = "other"
+    except Exception:
+        pass
+    else:
+        raise AssertionError("DocumentIngestionRecord must be immutable")
+
+
+def test_ingestion_record_store_crud():
+    store = DocumentIngestionRecordStore()
+
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    assert store.count() == 0
+
+    added = store.add(record)
+
+    assert added is record
+    assert store.count() == 1
+    assert store.get(record.id) is record
+    assert store.list() == [record]
+
+    removed = store.remove(record.id)
+
+    assert removed is record
+    assert store.get(record.id) is None
+    assert store.count() == 0
+
+
+def test_ingestion_record_store_lists_records_for_document():
+    store = DocumentIngestionRecordStore()
+
+    first = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    second = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-2",
+        content_id="content-2",
+        declared_type="text/plain",
+    )
+
+    other = DocumentIngestionRecord.create(
+        document_id="document-2",
+        artifact_id="artifact-3",
+        content_id="content-3",
+        declared_type="text/plain",
+    )
+
+    store.add(first)
+    store.add(second)
+    store.add(other)
+
+    records = store.list_for_document("document-1")
+
+    assert records == [first, second]
+
+
+def test_ingestion_record_store_clear():
+    store = DocumentIngestionRecordStore()
+
+    record = DocumentIngestionRecord.create(
+        document_id="document-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    store.add(record)
+
+    assert store.count() == 1
+
+    store.clear()
+
+    assert store.count() == 0
+    assert store.list() == []
+
+def test_remove_for_document_removes_only_matching_records():
+    store = DocumentIngestionRecordStore()
+
+    first = DocumentIngestionRecord.create(
+        document_id="doc-1",
+        artifact_id="artifact-1",
+        content_id="content-1",
+        declared_type="text/plain",
+    )
+
+    second = DocumentIngestionRecord.create(
+        document_id="doc-2",
+        artifact_id="artifact-2",
+        content_id="content-2",
+        declared_type="text/plain",
+    )
+
+    store.add(first)
+    store.add(second)
+
+    removed = store.remove_for_document(
+        "doc-1"
+    )
+
+    assert removed == 1
+    assert store.get(first.id) is None
+    assert store.get(second.id) == second
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -58,9 +59,10 @@ class DocumentCognitiveAccess:
             limit=limit,
         )
 
-        documents = self._capability.relevant_documents(
-            context=context,
-        )
+        # La consulta ya contiene los filtros, el orden y la
+        # paginación aplicados. No recuperar otra colección
+        # independiente que pueda contradecir ese resultado.
+        documents = query.documents
 
         return DocumentCognitiveResult(
             query=query,
@@ -72,5 +74,7 @@ class DocumentCognitiveAccess:
                 "offset": offset,
                 "limit": limit,
                 "count": len(documents),
+                "total": query.total,
+                "has_more": query.has_more,
             },
         )

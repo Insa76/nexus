@@ -1,0 +1,8 @@
+{
+  "name": "Office Edition",
+  "slug": "office",
+  "color": "#00b894",
+  "logo": "office",
+  "workflows": "workflows.json",
+  "plugins": []
+}

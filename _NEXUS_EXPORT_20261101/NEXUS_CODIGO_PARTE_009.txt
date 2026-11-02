@@ -1,0 +1,1850 @@
+﻿
+================================================================================
+ARCHIVO: backend\api\copilot.py
+================================================================================
+
+from fastapi import APIRouter
+from copilot.copilot_engine import copilot
+from workflows.repository import save_workflow_version
+from workflows.validator import validate_workflow
+from copilot.debugger import debugger
+from copilot.fixer import fixer
+
+router = APIRouter(prefix="/copilot", tags=["copilot"])
+
+
+@router.post("/generate")
+def generate(data: dict):
+
+    prompt = data.get("prompt")
+
+    workflow = copilot.interpret(prompt)
+    workflow = validate_workflow(workflow)
+
+    if not workflow:
+        return {
+            "ok": False,
+            "message": "No pude interpretar la instrucción."
+        }
+
+    save_workflow_version(
+        workflow["name"],
+        workflow["trigger"],
+        workflow["steps"],
+        "default",
+        "main"
+    )
+
+    return {
+        "ok": True,
+        "workflow": workflow
+    }
+
+@router.get("/debug-last")
+def debug_last():
+
+    result = debugger.analyze_last_failure()
+
+    return result
+
+@router.get("/fix-last")
+def fix_last():
+
+    result = fixer.propose_fix()
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\dashboard.py
+================================================================================
+
+from fastapi import APIRouter, Depends, HTTPException
+import psutil
+from pathlib import Path
+
+from plugins.loader import PLUGINS
+from learning.suggest import get_suggestions
+from brain.personal_memory.recall import recall
+from auth.deps import get_current_user  # 🔥 IMPORTANTE
+
+
+router = APIRouter(prefix="/dashboard")
+
+
+# 🔹 estado sistema (GLOBAL)
+@router.get("/stats")
+def stats():
+
+    return {
+        "cpu": psutil.cpu_percent(),
+        "ram": psutil.virtual_memory().percent,
+        "processes": len(psutil.pids())
+    }
+
+
+# 🔹 plugins (GLOBAL)
+@router.get("/plugins")
+def plugins():
+    return {"plugins": list(PLUGINS.keys())}
+
+
+# 🔹 logs (GLOBAL)
+@router.get("/logs")
+def logs():
+
+    file = Path("nexus_logs.txt")
+
+    if not file.exists():
+        return {"logs": []}
+
+    lines = file.read_text(encoding="utf-8").splitlines()
+
+    return {"logs": lines[-50:]}
+
+
+# 🔹 suggestions (POR USUARIO / TENANT)
+@router.get("/suggestions")
+def suggestions(user=Depends(get_current_user)):
+
+    if not user:
+     raise HTTPException(status_code=401, detail="Unauthorized")
+
+    tenant_id = user["tenant_id"]
+
+    # 👉 si después querés, podés filtrar por tenant dentro de get_suggestions
+    return {
+        "tenant": tenant_id,
+        "suggestions": get_suggestions()
+    }
+
+
+# 🔹 memory (CRÍTICO → SIEMPRE TENANT)
+@router.get("/memory")
+def memory(user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    return {
+        "tenant": tenant_id,
+        "memory": recall("todo", 10)  # 🔥 ideal: después filtrar por tenant
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\executions.py
+================================================================================
+
+from fastapi import APIRouter, Depends
+
+from auth.deps import get_current_user
+from core.database import get_connection
+
+router = APIRouter(prefix="/executions")
+
+
+# =========================
+# LIST EXECUTIONS
+# =========================
+@router.get("/{job_id}")
+def get_executions(
+    job_id: str,
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM workflow_executions
+        WHERE job_id = %s
+        ORDER BY created_at ASC
+    """, (job_id,))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\goals.py
+================================================================================
+
+from fastapi import APIRouter
+from goals.goals_manager import create_goal, list_goals
+
+router = APIRouter()
+
+
+@router.post("/goals/create")
+async def create(data:dict):
+
+    goal = data.get("goal")
+
+    goal_id = create_goal(goal)
+
+    return {"goal_id":goal_id}
+
+
+@router.get("/goals")
+async def goals():
+
+    return list_goals()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\jobs.py
+================================================================================
+
+from fastapi import APIRouter, Depends, HTTPException
+import jobs.manager as manager_module
+from core.database import get_connection
+from auth.deps import get_current_user
+
+router = APIRouter(prefix="/jobs")
+
+
+# =========================
+# RUN JOB
+# =========================
+@router.post("/run")
+async def run(data: dict, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    try:
+
+        # =========================
+        # 1. RUN DESDE BUILDER
+        # =========================
+        if "nodes" in data:
+
+          workflow = {
+           "nodes": data["nodes"],
+           "edges": data.get("edges", [])
+         }
+
+          job_id = await manager_module.manager.create_job(
+           workflow,
+           tenant_id
+         )
+
+          return {"job_id": job_id}
+
+        # =========================
+        # 2. RUN POR NOMBRE (DB)
+        # =========================
+        elif "name" in data:
+
+            job_id = await manager_module.manager.create_job(
+                data["name"],
+                tenant_id
+            )
+
+            return {"job_id": job_id}
+
+        else:
+            raise Exception("Payload inválido")
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# =========================
+# LIST JOBS (FILTRADO)
+# =========================
+@router.get("/")
+def list_jobs(user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM jobs
+        WHERE tenant_id = %s
+        ORDER BY updated_at DESC
+    """, (tenant_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+
+# =========================
+# RETRY JOB (VALIDAR TENANT)
+# =========================
+@router.post("/retry/{job_id}")
+async def retry(job_id: str, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # verificar que el job pertenece al tenant
+    cur.execute("""
+        SELECT id
+        FROM jobs
+        WHERE id = %s AND tenant_id = %s
+    """, (job_id, tenant_id))
+
+    job = cur.fetchone()
+    conn.close()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return await manager_module.manager.retry_job(job_id)
+
+
+# =========================
+# JOB STEPS (FILTRADO)
+# =========================
+@router.get("/{job_id}/steps")
+async def job_steps(job_id: str, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # validar tenant
+    cur.execute("""
+        SELECT id
+        FROM jobs
+        WHERE id = %s AND tenant_id = %s
+    """, (job_id, tenant_id))
+
+    job = cur.fetchone()
+
+    if not job:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # traer steps
+    cur.execute("""
+        SELECT step, status, result, timestamp
+        FROM job_steps
+        WHERE job_id = %s
+        ORDER BY timestamp ASC
+    """, (job_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "step": r["step"],
+            "status": r["status"],
+            "result": r["result"],
+            "timestamp": str(r["timestamp"])
+        }
+        for r in rows
+    ]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\marketplace.py
+================================================================================
+
+from fastapi import APIRouter
+from plugin_manager.registry import REGISTRY
+from plugin_manager.installer import install_plugin, remove_plugin
+from plugin_manager.loader import load_installed
+
+router = APIRouter(prefix="/market")
+
+
+@router.get("/")
+def list_plugins():
+    return {"plugins": REGISTRY}
+
+
+@router.post("/install")
+def install(data: dict):
+    msg = install_plugin(data["file"])
+    load_installed()
+    return {"status": msg}
+
+
+@router.post("/remove")
+def remove(data: dict):
+    msg = remove_plugin(data["file"])
+    load_installed()
+    return {"status": msg}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\missions.py
+================================================================================
+
+from fastapi import APIRouter
+
+from core.mission_engine import (
+    create_mission
+)
+
+router = APIRouter(
+    prefix="/missions"
+)
+
+
+@router.post("/run")
+async def run_mission(
+    data: dict
+):
+
+    goal = data.get(
+        "goal",
+        ""
+    )
+
+    result = await create_mission(
+        goal
+    )
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\operator.py
+================================================================================
+
+from fastapi import APIRouter
+
+from core.operator_agent import (
+    OperatorAgent
+)
+
+router = APIRouter(
+    prefix="/operator"
+)
+
+agent = OperatorAgent()
+
+
+@router.post("/run")
+async def run_operator(
+    data: dict
+):
+
+    goal = data.get(
+        "goal",
+        ""
+    )
+
+    result = await agent.execute_goal(
+        goal
+    )
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\realtime.py
+================================================================================
+
+from fastapi import APIRouter, WebSocket
+from realtime.ws import manager
+
+router = APIRouter()
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()
+    except:
+        manager.disconnect(websocket)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\routes.py
+================================================================================
+
+from fastapi import APIRouter
+from pydantic import BaseModel
+from fastapi import Request
+
+from brain.agent import ask_nexus
+from actions.system_actions import execute_action
+from memory.indexer import index_folder
+
+router = APIRouter()
+
+
+class Query(BaseModel):
+    message: str
+
+
+@router.post("/ask")
+def ask(q: Query, request: Request):
+    result = ask_nexus(q.message)
+
+    # 🔥 acción simple
+    if result.get("action"):
+        output = execute_action(result["action"], result.get("value"), user)
+        return {"type": "action", "result": output}
+
+    # 🔥 texto normal / planner / fallback
+    return {
+        "type": "text",
+        "result": result.get("response", str(result))
+    }
+
+
+@router.post("/index")
+def index(data: dict):
+    folder = data.get("folder")
+    index_folder(folder)
+    return {"status": "ok"}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\schedules.py
+================================================================================
+
+from fastapi import APIRouter, HTTPException, Depends
+from core.database import get_connection
+from datetime import datetime
+from auth.deps import get_current_user
+
+router = APIRouter(prefix="/schedules", tags=["schedules"])
+
+
+# =========================
+# GET ALL (FILTRADO POR TENANT)
+# =========================
+@router.get("/")
+def list_schedules(user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, name, workflow, type, expression, enabled, last_run
+        FROM schedules
+        WHERE tenant_id = %s
+        ORDER BY id DESC
+    """, (tenant_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [dict(row) for row in rows]
+
+
+# =========================
+# CREATE (CON TENANT)
+# =========================
+@router.post("/")
+def create_schedule(data: dict, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    required = ["name", "workflow", "type", "expression"]
+
+    for r in required:
+        if r not in data:
+            raise HTTPException(400, f"Falta campo: {r}")
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO schedules
+        (name, workflow, type, expression, enabled, last_run, tenant_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+    """, (
+        data["name"],
+        data["workflow"],
+        data["type"],       # interval / cron
+        data["expression"],
+        True,
+        None,
+        tenant_id
+    ))
+
+    new_id = cur.fetchone()[0]
+
+    conn.commit()
+    conn.close()
+
+    return {"ok": True, "id": new_id}
+
+
+# =========================
+# TOGGLE ENABLE (SEGURIDAD TENANT)
+# =========================
+@router.post("/{schedule_id}/toggle")
+def toggle_schedule(schedule_id: int, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE schedules
+        SET enabled = NOT enabled
+        WHERE id = %s AND tenant_id = %s
+        RETURNING enabled
+    """, (schedule_id, tenant_id))
+
+    row = cur.fetchone()
+
+    conn.commit()
+    conn.close()
+
+    if not row:
+        raise HTTPException(404, "Schedule no encontrado")
+
+    return {"enabled": row[0]}
+
+
+# =========================
+# DELETE (SEGURIDAD TENANT)
+# =========================
+@router.delete("/{schedule_id}")
+def delete_schedule(schedule_id: int, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM schedules
+        WHERE id = %s AND tenant_id = %s
+    """, (schedule_id, tenant_id))
+
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\setup.py
+================================================================================
+
+from fastapi import APIRouter
+import json
+from pathlib import Path
+from packs.loader import install_pack
+
+router = APIRouter(prefix="/setup")
+
+FILE = Path("config/state.json")
+
+
+@router.get("/")
+def status():
+    return json.loads(FILE.read_text())
+
+
+@router.post("/install")
+def install(data: dict):
+
+    install_pack(data["slug"])
+
+    FILE.write_text(json.dumps({"installed": True}))
+
+    return {"ok": True}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\simulation.py
+================================================================================
+
+from fastapi import APIRouter
+from simulation.workflow_simulator import simulate_workflow
+
+router = APIRouter()
+
+
+@router.post("/simulate")
+
+async def simulate(data:dict):
+
+    name = data.get("workflow")
+
+    result = simulate_workflow(name)
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\system.py
+================================================================================
+
+from fastapi import APIRouter
+from core.metrics import metrics
+from core.self_model import self_model
+from core.database import get_connection
+
+router = APIRouter()
+
+@router.get("/system/health")
+async def system_health():
+
+    snapshot = self_model.snapshot()
+    health = self_model.health_score(snapshot)
+
+    return {
+        "health_score": health,
+        "error_rate": snapshot["error_rate"],
+        "queue_size": snapshot["queue_size"],
+        "open_circuits": snapshot["open_circuits"],
+        "total_jobs": snapshot["total_jobs"]
+    }
+
+@router.get("/system/errors")
+async def system_errors():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT error, COUNT(*) as total
+        FROM (
+            SELECT json_extract(result,'$.error') as error
+            FROM jobs
+            WHERE status='error'
+        )
+        WHERE error IS NOT NULL
+        GROUP BY error
+        ORDER BY total DESC
+        LIMIT 10
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    errors = []
+
+    for r in rows:
+        errors.append({
+            "error": r["error"],
+            "count": r["total"]
+        })
+
+    return errors
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\triggers.py
+================================================================================
+
+import uuid
+import json
+
+from fastapi import APIRouter, Depends
+
+from auth.deps import get_current_user
+from core.database import get_connection
+
+router = APIRouter(prefix="/triggers")
+
+
+# =========================
+# CREATE
+# =========================
+@router.post("/")
+def create_trigger(
+    data: dict,
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    trigger_id = str(uuid.uuid4())
+
+    cur.execute("""
+        INSERT INTO triggers
+        (
+            id,
+            tenant_id,
+            name,
+            trigger_type,
+            config,
+            workflow_id
+        )
+        VALUES (%s,%s,%s,%s,%s,%s)
+    """, (
+        trigger_id,
+        user["tenant_id"],
+        data["name"],
+        data["trigger_type"],
+        json.dumps(data["config"]),
+        data["workflow_id"]
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True
+    }
+
+
+# =========================
+# LIST
+# =========================
+@router.get("/")
+def list_triggers(
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM triggers
+        WHERE tenant_id = %s
+        ORDER BY created_at DESC
+    """, (user["tenant_id"],))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\workflows.py
+================================================================================
+
+import uuid
+import json
+
+from fastapi import APIRouter, Depends
+
+from auth.deps import get_current_user
+from core.database import get_connection
+
+router = APIRouter(prefix="/workflows")
+
+
+# =========================
+# SAVE WORKFLOW
+# =========================
+@router.post("/save")
+def save_workflow(
+    data: dict,
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    workflow_id = str(uuid.uuid4())
+
+    cur.execute("""
+        INSERT INTO workflows
+        (
+            id,
+            tenant_id,
+            name,
+            nodes,
+            edges
+        )
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        workflow_id,
+        user["tenant_id"],
+        data["name"],
+        json.dumps(data["nodes"]),
+        json.dumps(data["edges"])
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id
+    }
+
+
+# =========================
+# LIST WORKFLOWS
+# =========================
+@router.get("/")
+def list_workflows(
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM workflows
+        WHERE tenant_id = %s
+        ORDER BY created_at DESC
+    """, (user["tenant_id"],))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+
+# =========================
+# LOAD WORKFLOW
+# =========================
+@router.get("/{workflow_id}")
+def load_workflow(
+    workflow_id: str,
+    user=Depends(get_current_user)
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM workflows
+        WHERE id = %s
+        AND tenant_id = %s
+    """, (
+        workflow_id,
+        user["tenant_id"]
+    ))
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    if not row:
+        return {"error": "Workflow not found"}
+
+    workflow = dict(row)
+
+    return {
+        "id": workflow["id"],
+        "name": workflow["name"],
+        "nodes": workflow["nodes"],
+        "edges": workflow["edges"]
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\audit\routes.py
+================================================================================
+
+from fastapi import APIRouter, Depends
+from core.database import get_connection
+from auth.deps import get_current_user
+
+router = APIRouter(prefix="/audit")
+
+
+@router.get("/")
+def get_logs(user=Depends(get_current_user)):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    SELECT * FROM audit_logs
+    WHERE tenant_id=%s AND workspace_id=%s
+    ORDER BY created_at DESC
+    LIMIT 200
+    """, (
+        user["tenant_id"],
+        user["workspace_id"]
+    ))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return rows
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\audit\service.py
+================================================================================
+
+import uuid
+import json
+from datetime import datetime
+
+from core.database import get_connection
+
+
+def log_event(
+    user,
+    action,
+    entity=None,
+    entity_id=None,
+    metadata=None
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+    INSERT INTO audit_logs
+    (id, user_id, tenant_id, workspace_id, action,
+     entity, entity_id, metadata, created_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        str(uuid.uuid4()),
+        user.get("user_id"),
+        user.get("tenant_id"),
+        user.get("workspace_id"),
+        action,
+        entity,
+        entity_id,
+        json.dumps(metadata or {}),
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\auth\deps.py
+================================================================================
+
+from fastapi import Header, HTTPException, Depends
+from jose import JWTError
+
+from auth.security import decode_token
+
+
+def get_current_user(authorization: str = Header(None)):
+
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Token requerido")
+
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Formato de token inválido")
+
+    token = authorization.split(" ")[1]
+
+    try:
+        payload = decode_token(token)
+        return payload
+
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    
+def require_admin(user=Depends(get_current_user)):
+
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    return user    
+    
+def get_current_tenant(user=Depends(get_current_user)):
+    return user["tenant_id"]    
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\auth\models.py
+================================================================================
+
+from pydantic import BaseModel
+
+class User(BaseModel):
+    username: str
+    password: str
+    role: str
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\auth\routes.py
+================================================================================
+
+from fastapi import APIRouter, HTTPException, Depends
+from datetime import datetime
+import uuid
+
+from auth.security import create_token
+from auth.service import authenticate, create_user
+from auth.deps import require_admin, get_current_user
+from core.database import get_connection
+from audit.service import log_event
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+# =========================
+# REGISTER (MULTI-TENANT REAL)
+# =========================
+@router.post("/register")
+def register(data: dict):
+
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        raise HTTPException(400, "Username y password requeridos")
+
+    tenant_id = str(uuid.uuid4())
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    try:
+        # 1️⃣ Crear tenant
+        cur.execute("""
+            INSERT INTO tenants (id, name, created_at)
+            VALUES (%s, %s, %s)
+        """, (
+            tenant_id,
+            username,
+            datetime.utcnow()
+        ))
+
+        # 2️⃣ Crear usuario admin del tenant
+        create_user(
+            username=username,
+            password=password,
+            role="admin",
+            tenant_id=tenant_id,
+            workspace_id="main"
+        )
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(400, f"Error creando usuario: {str(e)}")
+
+    finally:
+        conn.close()
+
+    return {
+        "ok": True,
+        "tenant_id": tenant_id
+    }
+
+
+# =========================
+# LOGIN
+# =========================
+@router.post("/login")
+def login(data: dict):
+
+    username = data.get("username")
+    password = data.get("password")
+
+    if not username or not password:
+        raise HTTPException(400, "Username y password requeridos")
+
+    user = authenticate(username, password)
+
+    if not user:
+        raise HTTPException(401, "Credenciales inválidas")
+
+    token = create_token({
+        "sub": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "tenant_id": user["tenant_id"],
+        "workspace_id": user["workspace_id"]
+    })
+
+    # audit seguro
+    try:
+        log_event(
+            user,
+            action="login",
+            entity="user",
+            entity_id=user["id"]
+        )
+    except Exception:
+        pass
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "username": user["username"],
+            "role": user["role"],
+            "tenant_id": user["tenant_id"],
+            "workspace_id": user["workspace_id"]
+        }
+    }
+
+
+# =========================
+# LIST USERS (ADMIN SOLO SU TENANT)
+# =========================
+@router.get("/users")
+def list_users(admin=Depends(require_admin)):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, username, role
+        FROM users
+        WHERE tenant_id = %s
+    """, (admin["tenant_id"],))
+
+    users = cur.fetchall()
+    conn.close()
+
+    return [dict(u) for u in users]
+
+
+# =========================
+# CREATE USER (ADMIN DEL MISMO TENANT)
+# =========================
+@router.post("/users")
+def create_user_admin(data: dict, admin=Depends(require_admin)):
+
+    create_user(
+        username=data["username"],
+        password=data["password"],
+        role=data.get("role", "user"),
+        tenant_id=admin["tenant_id"],
+        workspace_id=admin["workspace_id"]
+    )
+
+    return {"ok": True}
+
+
+# =========================
+# DELETE USER (MISMO TENANT)
+# =========================
+@router.delete("/users/{username}")
+def delete_user(username: str, admin=Depends(require_admin)):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DELETE FROM users
+        WHERE username = %s
+        AND tenant_id = %s
+    """, (username, admin["tenant_id"]))
+
+    conn.commit()
+    conn.close()
+
+    return {"ok": True}
+
+
+# =========================
+# CURRENT USER
+# =========================
+@router.get("/me")
+def me(user=Depends(get_current_user)):
+    return user
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\auth\security.py
+================================================================================
+
+from passlib.context import CryptContext
+from jose import jwt, JWTError
+from datetime import datetime, timedelta
+
+# ======================================================
+# CONFIG
+# ======================================================
+
+SECRET = "nexus-super-secret"  # 🔥 MISMO QUE ANTES
+ALGORITHM = "HS256"
+TOKEN_EXPIRE_HOURS = 8
+
+pwd = CryptContext(
+    schemes=["argon2"],
+    deprecated="auto"
+)
+
+# ======================================================
+# PASSWORDS
+# ======================================================
+
+def hash_password(password: str) -> str:
+    return pwd.hash(password)
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    return pwd.verify(password, hashed)
+
+
+# ======================================================
+# JWT
+# ======================================================
+
+def create_token(data: dict) -> str:
+
+    payload = data.copy()
+    payload["exp"] = datetime.utcnow() + timedelta(hours=TOKEN_EXPIRE_HOURS)
+
+    return jwt.encode(payload, SECRET, algorithm=ALGORITHM)
+
+
+def decode_token(token: str) -> dict:
+
+    try:
+        return jwt.decode(token, SECRET, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\auth\service.py
+================================================================================
+
+import uuid
+from datetime import datetime
+from auth.security import decode_token
+from passlib.context import CryptContext
+
+from core.database import get_connection
+from auth.security import create_token  # 🔥 ÚNICO JWT
+
+# ======================================================
+# PASSWORD
+# ======================================================
+
+pwd = CryptContext(
+    schemes=["argon2"],
+    deprecated="auto"
+)
+
+
+def hash_password(password: str):
+    return pwd.hash(password)
+
+
+def verify_password(password: str, hashed: str):
+    return pwd.verify(password, hashed)
+
+
+# ======================================================
+# USERS
+# ======================================================
+
+def create_user(
+    username,
+    password,
+    role="user",
+    tenant_id="default",
+    workspace_id="main"
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    user_id = str(uuid.uuid4())
+
+    try:
+        cur.execute("""
+        INSERT INTO users
+        (id, username, password_hash, role, tenant_id, workspace_id, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (
+            user_id,
+            username,
+            hash_password(password),
+            role,
+            tenant_id,
+            workspace_id,
+            datetime.utcnow()
+        ))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def get_user(username):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM users
+        WHERE username = %s
+    """, (username,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return dict(row)
+
+
+def authenticate(username, password):
+
+    user = get_user(username)
+
+    if not user:
+        return None
+
+    if not verify_password(password, user["password_hash"]):
+        return None
+
+    return user
+
+
+# ======================================================
+# LOGIN (GENERA TOKEN)
+# ======================================================
+
+def login_user(user: dict):
+
+    return create_token({
+        "sub": user["id"],
+        "username": user["username"],
+        "role": user["role"],
+        "tenant_id": user["tenant_id"],
+        "workspace_id": user["workspace_id"]
+    })
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\automations\engine.py
+================================================================================
+
+import asyncio
+from actions.system_actions import execute_action
+
+
+# ==========================================================
+# VERSION ASYNC REAL
+# ==========================================================
+
+async def run_steps_async(steps):
+
+    outputs = []
+
+    for step in steps:
+        result = await execute_action(
+            step["action"],
+            step.get("value")
+        )
+        outputs.append(str(result))
+
+    return "\n".join(outputs)
+
+
+# ==========================================================
+# Wrapper sync (para scheduler viejo)
+# ==========================================================
+
+def run_steps(steps):
+    return asyncio.run(run_steps_async(steps))
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\automations\scheduler.py
+================================================================================
+
+import schedule
+import time
+import threading
+from automations.engine import run_steps
+
+
+JOBS = []
+
+
+def add_job(seconds, steps):
+
+    def job():
+        print("⏰ Ejecutando tarea programada...")
+        run_steps(steps)
+
+    schedule.every(seconds).seconds.do(job)
+    JOBS.append(job)
+
+
+def loop():
+    while True:
+        try:
+            schedule.run_pending()
+        except Exception as e:
+            print("Scheduler crash:", e)
+        time.sleep(1)
+
+
+def start_scheduler():
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\automations\watcher.py
+================================================================================
+
+import time
+import threading
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+from automations.engine import run_steps
+
+
+class Handler(FileSystemEventHandler):
+
+    def __init__(self, ext, steps):
+        self.ext = ext
+        self.steps = steps
+
+    def on_created(self, event):
+
+        if event.src_path.lower().endswith(self.ext):
+            print("📂 Nuevo archivo detectado:", event.src_path)
+            run_steps(self.steps)
+
+
+def watch(folder, ext, steps):
+
+    handler = Handler(ext, steps)
+
+    observer = Observer()
+    observer.schedule(handler, folder, recursive=False)
+    observer.start()
+
+
+def start_watchdog():
+    pass
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\autonomy\autonomous_loop.py
+================================================================================
+
+import asyncio
+import logging
+
+from core.self_model import self_model
+from autonomy.worker_controller import adjust_workers
+from learning.learning_engine import learning_engine
+from brain.anomaly_detector import anomaly_detector
+from brain.workflow_optimizer import analyze_workflows, suggest_fixes
+from brain.nexus_voice import speak
+from realtime.ws import manager as ws
+
+from goals.goals_manager import list_goals
+from ai.planner import create_plan, plan_to_workflow
+
+
+async def autonomous_loop():
+
+    await speak("He iniciado mi ciclo autónomo de monitoreo.")
+
+    while True:
+
+        try:
+
+            # =========================
+            # SNAPSHOT DEL SISTEMA
+            # =========================
+
+            snapshot = self_model.snapshot()
+
+            # guardar historial
+            self_model.history.append(snapshot)
+
+            # evitar crecimiento infinito
+            if len(self_model.history) > 100:
+                self_model.history.pop(0)
+
+            risk = self_model.evaluate_risk(snapshot)
+            health = self_model.health_score(snapshot)
+
+            anomaly = anomaly_detector.detect(self_model.history)
+
+            # =========================
+            # VOZ DEL SISTEMA
+            # =========================
+
+            await speak(
+                f"Estado actual: salud del sistema {health}%, nivel de riesgo {risk}."
+            )
+
+            # =========================
+            # DETECCIÓN DE ANOMALÍAS
+            # =========================
+
+            if anomaly:
+
+                await speak(
+                    "He detectado una anomalía en el comportamiento del sistema.",
+                    "warning"
+                )
+
+            # =========================
+            # WORKFLOW OPTIMIZER
+            # =========================
+
+            problems = analyze_workflows()
+
+            if problems:
+
+                suggestions = suggest_fixes(problems)
+
+                print("🧠 Nexus suggestions:", suggestions)
+
+                await speak(
+                    "He encontrado oportunidades para optimizar algunos workflows."
+                )
+
+                await ws.broadcast({
+                    "type": "nexus_suggestions",
+                    "suggestions": suggestions
+                })
+
+            # =========================
+            # AJUSTE AUTOMÁTICO WORKERS
+            # =========================
+
+            await adjust_workers()
+
+            # =========================
+            # LEARNING ENGINE
+            # =========================
+
+            learning = learning_engine.analyze_recent_failures()
+
+            if learning:
+
+                learning_engine.save_learning(learning)
+
+                await speak(
+                    "He aprendido algo nuevo analizando errores recientes."
+                )
+
+                await ws.broadcast({
+                    "type": "nexus_learning",
+                    "message": learning["message"]
+                })
+
+            # =========================
+            # GOAL SYSTEM
+            # =========================
+
+            goals = list_goals()
+
+            for g in goals:
+
+                if g["status"] != "active":
+                    continue
+
+                try:
+
+                    await speak(
+                        f"Estoy evaluando el objetivo: {g['goal']}"
+                    )
+
+                    plan = create_plan(g["goal"])
+
+                    workflow = plan_to_workflow(plan)
+
+                    await speak(
+                        f"He generado un plan para cumplir el objetivo."
+                    )
+
+                    await ws.broadcast({
+                        "type": "nexus_goal_plan",
+                        "goal": g["goal"],
+                        "plan": plan,
+                        "workflow": workflow
+                    })
+
+                except Exception as e:
+
+                    logging.error(f"Goal planning error: {e}")
+
+            # =========================
+            # ESTADO GLOBAL DEL SISTEMA
+            # =========================
+
+            await ws.broadcast({
+                "type": "nexus_state",
+                "risk": risk,
+                "health": health,
+                "anomaly": anomaly,
+                "snapshot": snapshot
+            })
+
+        except Exception as e:
+
+            logging.error(f"Nexus autonomous loop error: {e}")
+
+            await speak(
+                "He encontrado un problema interno en mi ciclo autónomo.",
+                "error"
+            )
+
+        # =========================
+        # INTERVALO LOOP
+        # =========================
+
+        await asyncio.sleep(10)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\autonomy\worker_controller.py
+================================================================================
+
+from core.metrics import metrics
+from core.self_model import self_model
+import jobs.manager as manager_module
+
+
+async def adjust_workers():
+
+    snapshot = self_model.snapshot()
+    health = self_model.health_score(snapshot)
+
+    queue_size = snapshot["queue_size"]
+
+    manager = manager_module.manager
+
+    if not manager:
+        return
+
+    current = manager.max_workers
+
+    # ======================
+    # Escalar hacia arriba
+    # ======================
+
+    if queue_size > 5 and health > 70:
+
+        new_workers = min(current + 1, 8)
+
+        if new_workers != current:
+            await manager.update_workers(new_workers)
+            print(f"🚀 Workers aumentados a {new_workers}")
+
+    # ======================
+    # Escalar hacia abajo
+    # ======================
+
+    if queue_size == 0 and current > 2:
+
+        new_workers = current - 1
+
+        await manager.update_workers(new_workers)
+        print(f"📉 Workers reducidos a {new_workers}")
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

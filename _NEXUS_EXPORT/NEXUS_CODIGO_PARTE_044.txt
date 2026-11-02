@@ -1,0 +1,1069 @@
+﻿
+================================================================================
+ARCHIVO: nexus_http_security.py
+================================================================================
+
+"""Origin and Host validation for the local NEXUS HTTP API.
+
+The API can execute local actions, so browser callers are restricted to the
+known local development UIs. Non-browser clients without an Origin header
+remain supported; Host is still restricted to loopback names.
+"""
+from __future__ import annotations
+
+from urllib.parse import urlsplit
+
+ALLOWED_BROWSER_ORIGINS = frozenset(
+    {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    }
+)
+ALLOWED_HOST_NAMES = frozenset({"localhost", "127.0.0.1"})
+API_PORT = 8765
+MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB por solicitud JSON
+
+
+def is_allowed_browser_origin(origin: str | None) -> bool:
+    """Allow non-browser clients and only the known local browser origins."""
+    if origin is None or not origin.strip():
+        return True
+    return origin.strip() in ALLOWED_BROWSER_ORIGINS
+
+
+def cors_origin_for(origin: str | None) -> str | None:
+    """Return an origin to echo in CORS headers, never a wildcard."""
+    if origin is None:
+        return None
+    normalized = origin.strip()
+    return normalized if normalized in ALLOWED_BROWSER_ORIGINS else None
+
+
+def is_allowed_host(host_header: str | None) -> bool:
+    """Reject non-loopback Host headers (including DNS-rebinding domains)."""
+    if host_header is None or not host_header.strip():
+        # Preserve compatibility with HTTP/1.0 clients that omit Host.
+        return True
+    try:
+        parsed = urlsplit("//" + host_header.strip())
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    return hostname in ALLOWED_HOST_NAMES and port in (None, API_PORT)
+
+
+def is_allowed_content_length(content_length: int) -> bool:
+    """Accept non-empty request bodies up to the configured safety limit."""
+    return 0 < content_length <= MAX_REQUEST_BODY_BYTES
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus_memory_v1_patch.py
+================================================================================
+
+from __future__ import annotations
+
+import argparse
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+
+def replace_once(source: str, old: str, new: str, label: str) -> str:
+    count = source.count(old)
+    if count != 1:
+        raise RuntimeError(
+            f"No se pudo aplicar '{label}': se esperaba el bloque una vez y se encontró {count}. "
+            "No se modificó ningún archivo."
+        )
+    return source.replace(old, new, 1)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Implementa memoria semántica mínima para NEXUS V1.")
+    parser.add_argument("--root", default=".", help="Raíz del repositorio NEXUS.")
+    root = Path(parser.parse_args().root).resolve()
+
+    recognizer_path = root / "packages/planner/src/planner/intent_recognizer.py"
+    engine_path = root / "packages/engine/src/engine/engine.py"
+    planner_test_path = root / "packages/planner/tests/test_semantic_memory_intent.py"
+    engine_test_path = root / "packages/engine/tests/test_engine_semantic_memory.py"
+
+    missing = [str(p) for p in (recognizer_path, engine_path) if not p.is_file()]
+    if missing:
+        raise SystemExit("No encuentro estos archivos:\n" + "\n".join(missing) + "\nEjecutá desde la raíz de NEXUS o usá --root.")
+    if planner_test_path.exists() or engine_test_path.exists():
+        raise SystemExit("Ya existe uno de los archivos de prueba nuevos. Para no pisar trabajo local, no se modificó ningún archivo.")
+
+    recognizer = recognizer_path.read_text(encoding="utf-8")
+    engine = engine_path.read_text(encoding="utf-8")
+
+    old_compound = """        compound_parts = re.split(
+            r"\\s+(?:y|e|luego|después|despues|además|ademas)\\s+",
+            normalized,
+            maxsplit=1,
+        )
+
+        if len(compound_parts) == 2:
+            first_text = compound_parts[0].strip()
+            second_text = compound_parts[1].strip()
+
+            first_intent = self._recognize_single(
+                first_text,
+                context,
+            )
+
+            second_intent = self._recognize_single(
+                second_text,
+                context,
+                previous_intent=first_intent,
+            )
+
+            if (
+                first_intent.action != "system.unknown"
+                and second_intent.action != "system.unknown"
+            ):
+                return Intent(
+                    action=first_intent.action,
+                    confidence=min(
+                        first_intent.confidence,
+                        second_intent.confidence,
+                    ),
+                    parameters=first_intent.parameters.copy(),
+                    original_text=text,
+                    sub_intents=[
+                        Intent(
+                            action=first_intent.action,
+                            confidence=first_intent.confidence,
+                            parameters=first_intent.parameters.copy(),
+                            original_text=first_text,
+                        ),
+                        Intent(
+                            action=second_intent.action,
+                            confidence=second_intent.confidence,
+                            parameters=second_intent.parameters.copy(),
+                            original_text=second_text,
+                        ),
+                    ],
+                )
+"""
+    new_compound = """        # Conservamos el texto original para no perder mayúsculas
+        # en valores que el usuario pide guardar.
+        compound_parts = re.split(
+            r"\\s+(?:y|e|luego|después|despues|además|ademas)\\s+",
+            text.strip(),
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )
+
+        if len(compound_parts) == 2:
+            first_original = compound_parts[0].strip()
+            second_original = compound_parts[1].strip()
+            first_text = first_original.lower()
+            second_text = second_original.lower()
+
+            first_intent = self._recognize_single(
+                first_text,
+                context,
+                original_text=first_original,
+            )
+
+            second_intent = self._recognize_single(
+                second_text,
+                context,
+                original_text=second_original,
+                previous_intent=first_intent,
+            )
+
+            if (
+                first_intent.action != "system.unknown"
+                and second_intent.action != "system.unknown"
+            ):
+                return Intent(
+                    action=first_intent.action,
+                    confidence=min(
+                        first_intent.confidence,
+                        second_intent.confidence,
+                    ),
+                    parameters=first_intent.parameters.copy(),
+                    original_text=text,
+                    sub_intents=[
+                        Intent(
+                            action=first_intent.action,
+                            confidence=first_intent.confidence,
+                            parameters=first_intent.parameters.copy(),
+                            original_text=first_original,
+                        ),
+                        Intent(
+                            action=second_intent.action,
+                            confidence=second_intent.confidence,
+                            parameters=second_intent.parameters.copy(),
+                            original_text=second_original,
+                        ),
+                    ],
+                )
+"""
+    recognizer = replace_once(recognizer, old_compound, new_compound, "preservación del texto compuesto")
+
+    old_episode = """        if episode_query is not None:
+            return Intent(
+                action="system.query_episode",
+                original_text=text,
+                parameters={
+                    "action": episode_query.action,
+                    "field": episode_query.field,
+                },
+            )
+
+        #
+        # Anaphoric references inside compound intents
+"""
+    new_episode = """        if episode_query is not None:
+            return Intent(
+                action="system.query_episode",
+                original_text=text,
+                parameters={
+                    "action": episode_query.action,
+                    "field": episode_query.field,
+                },
+            )
+
+        #
+        # Explicit semantic memory
+        #
+        # V1: explicit requests to remember a fact and retrieve it later.
+        #
+        remember_match = re.match(
+            r"^(?:record[aá]|recordame|acordate|acord[aá]te|"
+            r"guard[aá]|guarda|aprend[eé]|memoriz[aá])\\s+"
+            r"(?:que\\s+)?(.+?)\\s+(?:se llama|es|son|está|esta)\\s+"
+            r"(.+?)[.!?]*$",
+            text.strip(),
+            re.IGNORECASE,
+        )
+
+        if remember_match:
+            predicate = re.sub(
+                r"^(?:mi|mis|el|la|los|las|un|una)\\s+",
+                "",
+                remember_match.group(1).strip(),
+                flags=re.IGNORECASE,
+            )
+            value = remember_match.group(2).strip().rstrip(".!?")
+            if predicate and value:
+                return Intent(
+                    action="system.remember_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate.lower(),
+                        "value": value,
+                    },
+                )
+
+        if re.search(
+            r"\\b(?:qué|que)\\s+(?:nombre|dato|información|informacion)\\s+"
+            r"(?:te\\s+)?(?:ped[ií]\\s+)?(?:recordar|guardar|memorizar)\\b",
+            normalized,
+        ):
+            return Intent(
+                action="system.recall_last_fact",
+                original_text=text,
+                parameters={"subject": "user"},
+            )
+
+        recall_match = re.search(
+            r"\\b(?:cómo|como)\\s+se\\s+llama\\s+"
+            r"(?:(?:mi|mis|el|la|los|las|un|una)\\s+)?(.+?)[?!.]*$",
+            normalized,
+        )
+        if recall_match:
+            predicate = recall_match.group(1).strip()
+            if predicate:
+                return Intent(
+                    action="system.recall_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate,
+                    },
+                )
+
+        #
+        # Anaphoric references inside compound intents
+"""
+    recognizer = replace_once(recognizer, old_episode, new_episode, "reconocimiento de memoria semántica")
+
+    helper_anchor = """    async def execute(
+        self,
+        text: str,
+    ) -> ExecutionResult:
+"""
+    helper_code = """    def _handle_semantic_memory_intent(
+        self,
+        intent,
+        original_text: str,
+    ) -> ExecutionResult | None:
+        # Resuelve las intenciones explícitas de memoria semántica de V1.
+        supported_actions = {
+            "system.remember_fact",
+            "system.recall_fact",
+            "system.recall_last_fact",
+        }
+        intents = intent.sub_intents or [intent]
+        # No interceptar compuestas que mezclen memoria con otras acciones.
+        if not all(item.action in supported_actions for item in intents):
+            return None
+
+        operations: list[dict[str, object]] = []
+        responses: list[str] = []
+        for item in intents:
+            parameters = item.parameters
+            if item.action == "system.remember_fact":
+                subject = parameters.get("subject")
+                predicate = parameters.get("predicate")
+                value = parameters.get("value")
+                if not all(
+                    isinstance(part, str) and part.strip()
+                    for part in (subject, predicate, value)
+                ):
+                    return None
+                fact = self._semantic_memory.learn(
+                    subject=subject,
+                    predicate=predicate,
+                    value=value.strip(),
+                    source="user",
+                )
+                responses.append(f"Recordado: {fact.predicate} = {fact.value}.")
+                operations.append({
+                    "action": item.action,
+                    "status": "stored",
+                    "subject": fact.subject,
+                    "predicate": fact.predicate,
+                    "value": fact.value,
+                })
+                continue
+
+            if item.action == "system.recall_fact":
+                subject = parameters.get("subject", "user")
+                predicate = parameters.get("predicate")
+                if not isinstance(subject, str) or not isinstance(predicate, str) or not predicate.strip():
+                    return None
+                fact = self._semantic_memory.get(subject, predicate)
+                if fact is None:
+                    responses.append(f"Todavía no tengo registrado ese dato: {predicate}.")
+                    operations.append({"action": item.action, "status": "not_found", "predicate": predicate})
+                else:
+                    responses.append(f"Tengo registrado que {fact.predicate} es {fact.value}.")
+                    operations.append({
+                        "action": item.action,
+                        "status": "found",
+                        "predicate": fact.predicate,
+                        "value": fact.value,
+                    })
+                continue
+
+            user_facts = [
+                fact for fact in self._semantic_memory.find_by_subject("user")
+                if fact.source == "user"
+            ]
+            if not user_facts:
+                responses.append("Todavía no tengo ningún dato que me hayas pedido recordar.")
+                operations.append({"action": item.action, "status": "not_found"})
+            else:
+                fact = max(user_facts, key=lambda known_fact: known_fact.updated_at)
+                responses.append(f"Me pediste recordar: {fact.predicate} = {fact.value}.")
+                operations.append({
+                    "action": item.action,
+                    "status": "found",
+                    "predicate": fact.predicate,
+                    "value": fact.value,
+                })
+
+        message = " ".join(responses)
+        return ExecutionResult(
+            success=True,
+            message=message,
+            output={"operations": operations},
+            metadata={"action": intent.action, "original_text": original_text, "response": message},
+        )
+
+    async def execute(
+        self,
+        text: str,
+    ) -> ExecutionResult:
+"""
+    engine = replace_once(engine, helper_anchor, helper_code, "manejador de memoria del Engine")
+
+    old_intent_log = """        self._memory.add(
+            "intent",
+            {
+                "action": intent.action,
+                "confidence": intent.confidence,
+                "parameters": intent.parameters,
+                "original_text": intent.original_text,
+            },
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 5. DECISION
+"""
+    new_intent_log = """        self._memory.add(
+            "intent",
+            {
+                "action": intent.action,
+                "confidence": intent.confidence,
+                "parameters": intent.parameters,
+                "original_text": intent.original_text,
+            },
+        )
+
+        semantic_memory_result = self._handle_semantic_memory_intent(intent, text)
+        if semantic_memory_result is not None:
+            semantic_memory_result.metadata = {
+                **semantic_memory_result.metadata,
+                "timings": {
+                    **timings,
+                    "total": time.perf_counter() - total_started_at,
+                },
+            }
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": semantic_memory_result.success,
+                    "message": semantic_memory_result.message,
+                    "output": semantic_memory_result.output,
+                    "metadata": semantic_memory_result.metadata,
+                },
+            )
+            self._presence_events.emit_state(
+                "completed",
+                message=semantic_memory_result.message,
+                data={"action": intent.action},
+            )
+            return semantic_memory_result
+
+        #
+        # ---------------------------------------------------------
+        # 5. DECISION
+"""
+    engine = replace_once(engine, old_intent_log, new_intent_log, "integración de memoria en Engine")
+
+    planner_tests = """import pytest
+
+from planner.intent_recognizer import IntentRecognizer
+
+
+def test_recognizes_explicit_memory_write_and_preserves_value_case() -> None:
+    intent = IntentRecognizer().recognize("Recordá que mi proyecto actual se llama NEXUS.")
+    assert intent.action == "system.remember_fact"
+    assert intent.parameters == {
+        "subject": "user",
+        "predicate": "proyecto actual",
+        "value": "NEXUS",
+    }
+
+
+def test_recognizes_semantic_memory_lookup() -> None:
+    intent = IntentRecognizer().recognize("¿Cómo se llama mi proyecto actual?")
+    assert intent.action == "system.recall_fact"
+    assert intent.parameters == {"subject": "user", "predicate": "proyecto actual"}
+
+
+def test_recognizes_compound_remember_and_recall_last_fact() -> None:
+    intent = IntentRecognizer().recognize(
+        "Recordá que mi proyecto actual se llama NEXUS y después decime qué nombre te pedí recordar"
+    )
+    assert intent.is_compound
+    assert [part.action for part in intent.sub_intents] == [
+        "system.remember_fact",
+        "system.recall_last_fact",
+    ]
+    assert intent.sub_intents[0].parameters["value"] == "NEXUS"
+"""
+
+    engine_tests = """from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent_recognizer import IntentRecognizer
+from runtime.runtime import Runtime
+
+
+def build_engine() -> Engine:
+    runtime = MagicMock(spec=Runtime)
+    runtime.tool_registry = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+    recognizer = IntentRecognizer()
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        side_effect=lambda text, _capabilities, context: recognizer.recognize(text, context)
+    )
+    return Engine(runtime=runtime, intent_provider=intent_provider)
+
+
+@pytest.mark.asyncio
+async def test_engine_remembers_and_recalls_a_fact() -> None:
+    engine = build_engine()
+    stored = await engine.execute("Recordá que mi proyecto actual se llama NEXUS.")
+    recalled = await engine.execute("¿Cómo se llama mi proyecto actual?")
+    assert stored.success
+    assert "NEXUS" in stored.message
+    assert recalled.success
+    assert "NEXUS" in recalled.message
+    assert engine.semantic_memory.get_value("user", "proyecto actual") == "NEXUS"
+
+
+@pytest.mark.asyncio
+async def test_engine_executes_compound_remember_and_recall() -> None:
+    engine = build_engine()
+    result = await engine.execute(
+        "Recordá que mi proyecto actual se llama NEXUS y después decime qué nombre te pedí recordar"
+    )
+    assert result.success
+    assert "NEXUS" in result.message
+    assert engine.semantic_memory.get_value("user", "proyecto actual") == "NEXUS"
+"""
+
+    for source, path in ((recognizer, recognizer_path), (engine, engine_path), (planner_tests, planner_test_path), (engine_tests, engine_test_path)):
+        compile(source, str(path), "exec")
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backups = {}
+    for path in (recognizer_path, engine_path):
+        backup = path.with_name(f"{path.name}.bak-{timestamp}")
+        shutil.copy2(path, backup)
+        backups[path] = backup
+    try:
+        recognizer_path.write_text(recognizer, encoding="utf-8")
+        engine_path.write_text(engine, encoding="utf-8")
+        planner_test_path.parent.mkdir(parents=True, exist_ok=True)
+        engine_test_path.parent.mkdir(parents=True, exist_ok=True)
+        planner_test_path.write_text(planner_tests, encoding="utf-8")
+        engine_test_path.write_text(engine_tests, encoding="utf-8")
+    except Exception:
+        for path, backup in backups.items():
+            shutil.copy2(backup, path)
+        for path in (planner_test_path, engine_test_path):
+            if path.exists():
+                path.unlink()
+        raise
+
+    print("Cambios aplicados. Copias de seguridad creadas:")
+    for path, backup in backups.items():
+        print(f"  {path.relative_to(root)} -> {backup.name}")
+    print("Pruebas nuevas:")
+    print(f"  {planner_test_path.relative_to(root)}")
+    print(f"  {engine_test_path.relative_to(root)}")
+    print("Ahora ejecutá las dos pruebas nuevas; no se corrió una batería general.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus_semantic_memory_thread_fix.py
+================================================================================
+
+from pathlib import Path
+from datetime import datetime
+import re
+
+root = Path.cwd()
+target = root / 'packages' / 'memory' / 'src' / 'memory' / 'semantic_memory.py'
+if not target.is_file():
+    raise SystemExit(f'No se encontró el archivo: {target}')
+text = target.read_text(encoding='utf-8')
+if 'NEXUS_SEMANTIC_MEMORY_THREAD_FIX_V1' in text:
+    raise SystemExit('La corrección de concurrencia ya parece aplicada; no se modificó ningún archivo.')
+if 'sqlite3.connect(resolved_path, timeout=10.0, check_same_thread=False)' in text:
+    raise SystemExit('La conexión ya tiene check_same_thread=False. No se modificó ningún archivo.')
+
+# Add synchronization support.
+text = text.replace('import json\nimport sqlite3\n', 'import json\nimport sqlite3\nimport threading\nfrom functools import wraps\n', 1)
+anchor = '\n\n@dataclass\nclass SemanticFact:'
+decorator = '''\n\ndef _thread_safe(method):\n    """Serializa el acceso a la conexión SQLite compartida."""\n    @wraps(method)\n    def wrapper(self, *args, **kwargs):\n        with self._lock:\n            return method(self, *args, **kwargs)\n    return wrapper\n'''
+if anchor not in text:
+    raise SystemExit('No se encontró el punto de inserción para el decorador; no se modificó ningún archivo.')
+text = text.replace(anchor, decorator + anchor, 1)
+
+old = '    def __init__(self, db_path: str | Path | None = None) -> None:\n        if db_path is None or str(db_path) == ":memory:":'
+new = '    def __init__(self, db_path: str | Path | None = None) -> None:\n        # NEXUS_SEMANTIC_MEMORY_THREAD_FIX_V1\n        self._lock = threading.RLock()\n        if db_path is None or str(db_path) == ":memory:":'
+if text.count(old) != 1:
+    raise SystemExit('No se encontró la inicialización de SemanticMemory esperada; no se modificó ningún archivo.')
+text = text.replace(old, new, 1)
+text = text.replace('sqlite3.connect(resolved_path, timeout=10.0)', 'sqlite3.connect(resolved_path, timeout=10.0, check_same_thread=False)', 1)
+
+methods = [
+    '    def _initialize_schema(self) -> None:',
+    '    def learn(\n',
+    '    def get(self, subject: str, predicate: str) -> SemanticFact | None:',
+    '    def find_by_subject(self, subject: str) -> list[SemanticFact]:',
+    '    def find_by_predicate(self, predicate: str) -> list[SemanticFact]:',
+    '    def all(self) -> list[SemanticFact]:',
+    '    def count(self) -> int:',
+    '    def forget(self, subject: str, predicate: str) -> bool:',
+    '    def clear(self) -> None:',
+    '    def close(self) -> None:',
+]
+for marker in methods:
+    if text.count(marker) != 1:
+        raise SystemExit(f'No se encontró un método único para sincronizar: {marker!r}. No se modificó ningún archivo.')
+    text = text.replace(marker, '    @_thread_safe\n' + marker, 1)
+
+# Syntax sanity check before writing.
+compile(text, str(target), 'exec')
+backup = target.with_name(target.name + '.bak-thread-fix-' + datetime.now().strftime('%Y%m%d-%H%M%S'))
+backup.write_text(target.read_text(encoding='utf-8'), encoding='utf-8')
+target.write_text(text, encoding='utf-8')
+print('Corrección de concurrencia aplicada correctamente.')
+print(f'Archivo modificado: {target}')
+print(f'Copia de seguridad: {backup}')
+print('La conexión permite uso entre hilos y las operaciones se serializan con RLock.')
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus_semantic_persistence_patch.py
+================================================================================
+
+from pathlib import Path
+from datetime import datetime
+import shutil
+import re
+
+ROOT = Path.cwd()
+MEMORY = ROOT / 'packages/memory/src/memory/semantic_memory.py'
+ENGINE = ROOT / 'packages/engine/src/engine/engine.py'
+BOOTSTRAP = ROOT / 'packages/bootstrap/src/bootstrap/bootstrap.py'
+
+for p in (MEMORY, ENGINE, BOOTSTRAP):
+    if not p.is_file():
+        raise SystemExit(f'No se encontró el archivo esperado: {p}')
+
+memory_text = MEMORY.read_text(encoding='utf-8')
+engine_text = ENGINE.read_text(encoding='utf-8')
+bootstrap_text = BOOTSTRAP.read_text(encoding='utf-8')
+
+# Guard against applying this patch twice.
+if 'import sqlite3' in memory_text and 'NEXUS_SEMANTIC_MEMORY_PATCH_V1' in memory_text:
+    raise SystemExit('La persistencia semántica ya parece estar aplicada. No se modificó ningún archivo.')
+if 'semantic_memory: SemanticMemory | None = None' in engine_text:
+    raise SystemExit('Engine ya acepta semantic_memory. No se modificó ningún archivo.')
+if 'NEXUS_SEMANTIC_MEMORY_DB_PATH' in bootstrap_text:
+    raise SystemExit('Bootstrap ya configura NEXUS_SEMANTIC_MEMORY_DB_PATH. No se modificó ningún archivo.')
+
+# Full implementation retains the existing public API and uses SQLite.
+new_memory = '''from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+@dataclass
+class SemanticFact:
+    """Representa una unidad de conocimiento semántico reutilizable."""
+
+    subject: str
+    predicate: str
+    value: Any
+    confidence: float = 1.0
+    source: str = "system"
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+class SemanticMemory:
+    """Memoria semántica con persistencia SQLite opcional.
+
+    Si db_path es None, usa una base SQLite en memoria (apropiada para tests).
+    Para persistencia entre reinicios, se debe proporcionar una ruta de archivo.
+    """
+
+    # NEXUS_SEMANTIC_MEMORY_PATCH_V1
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        if db_path is None or str(db_path) == ":memory:":
+            resolved_path = ":memory:"
+        else:
+            path = Path(db_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path = str(path)
+
+        self._connection = sqlite3.connect(resolved_path, timeout=10.0)
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+        if resolved_path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode = WAL")
+        self._initialize_schema()
+
+    def _initialize_schema(self) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semantic_facts (
+                    subject TEXT NOT NULL,
+                    predicate TEXT NOT NULL,
+                    value_json TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL,
+                    PRIMARY KEY (subject, predicate)
+                )
+                """
+            )
+
+    @staticmethod
+    def _normalize(value: str) -> str:
+        if not isinstance(value, str):
+            raise TypeError("SemanticMemory values must be strings.")
+        return " ".join(value.strip().lower().split())
+
+    @staticmethod
+    def _normalize_confidence(confidence: float) -> float:
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("SemanticFact confidence must be numeric.") from exc
+        return max(0.0, min(1.0, confidence))
+
+    @staticmethod
+    def _to_fact(row: sqlite3.Row | None) -> SemanticFact | None:
+        if row is None:
+            return None
+        return SemanticFact(
+            subject=row["subject"],
+            predicate=row["predicate"],
+            value=json.loads(row["value_json"]),
+            confidence=float(row["confidence"]),
+            source=row["source"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+            metadata=json.loads(row["metadata_json"]),
+        )
+
+    def learn(
+        self,
+        subject: str,
+        predicate: str,
+        value: Any,
+        *,
+        confidence: float = 1.0,
+        source: str = "system",
+        metadata: dict[str, Any] | None = None,
+    ) -> SemanticFact:
+        subject = self._normalize(subject)
+        predicate = self._normalize(predicate)
+        if not subject:
+            raise ValueError("SemanticFact subject cannot be empty.")
+        if not predicate:
+            raise ValueError("SemanticFact predicate cannot be empty.")
+
+        confidence = self._normalize_confidence(confidence)
+        now = datetime.now(timezone.utc).isoformat()
+        current = self.get(subject, predicate)
+        created_at = current.created_at.isoformat() if current else now
+        metadata_value = dict(metadata) if metadata is not None else (current.metadata if current else {})
+
+        value_json = json.dumps(value, ensure_ascii=False)
+        metadata_json = json.dumps(metadata_value, ensure_ascii=False)
+        with self._connection:
+            self._connection.execute(
+                """
+                INSERT INTO semantic_facts
+                    (subject, predicate, value_json, confidence, source,
+                     created_at, updated_at, metadata_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(subject, predicate) DO UPDATE SET
+                    value_json = excluded.value_json,
+                    confidence = excluded.confidence,
+                    source = excluded.source,
+                    updated_at = excluded.updated_at,
+                    metadata_json = excluded.metadata_json
+                """,
+                (subject, predicate, value_json, confidence, source,
+                 created_at, now, metadata_json),
+            )
+        fact = self.get(subject, predicate)
+        assert fact is not None
+        return fact
+
+    def get(self, subject: str, predicate: str) -> SemanticFact | None:
+        row = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE subject = ? AND predicate = ?",
+            (self._normalize(subject), self._normalize(predicate)),
+        ).fetchone()
+        return self._to_fact(row)
+
+    def get_value(self, subject: str, predicate: str, default: Any = None) -> Any:
+        fact = self.get(subject, predicate)
+        return default if fact is None else fact.value
+
+    def find_by_subject(self, subject: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE subject = ? ORDER BY created_at",
+            (self._normalize(subject),),
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def find_by_predicate(self, predicate: str) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts WHERE predicate = ? ORDER BY created_at",
+            (self._normalize(predicate),),
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def all(self) -> list[SemanticFact]:
+        rows = self._connection.execute(
+            "SELECT * FROM semantic_facts ORDER BY created_at, subject, predicate"
+        ).fetchall()
+        return [fact for row in rows if (fact := self._to_fact(row)) is not None]
+
+    def count(self) -> int:
+        row = self._connection.execute(
+            "SELECT COUNT(*) AS total FROM semantic_facts"
+        ).fetchone()
+        return int(row["total"])
+
+    def forget(self, subject: str, predicate: str) -> bool:
+        with self._connection:
+            cursor = self._connection.execute(
+                "DELETE FROM semantic_facts WHERE subject = ? AND predicate = ?",
+                (self._normalize(subject), self._normalize(predicate)),
+            )
+        return cursor.rowcount > 0
+
+    def clear(self) -> None:
+        with self._connection:
+            self._connection.execute("DELETE FROM semantic_facts")
+
+    def close(self) -> None:
+        """Cierra la conexión SQLite asociada a esta instancia."""
+        self._connection.close()
+'''
+
+# Inject optional memory dependency into Engine without changing existing callers.
+old_sig = '    default_actor_type: str | None = None,\n) -> None:\n'
+new_sig = '    default_actor_type: str | None = None,\n    semantic_memory: SemanticMemory | None = None,\n) -> None:\n'
+if engine_text.count(old_sig) != 1:
+    raise SystemExit('No se pudo identificar de forma única la firma de Engine; no se modificó ningún archivo.')
+engine_new = engine_text.replace(old_sig, new_sig, 1)
+old_instance = '        self._semantic_memory = SemanticMemory()\n'
+new_instance = '        self._semantic_memory = semantic_memory if semantic_memory is not None else SemanticMemory()\n'
+if engine_new.count(old_instance) != 1:
+    raise SystemExit('No se pudo identificar de forma única la inicialización de SemanticMemory; no se modificó ningún archivo.')
+engine_new = engine_new.replace(old_instance, new_instance, 1)
+
+# Bootstrap creates the persistent instance at the normal application entry point.
+if 'from engine.engine import Engine' not in bootstrap_text:
+    raise SystemExit('No se encontró el import de Engine en bootstrap; no se modificó ningún archivo.')
+bootstrap_new = bootstrap_text.replace(
+    'from engine.engine import Engine',
+    'from engine.engine import Engine\nfrom memory.semantic_memory import SemanticMemory',
+    1,
+)
+old_return = '    return Engine(\n        runtime,\n        intent_provider=intent_provider,\n'
+new_return = '''    semantic_memory_db_path = os.environ.get(
+        "NEXUS_SEMANTIC_MEMORY_DB_PATH",
+        str(Path.home() / ".nexus" / "semantic_memory.db"),
+    )
+    semantic_memory = SemanticMemory(db_path=semantic_memory_db_path)
+
+    return Engine(
+        runtime,
+        intent_provider=intent_provider,
+        semantic_memory=semantic_memory,
+'''
+if bootstrap_new.count(old_return) != 1:
+    raise SystemExit('No se pudo identificar de forma única el retorno Engine de build_engine; no se modificó ningún archivo.')
+bootstrap_new = bootstrap_new.replace(old_return, new_return, 1)
+
+# All validation completed; back up and write the three files.
+for p, old in ((MEMORY, memory_text), (ENGINE, engine_text), (BOOTSTRAP, bootstrap_text)):
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    backup = p.with_name(p.name + f'.bak-semantic-persistence-{stamp}')
+    shutil.copy2(p, backup)
+
+MEMORY.write_text(new_memory, encoding='utf-8')
+ENGINE.write_text(engine_new, encoding='utf-8')
+BOOTSTRAP.write_text(bootstrap_new, encoding='utf-8')
+
+# Add isolated unit tests for persistence behavior.
+tests_dir = ROOT / 'packages/memory/tests'
+tests_dir.mkdir(parents=True, exist_ok=True)
+test_file = tests_dir / 'test_semantic_memory_persistence.py'
+if test_file.exists():
+    raise SystemExit(f'Se modificaron los tres archivos principales, pero ya existía {test_file}; no se sobrescribió el test.')
+test_file.write_text('''from pathlib import Path\n\nfrom memory.semantic_memory import SemanticMemory\n\n\ndef test_semantic_memory_persists_facts_after_reopen(tmp_path: Path) -> None:\n    db_path = tmp_path / "semantic.db"\n    first = SemanticMemory(db_path=db_path)\n    first.learn("User", "Favorite color", "blue", metadata={"source": "test"})\n    first.close()\n\n    second = SemanticMemory(db_path=db_path)\n    fact = second.get("user", "favorite color")\n    assert fact is not None\n    assert fact.value == "blue"\n    assert fact.metadata == {"source": "test"}\n    second.close()\n\n\ndef test_semantic_memory_updates_and_forgets_persistently(tmp_path: Path) -> None:\n    db_path = tmp_path / "semantic.db"\n    memory = SemanticMemory(db_path=db_path)\n    memory.learn("user", "favorite color", "blue")\n    memory.learn("user", "favorite color", "green")\n    assert memory.get_value("user", "favorite color") == "green"\n    assert memory.forget("user", "favorite color") is True\n    assert memory.get_value("user", "favorite color") is None\n    assert memory.forget("user", "favorite color") is False\n    memory.close()\n\n\ndef test_semantic_memory_clear_removes_persisted_facts(tmp_path: Path) -> None:\n    db_path = tmp_path / "semantic.db"\n    memory = SemanticMemory(db_path=db_path)\n    memory.learn("user", "project", "NEXUS")\n    memory.clear()\n    assert memory.count() == 0\n    memory.close()\n\n    reopened = SemanticMemory(db_path=db_path)\n    assert reopened.count() == 0\n    reopened.close()\n''', encoding='utf-8')
+
+print('Persistencia semántica aplicada correctamente.')
+print('Archivos modificados:')
+for p in (MEMORY, ENGINE, BOOTSTRAP, test_file):
+    print(f'  {p}')
+print('Se crearon copias .bak-semantic-persistence-* de los tres archivos originales.')
+print('La memoria de Engine fuera de bootstrap sigue siendo SQLite en memoria; build_engine() usa ~/.nexus/semantic_memory.db por defecto.')
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\.gitignore
+================================================================================
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\eslint.config.js
+================================================================================
+
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{js,jsx}'],
+    extends: [
+      js.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true },
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+])
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\index.html
+================================================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nexus-mobile</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\package.json
+================================================================================
+
+{
+  "name": "nexus-mobile",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.13.4",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "vite": "^7.2.4"
+  }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

@@ -1,0 +1,2232 @@
+﻿
+================================================================================
+ARCHIVO: dashboard\public\vite.svg
+================================================================================
+
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="31.88" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 257"><defs><linearGradient id="IconifyId1813088fe1fbc01fb466" x1="-.828%" x2="57.636%" y1="7.652%" y2="78.411%"><stop offset="0%" stop-color="#41D1FF"></stop><stop offset="100%" stop-color="#BD34FE"></stop></linearGradient><linearGradient id="IconifyId1813088fe1fbc01fb467" x1="43.376%" x2="50.316%" y1="2.242%" y2="89.03%"><stop offset="0%" stop-color="#FFEA83"></stop><stop offset="8.333%" stop-color="#FFDD35"></stop><stop offset="100%" stop-color="#FFA800"></stop></linearGradient></defs><path fill="url(#IconifyId1813088fe1fbc01fb466)" d="M255.153 37.938L134.897 252.976c-2.483 4.44-8.862 4.466-11.382.048L.875 37.958c-2.746-4.814 1.371-10.646 6.827-9.67l120.385 21.517a6.537 6.537 0 0 0 2.322-.004l117.867-21.483c5.438-.991 9.574 4.796 6.877 9.62Z"></path><path fill="url(#IconifyId1813088fe1fbc01fb467)" d="M185.432.063L96.44 17.501a3.268 3.268 0 0 0-2.634 3.014l-5.474 92.456a3.268 3.268 0 0 0 3.997 3.378l24.777-5.718c2.318-.535 4.413 1.507 3.936 3.838l-7.361 36.047c-.495 2.426 1.782 4.5 4.151 3.78l15.304-4.649c2.372-.72 4.652 1.36 4.15 3.788l-11.698 56.621c-.732 3.542 3.979 5.473 5.943 2.437l1.313-2.028l72.516-144.72c1.215-2.423-.88-5.186-3.54-4.672l-25.505 4.922c-2.396.462-4.435-1.77-3.759-4.114l16.646-57.705c.677-2.35-1.37-4.583-3.769-4.113Z"></path></svg>
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\README.md
+================================================================================
+
+# React + Vite
+
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\App.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+import Login from "./pages/Login"
+import Register from "./pages/Register"
+import Dashboard from "./pages/Dashboard"
+import Users from "./pages/Users"
+import Setup from "./pages/Setup"
+
+
+
+
+import Builder from "./pages/Builder";
+import Wallboard from "./features/wallboard/Wallboard"
+import AssistantMode from "./features/ai/AssistantMode"
+import Navbar from "./components/Navbar"
+
+const API = "http://127.0.0.1:8000"
+
+// ✅ AXIOS CONFIG CON TOKEN
+const api = axios.create({
+  baseURL: API
+})
+
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem("token")
+
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
+
+export default function App() {
+
+  const [installed, setInstalled] = useState(true)
+  const [kiosk, setKiosk] = useState(false)
+
+  const [stats, setStats] = useState({})
+  const [jobs, setJobs] = useState({})
+  const [logs, setLogs] = useState([])
+  const [plugins, setPlugins] = useState([])
+  const [suggestions, setSuggestions] = useState([])
+  const [market, setMarket] = useState([])
+
+  // ======================
+  // KIOSK MODE
+  // ======================
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+
+    if (params.get("kiosk")) {
+      setKiosk(true)
+      document.body.style.margin = "0"
+      document.body.style.overflow = "hidden"
+      document.body.style.cursor = "none"
+    }
+  }, [])
+
+  // ======================
+  // SETUP CHECK (SAFE)
+  // ======================
+  useEffect(() => {
+    api.get("/setup")
+      .then(r => setInstalled(r.data?.installed ?? true))
+      .catch(() => setInstalled(true)) // fallback
+  }, [])
+
+  // ======================
+  // DASHBOARD LOADER (SAFE MODE)
+  // ======================
+  const load = async () => {
+
+    const token = localStorage.getItem("token")
+     if (!token) return
+
+    try {
+      const safe = async (fn, fallback) => {
+        try {
+          const r = await fn()
+          return r.data
+        } catch {
+          return fallback
+        }
+      }
+
+      const [
+        s,
+        l,
+        p,
+        sug,
+        j
+      ] = await Promise.all([
+        safe(() => api.get("/dashboard/stats"), {}),
+        safe(() => api.get("/dashboard/logs"), { logs: [] }),
+        safe(() => api.get("/dashboard/plugins"), { plugins: [] }),
+        safe(() => api.get("/dashboard/suggestions"), { suggestions: [] }),
+        safe(() => api.get("/jobs/"), {})
+      ])
+
+      setStats(s)
+      setLogs(l.logs || [])
+      setPlugins(p.plugins || [])
+      setSuggestions(sug.suggestions || [])
+      setJobs(j || {})
+
+    } catch (e) {
+      console.log("dashboard load fail", e)
+    }
+  }
+
+  useEffect(() => {
+
+  const start = () => {
+    const token = localStorage.getItem("token")
+    if (!token) return
+
+    load()
+    const i = setInterval(load, 5000)
+    return () => clearInterval(i)
+  }
+
+  // pequeña espera para asegurar login
+  setTimeout(start, 300)
+
+}, [])
+
+  // ======================
+  // AUTH
+  // ======================
+  const token = localStorage.getItem("token")
+
+  if (window.location.pathname === "/login") return <Login />
+  if (window.location.pathname === "/register") return <Register />
+
+  if (!token) {
+    window.location.href = "/login"
+    return null
+  }
+
+  if (window.location.pathname === "/assistant") return <AssistantMode />
+  if (window.location.pathname === "/wallboard") return <Wallboard />
+  if (window.location.pathname === "/users") return <Users />
+  if (window.location.pathname === "/builder") return <Builder />
+
+  if (!installed) return <Setup />
+
+  return <Dashboard />
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\components\ErrorPanel.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: {
+    "x-api-key": "nexus-secret"
+  }
+})
+
+export default function ErrorPanel(){
+
+  const [errors,setErrors]=useState([])
+
+  useEffect(()=>{
+
+    const load = async ()=>{
+      const r = await api.get("/system/errors")
+      setErrors(r.data)
+    }
+
+    load()
+
+    const i = setInterval(load,3000)
+
+    return ()=>clearInterval(i)
+
+  },[])
+
+  return(
+    <div style={styles.wrap}>
+
+      <h3>Top Errors</h3>
+
+      {errors.length===0 && (
+        <div style={styles.ok}>
+          No errors detected
+        </div>
+      )}
+
+      {errors.map((e,i)=>(
+        <div key={i} style={styles.row}>
+          <span>{e.error}</span>
+          <span style={styles.count}>{e.count}</span>
+        </div>
+      ))}
+
+    </div>
+  )
+}
+
+const styles={
+
+  wrap:{
+    background:"rgba(255,255,255,.05)",
+    borderRadius:14,
+    padding:14,
+    color:"white"
+  },
+
+  ok:{
+    opacity:.6
+  },
+
+  row:{
+    display:"flex",
+    justifyContent:"space-between",
+    marginBottom:6,
+    fontSize:13
+  },
+
+  count:{
+    background:"#e74c3c",
+    padding:"2px 8px",
+    borderRadius:8,
+    fontSize:11
+  }
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\components\Navbar.jsx
+================================================================================
+
+export default function Navbar() {
+
+  const user = JSON.parse(localStorage.getItem("user") || "{}");
+
+  return (
+    <div style={{
+      display: "flex",
+      justifyContent: "space-between",
+      padding: 15,
+      background: "#111",
+      borderBottom: "1px solid #222"
+    }}>
+
+      <div>
+        <b>Nexus</b>
+      </div>
+
+      <div>
+        <a href="/" style={{ marginRight: 15 }}>Dashboard</a>
+        <a href="/users" style={{ marginRight: 15 }}>Usuarios</a>
+        <a href="/builder" style={{ marginRight: 15 }}>Builder</a>
+        <span style={{ marginRight: 15 }}>{user.username}</span>
+        <button onClick={()=>{
+          localStorage.clear()
+          window.location.href = "/login"
+        }}>
+          Logout
+        </button>
+      </div>
+
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\config\actions.js
+================================================================================
+
+export const ACTIONS = {
+
+  // =========================
+  // CREATE FOLDER
+  // =========================
+  create_folder: {
+
+    label: "Crear carpeta",
+
+    fields: [
+      {
+        name: "path",
+        label: "Ruta",
+        type: "text"
+      }
+    ]
+  },
+
+  // =========================
+  // MOVE FILES
+  // =========================
+  move_files: {
+
+    label: "Mover archivos",
+
+    fields: [
+      {
+        name: "ext",
+        label: "Extensión",
+        type: "text"
+      },
+      {
+        name: "to",
+        label: "Destino",
+        type: "text"
+      }
+    ]
+  },
+
+  // =========================
+  // OPEN URL
+  // =========================
+  open_url: {
+
+    label: "Abrir URL",
+
+    fields: [
+      {
+        name: "url",
+        label: "URL",
+        type: "text"
+      }
+    ]
+  },
+
+  // =========================
+  // IF EXTENSION
+  // =========================
+  if_extension: {
+
+    label: "IF Extension",
+
+    fields: [
+      {
+        name: "ext",
+        label: "Extension",
+        type: "text"
+      }
+    ]
+  },
+
+  join: {
+  label: "JOIN",
+  fields: []
+},
+
+approval: {
+  label: "Human Approval",
+  fields: [
+    {
+      name: "message",
+      label: "Approval Message"
+    }
+  ]
+},
+
+ai_classify_file: {
+
+  label: "AI Classify File",
+
+  fields: [
+    {
+      name: "prompt",
+      label: "AI Prompt"
+    }
+  ]
+},
+
+ai_agent: {
+
+  label: "AI Agent",
+
+  fields: [
+
+    {
+      name: "prompt",
+      label: "Prompt"
+    },
+
+    {
+      name: "model",
+      label: "Model"
+    }
+  ]
+},
+
+ai_tool_agent: {
+
+  label: "AI Tool Agent",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    },
+
+    {
+      name: "model",
+      label: "Model"
+    }
+  ]
+},
+
+ai_autonomous_agent: {
+
+  label: "Autonomous AI Agent",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    },
+
+    {
+      name: "model",
+      label: "Model"
+    },
+
+    {
+      name: "max_steps",
+      label: "Max Steps"
+    }
+  ]
+},
+
+ai_generate_workflow: {
+
+  label: "AI Generate Workflow",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    },
+
+    {
+      name: "model",
+      label: "Model"
+    }
+  ]
+},
+
+click: {
+
+  label: "Mouse Click",
+
+  fields: [
+
+    {
+      name: "x",
+      label: "X"
+    },
+
+    {
+      name: "y",
+      label: "Y"
+    }
+  ]
+},
+
+type_text: {
+
+  label: "Type Text",
+
+  fields: [
+
+    {
+      name: "text",
+      label: "Text"
+    }
+  ]
+},
+
+screenshot: {
+
+  label: "Screenshot",
+
+  fields: []
+},
+
+vision_read: {
+
+  label: "Vision Read",
+
+  fields: []
+},
+
+ai_vision_agent: {
+
+  label: "AI Vision Agent",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    }
+  ]
+},
+
+vision_click: {
+
+  label: "Vision Click",
+
+  fields: [
+
+    {
+      name: "target",
+      label: "Target Text"
+    }
+  ]
+},
+
+visual_autonomous_agent: {
+
+  label: "Visual Autonomous Agent",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    }
+  ]
+},
+
+detect_objects: {
+
+  label: "Detect Objects",
+
+  fields: []
+},
+
+ai_visual_reasoning: {
+
+  label: "AI Visual Reasoning",
+
+  fields: [
+
+    {
+      name: "goal",
+      label: "Goal"
+    }
+  ]
+},
+
+list_ui: {
+
+  label: "List UI Elements",
+
+  fields: []
+},
+
+focus_window: {
+
+  label: "Focus Window",
+
+  fields: [
+
+    {
+      name: "title",
+      label: "Window Title"
+    }
+  ]
+},
+
+
+
+};
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\ai\AssistantMode.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import Presence from "../presence/Presence"
+
+export default function AssistantMode(){
+
+  const [expanded,setExpanded]=useState(false)
+  const [mood,setMood]=useState("idle")
+
+  /* ===============================
+     HOTKEY
+  =============================== */
+
+  useEffect(()=>{
+
+    const handler=(e)=>{
+      if(e.ctrlKey && e.code==="Space"){
+        setExpanded(v=>!v)
+      }
+    }
+
+    window.addEventListener("keydown",handler)
+    return ()=>window.removeEventListener("keydown",handler)
+
+  },[])
+
+
+  /* ===============================
+     WEBSOCKET SISTEMA
+  =============================== */
+
+  useEffect(()=>{
+
+    const ws = new WebSocket("ws://127.0.0.1:8000/ws")
+
+    ws.onmessage = (e)=>{
+
+      const msg = JSON.parse(e.data)
+
+      if(msg.type==="job_failed"){
+        setMood("error")
+      }
+
+      if(msg.type==="job_done"){
+        setMood("happy")
+      }
+
+      if(msg.type==="job_start"){
+        setMood("thinking")
+      }
+
+      // volver a idle después de 2s
+      setTimeout(()=>setMood("idle"),2000)
+    }
+
+    ws.onerror = ()=>console.warn("WS Assistant desconectado")
+
+    return ()=>ws.close()
+
+  },[])
+
+
+  return(
+    <div style={styles.wrapper}>
+
+      <Presence mood={mood}/>
+
+      {expanded && (
+        <div style={styles.panel}>
+          <h3>Nexus</h3>
+          <p>Modo asistente activo</p>
+        </div>
+      )}
+
+    </div>
+  )
+}
+
+const styles={
+  wrapper:{
+    width:"100vw",
+    height:"100vh",
+    display:"flex",
+    alignItems:"center",
+    justifyContent:"center",
+    background:"transparent"
+  },
+  panel:{
+    position:"absolute",
+    bottom:10,
+    width:280,
+    background:"rgba(20,20,25,.95)",
+    padding:16,
+    borderRadius:16,
+    color:"white"
+  }
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\ai\BrainMap.jsx
+================================================================================
+
+import ReactFlow, { Background, Controls } from "reactflow"
+import "reactflow/dist/style.css"
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: { "x-api-key": "nexus-secret" }
+})
+
+export default function BrainMap(){
+
+  const [nodes,setNodes] = useState([])
+  const [edges,setEdges] = useState([])
+
+  useEffect(()=>{
+
+    const load = async ()=>{
+
+      try{
+
+        const goals = await api.get("/goals")
+        const jobs = await api.get("/jobs")
+
+        buildGraph(goals.data, jobs.data)
+
+      }catch(e){
+        console.error(e)
+      }
+
+    }
+
+    load()
+
+    const i = setInterval(load,2000)
+
+    return ()=>clearInterval(i)
+
+  },[])
+
+
+  function buildGraph(goals,jobs){
+
+    const n=[]
+    const e=[]
+
+    let id=1
+
+    goals.forEach((g,i)=>{
+
+      const goalId = "goal_"+id++
+
+      n.push({
+        id:goalId,
+        position:{x:100,y:i*150},
+        data:{label:"🎯 "+g.goal},
+        style:{background:"#8e44ad",color:"white"}
+      })
+
+      Object.entries(jobs).forEach(([jid,j])=>{
+
+        const jobNode="job_"+jid
+
+        n.push({
+          id:jobNode,
+          position:{x:400,y:i*150+50},
+          data:{label:"⚙ "+j.workflow},
+          style:{background:"#2980b9",color:"white"}
+        })
+
+        e.push({
+          id:"e_"+goalId+"_"+jid,
+          source:goalId,
+          target:jobNode
+        })
+
+      })
+
+    })
+
+    setNodes(n)
+    setEdges(e)
+
+  }
+
+
+  return(
+
+    <div style={{height:"600px",background:"#111"}}>
+
+      <ReactFlow
+        nodes={nodes}
+        edges={edges}
+        fitView
+      >
+
+        <Background/>
+        <Controls/>
+
+      </ReactFlow>
+
+    </div>
+
+  )
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\ai\Copilot.jsx
+================================================================================
+
+import { useState } from "react"
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: {
+    "x-api-key": "nexus-secret"
+  }
+})
+
+export default function Copilot({ onWorkflow }) {
+
+  const [prompt,setPrompt] = useState("")
+  const [loading,setLoading] = useState(false)
+
+  const generate = async () => {
+
+    setLoading(true)
+
+    try {
+
+      const r = await api.post("/copilot/generate",{
+        prompt
+      })
+
+      if(r.data.ok){
+
+        onWorkflow(r.data.workflow)
+
+      }
+
+    } catch(e){
+      console.error(e)
+    }
+
+    setLoading(false)
+  }
+
+  return(
+
+    <div style={styles.box}>
+
+      <h3>Nexus Copilot</h3>
+
+      <input
+        placeholder="Describe una automatización..."
+        value={prompt}
+        onChange={e=>setPrompt(e.target.value)}
+        style={styles.input}
+      />
+
+      <button onClick={generate} style={styles.btn}>
+        {loading ? "Generando..." : "Generar Workflow"}
+      </button>
+
+    </div>
+  )
+}
+
+const styles = {
+
+ box:{
+  background:"rgba(255,255,255,.05)",
+  padding:14,
+  borderRadius:12
+ },
+
+ input:{
+  width:"100%",
+  padding:8,
+  marginBottom:8
+ },
+
+ btn:{
+  width:"100%",
+  padding:8
+ }
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\jobs\JobsPanel.jsx
+================================================================================
+
+import { useEffect, useState, useMemo } from "react"
+import axios from "axios"
+import JobTimeline from "./JobTimeline"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010"
+})
+
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("token")
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
+
+export default function JobsPanel(){
+
+  const [jobs,setJobs]=useState({})
+  const [metrics,setMetrics]=useState({})
+  const [expanded,setExpanded]=useState(null)
+  const [selected,setSelected]=useState(null)
+
+  /* =========================
+     polling
+  ========================= */
+
+  useEffect(() => {
+
+  const loadInitial = async () => {
+    const [jobsRes, metricsRes] = await Promise.all([
+      api.get("/jobs"),
+      api.get("/metrics")
+    ])
+    setJobs(jobsRes.data)
+    setMetrics(metricsRes.data)
+  }
+
+  loadInitial()
+
+  const ws = new WebSocket("ws://127.0.0.1:8010/ws")
+
+  ws.onmessage = (e) => {
+
+    const msg = JSON.parse(e.data)
+
+    if (msg.type === "job_update") {
+
+      setJobs(prev => ({
+        ...prev,
+        [msg.job_id]: {
+          ...prev[msg.job_id],
+          status: msg.status,
+          result: msg.result
+        }
+      }))
+    }
+
+    if (msg.type === "metrics_update") {
+      setMetrics(msg.data)
+    }
+
+    if (msg.type === "circuit_update") {
+      setMetrics(prev => ({
+        ...prev,
+        circuit_state: msg.state
+      }))
+    }
+  }
+
+  return () => ws.close()
+
+}, [])
+
+  /* =========================
+     ordenar por fecha
+  ========================= */
+
+  const orderedEntries = useMemo(()=>{
+    return Object.entries(jobs)
+      .sort((a,b)=>{
+        const da = new Date(a[1].updated_at || 0)
+        const db = new Date(b[1].updated_at || 0)
+        return db - da
+      })
+  },[jobs])
+
+  const list = orderedEntries.map(e=>e[1])
+
+  /* =========================
+     métricas
+  ========================= */
+
+  const stats = useMemo(()=>( {
+    total: list.length,
+    running: list.filter(j=>j.status==="running").length,
+    queued: list.filter(j=>j.status==="queued").length,
+    done: list.filter(j=>j.status==="done").length,
+    error: list.filter(j=>j.status==="error").length
+  }),[jobs])
+
+  /* ========================= */
+
+  const color=(s)=>{
+    if(s==="running") return "#f6c344"
+    if(s==="done") return "#2ecc71"
+    if(s==="queued") return "#3498db"
+    if(s==="error") return "#e74c3c"
+    return "#999"
+  }
+
+  const toggle = (id)=>{
+    setExpanded(expanded===id ? null : id)
+  }
+
+  const formatResult = (r)=>{
+    if(!r) return "Sin resultado"
+    if(typeof r === "string") return r
+    return JSON.stringify(r,null,2)
+  }
+
+  /* ========================= */
+
+  return(
+  <div style={styles.wrap}>
+
+    <h3 style={{marginBottom:14,fontSize:18}}>Jobs</h3>
+
+    <div style={styles.stats}>
+      <Stat label="Total" value={stats.total}/>
+      <Stat label="Running" value={stats.running}/>
+      <Stat label="Queued" value={stats.queued}/>
+      <Stat label="Done" value={stats.done}/>
+      <Stat label="Error" value={stats.error}/>
+    </div>
+
+    <div style={styles.list}>
+
+      {orderedEntries.map(([id,j])=>{
+
+        const isExpanded = expanded===id
+
+        return(
+          <div key={id} style={styles.rowWrap}>
+
+            <div 
+              style={styles.row}
+              onClick={()=>toggle(id)}
+            >
+
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+
+                <span style={styles.arrow}>
+                  {isExpanded ? "▾" : "▸"}
+                </span>
+
+                <span style={styles.version}>
+                  v{j.version}
+                </span>
+
+                <span>{j.workflow}</span>
+
+              </div>
+
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+
+                {j.updated_at && (
+                  <span style={styles.time}>
+                    {new Date(j.updated_at).toLocaleTimeString()}
+                  </span>
+                )}
+
+                <span style={{
+                  ...styles.badge,
+                  background: color(j.status),
+                  animation: j.status==="running"
+                    ? "pulse 1.2s infinite"
+                    : "none"
+                }}>
+                  {j.status}
+                </span>
+
+              </div>
+
+            </div>
+
+            {isExpanded && (
+              <div style={styles.detail}>
+
+                {/* RESULTADO DEL JOB */}
+
+                <pre style={{
+                  ...styles.pre,
+                  color: j.status==="error"
+                    ? "#ff6b6b"
+                    : "#cfcfcf"
+                }}>
+                  {formatResult(j.result)}
+                </pre>
+
+                {/* 🔥 WORKFLOW TIMELINE */}
+
+                <div style={{marginTop:10}}>
+                  <JobTimeline jobId={id}/>
+                </div>
+
+              </div>
+            )}
+
+          </div>
+        )
+
+      })}
+
+    </div>
+
+  </div>
+)
+}
+
+/* ========================= */
+
+function Stat({label,value}){
+  return(
+    <div style={styles.card}>
+      <div style={{opacity:.5,fontSize:12}}>{label}</div>
+      <div style={{fontSize:22,fontWeight:600}}>{value}</div>
+    </div>
+  )
+}
+
+/* ========================= */
+
+const styles={
+
+  wrap:{
+    background:"rgba(255,255,255,.05)",
+    borderRadius:16,
+    padding:18,
+    color:"white",
+    backdropFilter:"blur(6px)"
+  },
+
+  stats:{
+    display:"grid",
+    gridTemplateColumns:"repeat(5,1fr)",
+    gap:10,
+    marginBottom:14
+  },
+
+  card:{
+    background:"rgba(255,255,255,.08)",
+    borderRadius:12,
+    padding:12,
+    textAlign:"center"
+  },
+
+  list:{
+    display:"flex",
+    flexDirection:"column",
+    gap:8,
+    maxHeight:340,
+    overflow:"auto",
+    scrollbarWidth:"thin"
+  },
+
+  rowWrap:{
+    display:"flex",
+    flexDirection:"column"
+  },
+
+  row:{
+    display:"flex",
+    justifyContent:"space-between",
+    alignItems:"center",
+    background:"rgba(255,255,255,.04)",
+    padding:"10px 12px",
+    borderRadius:10,
+    cursor:"pointer",
+    transition:"all .2s ease"
+  },
+
+  arrow:{
+    fontSize:12,
+    opacity:.6
+  },
+
+  version:{
+    fontSize:11,
+    opacity:.5
+  },
+
+  badge:{
+    padding:"4px 10px",
+    borderRadius:10,
+    fontSize:12,
+    fontWeight:600
+  },
+
+  time:{
+    fontSize:11,
+    opacity:.5
+  },
+
+  detail:{
+    marginTop:6,
+    background:"rgba(0,0,0,.35)",
+    padding:10,
+    borderRadius:10
+  },
+
+  pre:{
+    fontSize:11,
+    whiteSpace:"pre-wrap",
+    wordBreak:"break-word",
+    lineHeight:"1.4"
+  }
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\jobs\JobTimeline.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: {
+    "x-api-key": "nexus-secret"
+  }
+})
+
+export default function JobTimeline({jobId}){
+
+  const [steps,setSteps]=useState([])
+
+  useEffect(()=>{
+
+    if(!jobId) return
+
+    api.get(`/jobs/${jobId}/steps`)
+      .then(r=>setSteps(r.data))
+
+  },[jobId])
+
+  return(
+    <div style={styles.wrap}>
+
+      <h3>Workflow Timeline</h3>
+
+      {steps.map((s,i)=>(
+        <div key={i} style={styles.step}>
+
+          <div style={{
+            ...styles.dot,
+            background:s.status==="success"
+              ? "#2ecc71"
+              : "#e74c3c"
+          }}/>
+
+          <div style={styles.info}>
+            <div>{s.step}</div>
+            <div style={styles.time}>{s.timestamp}</div>
+          </div>
+
+        </div>
+      ))}
+
+    </div>
+  )
+}
+
+const styles={
+
+  wrap:{
+    background:"rgba(255,255,255,.05)",
+    padding:16,
+    borderRadius:12,
+    color:"white"
+  },
+
+  step:{
+    display:"flex",
+    gap:10,
+    marginBottom:8
+  },
+
+  dot:{
+    width:10,
+    height:10,
+    borderRadius:"50%"
+  },
+
+  info:{
+    display:"flex",
+    justifyContent:"space-between",
+    width:"100%"
+  },
+
+  time:{
+    opacity:.5,
+    fontSize:12
+  }
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\jobs\RealtimePanel.jsx
+================================================================================
+
+import { useEffect, useState } from "react";
+import { connectWS } from "../../services/ws";
+
+export default function RealtimePanel({ jobId }) {
+
+  const [logs, setLogs] = useState([]);
+
+  useEffect(() => {
+    connectWS((msg) => {
+
+      // filtrar por job
+      if (jobId && msg.job_id !== jobId) return;
+
+      setLogs(prev => [msg, ...prev].slice(0, 50));
+    });
+  }, [jobId]);
+
+  return (
+    <div style={{
+      background: "#000",
+      color: "#0f0",
+      padding: 10,
+      borderRadius: 8,
+      marginTop: 20
+    }}>
+      <h3>Realtime Logs</h3>
+
+      {logs.map((l, i) => (
+        <div key={i}>
+          [{l.type}] {l.message || ""}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\presence\Presence.jsx
+================================================================================
+
+import { useEffect, useRef } from "react"
+import face from "../../assets/face-mask.png"
+import { NexusState } from "../../nexusState"
+
+export default function Presence() {
+
+  const ref = useRef()
+  const particlesRef = useRef([])
+  const animationRef = useRef()
+  const audioLevelRef = useRef(0)
+
+  useEffect(() => {
+
+    const canvas = ref.current
+    const ctx = canvas.getContext("2d")
+
+    /* =========================
+       CANVAS SCALE SAFE
+    ========================= */
+
+    function resize() {
+      const DPR = window.devicePixelRatio || 1
+
+      canvas.width = window.innerWidth * DPR
+      canvas.height = window.innerHeight * DPR
+
+      canvas.style.width = "100vw"
+      canvas.style.height = "100vh"
+
+      ctx.setTransform(1,0,0,1,0,0)
+      ctx.scale(DPR, DPR)
+    }
+
+    resize()
+    window.addEventListener("resize", resize)
+
+    /* =========================
+       VARIABLES
+    ========================= */
+
+    const particles = particlesRef.current
+    let mouse = { x: window.innerWidth/2, y: window.innerHeight/2 }
+    let t = 0
+
+    /* =========================
+       AUDIO REACTIVE
+    ========================= */
+
+    navigator.mediaDevices?.getUserMedia({ audio: true })
+      .then(stream => {
+
+        const audioCtx = new AudioContext()
+        const analyser = audioCtx.createAnalyser()
+        const source = audioCtx.createMediaStreamSource(stream)
+
+        analyser.fftSize = 256
+        source.connect(analyser)
+
+        const data = new Uint8Array(analyser.frequencyBinCount)
+
+        function readAudio() {
+          analyser.getByteFrequencyData(data)
+          const avg = data.reduce((a,b)=>a+b,0) / data.length
+          audioLevelRef.current = avg / 255
+          requestAnimationFrame(readAudio)
+        }
+
+        readAudio()
+
+      })
+      .catch(() => {
+        audioLevelRef.current = 0
+      })
+
+    /* =========================
+       MOUSE TRACK
+    ========================= */
+
+    window.addEventListener("mousemove", e => {
+      mouse.x = e.clientX
+      mouse.y = e.clientY
+    })
+
+    /* =========================
+       CARGAR MÁSCARA
+    ========================= */
+
+    const img = new Image()
+    img.src = face
+
+    img.onload = () => {
+
+      particles.length = 0
+
+      const off = document.createElement("canvas")
+      const octx = off.getContext("2d")
+
+      const size = 500
+      off.width = size
+      off.height = size
+
+      octx.drawImage(img, 0, 0, size, size)
+      const data = octx.getImageData(0, 0, size, size).data
+
+      const gap = 4
+
+      for (let y = 0; y < size; y += gap) {
+        for (let x = 0; x < size; x += gap) {
+
+          const i = (y * size + x) * 4
+
+          if (data[i + 3] > 120) {
+
+            particles.push({
+              x: Math.random() * window.innerWidth,
+              y: Math.random() * window.innerHeight,
+              tx: window.innerWidth/2 - size/2 + x,
+              ty: window.innerHeight/2 - size/2 + y,
+              vx: 0,
+              vy: 0
+            })
+          }
+        }
+      }
+
+      animate()
+    }
+
+    /* =========================
+       COLOR DINÁMICO
+    ========================= */
+
+    function color() {
+      switch (NexusState.mode) {
+        case "listening": return "rgba(0,200,255,0.9)"
+        case "thinking": return "rgba(255,170,0,0.95)"
+        case "speaking": return "rgba(124,92,255,1)"
+        case "error": return "rgba(255,50,80,0.9)"
+        default: return "rgba(124,92,255,0.55)"
+      }
+    }
+
+    /* =========================
+       LOOP PRINCIPAL
+    ========================= */
+
+    function animate() {
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+      t += 0.02
+      const breathe = Math.sin(t) * 2
+
+      ctx.shadowBlur = 24
+      ctx.shadowColor = "#7c5cff"
+
+      const mx = (mouse.x - window.innerWidth/2) * 0.03
+      const my = (mouse.y - window.innerHeight/2) * 0.03
+
+      for (const p of particles) {
+
+        const dx = p.tx + mx - p.x
+        const dy = p.ty + my - p.y
+
+        p.vx += dx * 0.02
+        p.vy += dy * 0.02
+
+        const audioBoost = audioLevelRef.current * 8
+
+        p.vx += (Math.random() - 0.5) * audioBoost
+        p.vy += (Math.random() - 0.5) * audioBoost
+
+        p.vx *= 0.86
+        p.vy *= 0.86
+
+        p.x += p.vx
+        p.y += p.vy + breathe
+
+        ctx.fillStyle = color()
+        ctx.fillRect(p.x, p.y, 2, 2)
+      }
+
+      animationRef.current = requestAnimationFrame(animate)
+    }
+
+    /* =========================
+       CLEANUP
+    ========================= */
+
+    return () => {
+      cancelAnimationFrame(animationRef.current)
+      window.removeEventListener("resize", resize)
+    }
+
+  }, [])
+
+  return (
+    <canvas
+      ref={ref}
+      style={{
+        position: "fixed",
+        inset: 0,
+        pointerEvents: "none",
+        zIndex: 0,
+        opacity: 0.45,
+        transition: "opacity .4s ease"
+      }}
+    />
+  )
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\system\MissionControl.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+import { getAuthHeaders } from "../../services/auth"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: { "x-api-key": "nexus-secret" }
+})
+
+api.interceptors.request.use((config) => {
+
+  const token = localStorage.getItem("token")
+
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+
+  return config
+})
+
+export default function MissionControl(){
+
+  const [goals,setGoals] = useState([])
+  const [jobs,setJobs] = useState({})
+  const [voice,setVoice] = useState([])
+
+  /* =========================
+     LOAD DATA
+  ========================= */
+
+  useEffect(()=>{
+
+    const load = async ()=>{
+
+      try{
+
+        const g = await api.get("/goals")
+        setGoals(g.data)
+
+        const j = await api.get("/jobs")
+        setJobs(j.data)
+
+      }catch(e){
+        console.error(e)
+      }
+    }
+
+    load()
+
+    const i=setInterval(load,2000)
+
+    return ()=>clearInterval(i)
+
+  },[])
+
+
+  /* =========================
+     REALTIME VOICE
+  ========================= */
+
+  useEffect(()=>{
+
+    const ws = new WebSocket("ws://127.0.0.1:8010/ws")
+
+    ws.onmessage = (e)=>{
+
+      const msg = JSON.parse(e.data)
+
+      if(msg.type === "nexus_voice"){
+
+        setVoice(v => [
+          msg.message,
+          ...v.slice(0,8)
+        ])
+
+      }
+
+    }
+
+    return ()=>ws.close()
+
+  },[])
+
+
+  /* ========================= */
+
+  const running = Object.values(jobs)
+    .filter(j=>j.status==="running").length
+
+  const done = Object.values(jobs)
+    .filter(j=>j.status==="done").length
+
+
+  /* ========================= */
+
+  return(
+
+    <div style={styles.page}>
+
+      <h1 style={styles.title}>Nexus Mission Control</h1>
+
+      <div style={styles.grid}>
+
+        <Card title="Active Goals">
+
+          {goals.map(g=>(
+            <div key={g.id} style={styles.row}>
+              {g.goal}
+            </div>
+          ))}
+
+        </Card>
+
+
+        <Card title="System Health">
+
+          <div style={styles.metric}>
+            Running jobs: {running}
+          </div>
+
+          <div style={styles.metric}>
+            Completed jobs: {done}
+          </div>
+
+        </Card>
+
+
+        <Card title="Nexus Voice">
+
+          {voice.map((v,i)=>(
+            <div key={i} style={styles.log}>
+              {v}
+            </div>
+          ))}
+
+        </Card>
+
+
+      </div>
+
+    </div>
+  )
+}
+
+
+/* ========================= */
+
+function Card({title,children}){
+
+  return(
+
+    <div style={styles.card}>
+
+      <div style={styles.cardTitle}>
+        {title}
+      </div>
+
+      {children}
+
+    </div>
+
+  )
+
+}
+
+
+/* ========================= */
+
+const styles = {
+
+  page:{
+    padding:40,
+    background:"#0f1115",
+    height:"100vh",
+    color:"white",
+    fontFamily:"Inter"
+  },
+
+  title:{
+    marginBottom:30
+  },
+
+  grid:{
+    display:"grid",
+    gridTemplateColumns:"repeat(3,1fr)",
+    gap:20
+  },
+
+  card:{
+    background:"rgba(255,255,255,.05)",
+    borderRadius:16,
+    padding:20,
+    minHeight:200
+  },
+
+  cardTitle:{
+    marginBottom:10,
+    opacity:.6
+  },
+
+  metric:{
+    fontSize:22,
+    marginBottom:10
+  },
+
+  row:{
+    marginBottom:6
+  },
+
+  log:{
+    fontFamily:"monospace",
+    fontSize:12,
+    marginBottom:4
+  }
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\system\SystemHealth.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: {
+    "x-api-key": "nexus-secret"
+  }
+})
+
+export default function SystemHealth(){
+
+  const [health,setHealth]=useState(null)
+
+  useEffect(()=>{
+
+    const load = async ()=>{
+      const r = await api.get("/system/health")
+      setHealth(r.data)
+    }
+
+    load()
+
+    const i = setInterval(load,2000)
+
+    return ()=>clearInterval(i)
+
+  },[])
+
+  if(!health) return null
+
+  return(
+    <div style={styles.wrap}>
+
+      <h3>System Health</h3>
+
+      <div style={styles.score}>
+        {health.health_score}%
+      </div>
+
+      <div style={styles.grid}>
+        <Stat label="Errors" value={(health.error_rate*100).toFixed(1)+"%"}/>
+        <Stat label="Queue" value={health.queue_size}/>
+        <Stat label="Circuits" value={health.open_circuits.length}/>
+        <Stat label="Jobs" value={health.total_jobs}/>
+      </div>
+
+    </div>
+  )
+}
+
+function Stat({label,value}){
+  return(
+    <div style={styles.card}>
+      <div style={styles.label}>{label}</div>
+      <div style={styles.value}>{value}</div>
+    </div>
+  )
+}
+
+const styles={
+
+  wrap:{
+    background:"rgba(255,255,255,.05)",
+    borderRadius:14,
+    padding:16,
+    color:"white"
+  },
+
+  score:{
+    fontSize:48,
+    fontWeight:700,
+    textAlign:"center",
+    marginBottom:12
+  },
+
+  grid:{
+    display:"grid",
+    gridTemplateColumns:"repeat(4,1fr)",
+    gap:8
+  },
+
+  card:{
+    background:"rgba(255,255,255,.08)",
+    borderRadius:10,
+    padding:8,
+    textAlign:"center"
+  },
+
+  label:{
+    fontSize:11,
+    opacity:.6
+  },
+
+  value:{
+    fontSize:18,
+    fontWeight:600
+  }
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\features\wallboard\Wallboard.jsx
+================================================================================
+
+import { useEffect, useState, useMemo } from "react"
+import axios from "axios"
+import Presence from "../presence/Presence"
+import SystemHealth from "../system/SystemHealth"
+import ErrorPanel from "../../components/ErrorPanel"
+
+const API = "http://127.0.0.1:8010"
+
+export default function Wallboard(){
+
+  const [jobs,setJobs]=useState({})
+  const [time,setTime]=useState(new Date())
+  const [events,setEvents]=useState([])
+  const [health,setHealth]=useState("healthy")
+
+  /* reloj */
+  useEffect(()=>{
+    const i = setInterval(()=>setTime(new Date()),1000)
+    return ()=>clearInterval(i)
+  },[])
+
+  /* bootstrap inicial */
+  useEffect(()=>{
+    axios.get(`${API}/jobs`,{
+      headers:{ "x-api-key":"nexus-secret" }
+    }).then(r=>setJobs(r.data))
+  },[])
+
+  /* websocket realtime */
+  useEffect(()=>{
+
+  const ws = new WebSocket("ws://127.0.0.1:8010/ws")
+
+  ws.onmessage = (e)=>{
+
+    const msg = JSON.parse(e.data)
+
+    if(msg.type==="job_done"){
+      pushActivity("He completado una automatización sin incidentes.")
+      setCognitiveState("ÓPTIMO")
+    }
+
+    if(msg.type==="job_error"){
+      pushActivity("He detectado una anomalía operativa. Estoy evaluando el impacto.")
+      setCognitiveState("ANALIZANDO")
+    }
+
+    if(msg.type==="circuit.opened"){
+      pushActivity("He activado un protocolo de protección preventiva.")
+      setProtection("PROTECCIÓN ELEVADA")
+      setCognitiveState("DEFENSIVO")
+    }
+
+    if(msg.type==="circuit.closed"){
+      pushActivity("He restablecido condiciones estables.")
+      setProtection("ACTIVA")
+      setCognitiveState("ÓPTIMO")
+    }
+
+    if(msg.type === "nexus_decision"){
+      console.log("Nexus decision:", msg)
+    }
+
+    if(msg.type === "nexus_voice"){
+    setEvents(ev => [
+    msg.message,
+    ...ev.slice(0,10)
+    ])
+}
+
+  }
+
+  return ()=>ws.close()
+
+},[])
+
+  const pushEvent = (text)=>{
+    setEvents(ev=>[
+      {
+        time: new Date().toLocaleTimeString(),
+        text
+      },
+      ...ev.slice(0,8)
+    ])
+  }
+
+  /* métricas derivadas */
+
+  const list = Object.values(jobs)
+
+  const stats = useMemo(()=>({
+
+    total: list.length,
+    running: list.filter(j=>j.status==="running").length,
+    queued: list.filter(j=>j.status==="queued").length,
+    done: list.filter(j=>j.status==="done").length,
+    error: list.filter(j=>j.status==="error").length
+
+  }),[jobs])
+
+  const healthText = {
+    healthy:"🟢 Sistema saludable",
+    warning:"🟡 Atención requerida",
+    critical:"🔴 Acción necesaria"
+  }
+
+  return(
+    <div style={styles.page}>
+
+      <Presence />
+      <SystemHealth/>
+      <ErrorPanel/>
+
+      <div style={styles.header}>
+        <div style={styles.brand}>NEXUS CLOUD</div>
+        <div style={styles.clock}>{time.toLocaleTimeString()}</div>
+      </div>
+
+      <div style={styles.systemHealth}>
+        {healthText[health]}
+      </div>
+
+      <div style={styles.metrics}>
+
+        <Metric title="Automatizaciones" value={stats.total}/>
+        <Metric title="En ejecución" value={stats.running} color="#c7a73b"/>
+        <Metric title="En espera" value={stats.queued} color="#3b82f6"/>
+        <Metric title="Completadas" value={stats.done} color="#3ba776"/>
+        <Metric title="Errores" value={stats.error} color="#c75c5c"/>
+
+      </div>
+
+      <div style={styles.activity}>
+
+        <div style={styles.activityTitle}>Actividad reciente</div>
+
+        {events.map((e,i)=>(
+          <div key={i} style={styles.logRow}>
+            <span style={styles.logTime}>{e.time}</span>
+            <span style={styles.logText}>{e.text}</span>
+          </div>
+        ))}
+
+      </div>
+
+    </div>
+  )
+}
+
+/* ========================= */
+
+function Metric({title,value,color}){
+
+  return(
+    <div style={styles.metric}>
+      <div style={styles.metricTitle}>{title}</div>
+      <div style={{
+        ...styles.metricValue,
+        color: color || "#f5f5f7"
+      }}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+/* ========================= */
+
+const styles = {
+
+  page:{
+    height:"100vh",
+    background:"#0b0d10",
+    color:"#f5f5f7",
+    fontFamily:"Inter, sans-serif",
+    padding:"48px 80px",
+    display:"flex",
+    flexDirection:"column"
+  },
+
+  header:{
+    display:"flex",
+    justifyContent:"space-between",
+    alignItems:"center",
+    marginBottom:40
+  },
+
+  brand:{
+    fontSize:14,
+    letterSpacing:4,
+    color:"#8b8f98"
+  },
+
+  clock:{
+    fontSize:28,
+    fontWeight:500
+  },
+
+  systemHealth:{
+    marginBottom:30,
+    fontSize:16,
+    opacity:.85
+  },
+
+  metrics:{
+    display:"grid",
+    gridTemplateColumns:"repeat(5, 1fr)",
+    gap:40,
+    marginBottom:60
+  },
+
+  metric:{
+    borderBottom:"1px solid #1c1f26",
+    paddingBottom:16
+  },
+
+  metricTitle:{
+    fontSize:13,
+    color:"#8b8f98",
+    marginBottom:6,
+    letterSpacing:1
+  },
+
+  metricValue:{
+    fontSize:42,
+    fontWeight:600
+  },
+
+  activity:{
+    flex:1,
+    borderTop:"1px solid #1c1f26",
+    paddingTop:30
+  },
+
+  activityTitle:{
+    fontSize:13,
+    color:"#8b8f98",
+    marginBottom:16,
+    letterSpacing:1
+  },
+
+  logRow:{
+    display:"flex",
+    gap:20,
+    fontSize:14,
+    marginBottom:8,
+    opacity:.9
+  },
+
+  logTime:{
+    width:90,
+    color:"#8b8f98"
+  },
+
+  logText:{
+    color:"#f5f5f7"
+  }
+
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

@@ -1,0 +1,10 @@
+[
+  {
+    "name": "Ordenar PDFs",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"pdfs"},
+      {"action":"move_files","value":{"ext":".pdf","to":"pdfs"}}
+    ]
+  }
+]

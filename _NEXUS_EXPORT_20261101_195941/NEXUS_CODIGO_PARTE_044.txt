@@ -1,0 +1,1889 @@
+﻿
+================================================================================
+ARCHIVO: nexus-mobile\public\manifest.json
+================================================================================
+
+{
+  "name": "Nexus Mobile",
+  "short_name": "Nexus",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#121212",
+  "theme_color": "#121212"
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\public\vite.svg
+================================================================================
+
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="31.88" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 257"><defs><linearGradient id="IconifyId1813088fe1fbc01fb466" x1="-.828%" x2="57.636%" y1="7.652%" y2="78.411%"><stop offset="0%" stop-color="#41D1FF"></stop><stop offset="100%" stop-color="#BD34FE"></stop></linearGradient><linearGradient id="IconifyId1813088fe1fbc01fb467" x1="43.376%" x2="50.316%" y1="2.242%" y2="89.03%"><stop offset="0%" stop-color="#FFEA83"></stop><stop offset="8.333%" stop-color="#FFDD35"></stop><stop offset="100%" stop-color="#FFA800"></stop></linearGradient></defs><path fill="url(#IconifyId1813088fe1fbc01fb466)" d="M255.153 37.938L134.897 252.976c-2.483 4.44-8.862 4.466-11.382.048L.875 37.958c-2.746-4.814 1.371-10.646 6.827-9.67l120.385 21.517a6.537 6.537 0 0 0 2.322-.004l117.867-21.483c5.438-.991 9.574 4.796 6.877 9.62Z"></path><path fill="url(#IconifyId1813088fe1fbc01fb467)" d="M185.432.063L96.44 17.501a3.268 3.268 0 0 0-2.634 3.014l-5.474 92.456a3.268 3.268 0 0 0 3.997 3.378l24.777-5.718c2.318-.535 4.413 1.507 3.936 3.838l-7.361 36.047c-.495 2.426 1.782 4.5 4.151 3.78l15.304-4.649c2.372-.72 4.652 1.36 4.15 3.788l-11.698 56.621c-.732 3.542 3.979 5.473 5.943 2.437l1.313-2.028l72.516-144.72c1.215-2.423-.88-5.186-3.54-4.672l-25.505 4.922c-2.396.462-4.435-1.77-3.759-4.114l16.646-57.705c.677-2.35-1.37-4.583-3.769-4.113Z"></path></svg>
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\README.md
+================================================================================
+
+# React + Vite
+
+This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+
+Currently, two official plugins are available:
+
+- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
+- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+
+## React Compiler
+
+The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+
+## Expanding the ESLint configuration
+
+If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\src\App.jsx
+================================================================================
+
+import { useState, useEffect } from "react"
+import axios from "axios"
+
+const API = "http://192.168.0.15:8000" // ← poné tu IP real
+
+export default function App() {
+
+  const [msg, setMsg] = useState("")
+  const [chat, setChat] = useState([])
+  const [stats, setStats] = useState({})
+
+  const send = async (text) => {
+
+    const t = text || msg
+    if (!t) return
+
+    setChat(c => [...c, { role: "user", text: t }])
+    setMsg("")
+
+    const res = await axios.post(API + "/ask", { message: t }, {
+      headers: { "x-api-key": "nexus-secret" }
+    })
+
+    setChat(c => [...c, { role: "assistant", text: res.data.result }])
+  }
+
+  const loadStats = async () => {
+    const s = await axios.get(API + "/dashboard/stats", {
+      headers: { "x-api-key": "nexus-secret" }
+    })
+    setStats(s.data)
+  }
+
+  useEffect(() => {
+    loadStats()
+    const i = setInterval(loadStats, 3000)
+    return () => clearInterval(i)
+  }, [])
+
+  return (
+    <div style={styles.page}>
+
+      <h2>Nexus Mobile</h2>
+
+      {/* Stats */}
+      <div style={styles.stats}>
+        <Card label="CPU" value={stats.cpu + "%"} />
+        <Card label="RAM" value={stats.ram + "%"} />
+      </div>
+
+      {/* Chat */}
+      <div style={styles.chat}>
+        {chat.map((m,i)=>(
+          <div key={i} style={{
+            ...styles.bubble,
+            alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+            background: m.role === "user" ? "#6c5ce7" : "#2d3436"
+          }}>
+            {m.text}
+          </div>
+        ))}
+      </div>
+
+      {/* Quick actions */}
+      <div style={styles.quick}>
+        <button onClick={()=>send("ordená descargas")}>Ordenar</button>
+        <button onClick={()=>send("abrí chrome")}>Chrome</button>
+        <button onClick={()=>send("cerrá esta app")}>Cerrar app</button>
+      </div>
+
+      {/* Input */}
+      <div style={styles.row}>
+        <input
+          value={msg}
+          onChange={e=>setMsg(e.target.value)}
+          placeholder="Decile algo a Nexus..."
+          style={styles.input}
+        />
+        <button onClick={()=>send()}>Enviar</button>
+      </div>
+
+    </div>
+  )
+}
+
+function Card({label,value}){
+  return (
+    <div style={styles.card}>
+      <div>{label}</div>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+const styles = {
+  page:{
+    background:"#121212",
+    color:"white",
+    height:"100vh",
+    padding:16,
+    display:"flex",
+    flexDirection:"column",
+    gap:12,
+    fontFamily:"sans-serif"
+  },
+  stats:{ display:"flex", gap:10 },
+  card:{ background:"#1e1e1e", padding:10, borderRadius:8 },
+  chat:{
+    flex:1,
+    overflowY:"auto",
+    display:"flex",
+    flexDirection:"column",
+    gap:6
+  },
+  bubble:{
+    padding:8,
+    borderRadius:10,
+    maxWidth:"80%"
+  },
+  quick:{
+    display:"flex",
+    gap:6
+  },
+  row:{ display:"flex", gap:6 },
+  input:{ flex:1, padding:8, borderRadius:8 }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\src\index.css
+================================================================================
+
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\src\main.jsx
+================================================================================
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: nexus-mobile\vite.config.js
+================================================================================
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: true,
+    port: 5175
+  }
+})
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\pyproject.toml
+================================================================================
+
+[project]
+name = "actions"
+version = "0.1.0"
+description = "NEXUS Actions"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\__init__.py
+================================================================================
+
+def main() -> None:
+    print("Hello from actions!")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\base.py
+================================================================================
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class Action(ABC):
+    """
+    Clase base para todas las Actions de NEXUS.
+    """
+
+    name: str
+
+    description: str = ""
+
+    parameters: dict[str, Any] = {}
+
+    internal: bool = False
+
+    produces: list[str] = []
+
+    consumes: list[str] = []
+
+    @abstractmethod
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\close_app.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+
+from planner.execution_context import (
+    ExecutionContext,
+)
+
+from planner.plan import PlanStep
+
+from adapters.windows.process_manager import (
+    WindowsProcessManager,
+)
+
+
+class CloseAppAction(Action):
+
+    name = "system.close_app"
+
+    def __init__(self):
+
+        self._manager = WindowsProcessManager()
+
+    async def execute(
+
+        self,
+
+        context: ExecutionContext,
+
+        step: PlanStep,
+
+    ) -> None:
+
+        application = step.metadata.get(
+            "application"
+        )
+
+        if not application:
+
+            context.add_error(
+                "Application not specified."
+            )
+
+            return
+
+        success = self._manager.close(
+            application
+        )
+
+        if not success:
+
+            context.add_error(
+
+                f"{application} is not running."
+
+            )
+
+            return
+
+        context.add_result(
+
+            "application",
+
+            application,
+
+        )
+
+        context.add_result(
+
+            "status",
+
+            "closed",
+
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\echo.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class EchoAction(Action):
+    """
+    Action de prueba.
+
+    Devuelve exactamente el texto recibido
+    en el Objective.
+    """
+
+    name = "echo"
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        context.add_result(
+            "response",
+            context.objective.description,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_last_episode.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.episode_memory import EpisodeMemory
+
+
+class GetLastEpisodeAction(Action):
+    """
+    Action para consultar el último episodio
+    registrado por NEXUS.
+
+    No interpreta intenciones.
+    No ejecuta acciones del sistema.
+    No genera lenguaje natural.
+
+    Devuelve únicamente el episodio estructurado.
+    """
+
+    name = "system.get_last_episode"
+
+    description = (
+        "Consulta la última acción realizada "
+        "por NEXUS."
+    )
+
+    parameters = {}
+
+    internal = True
+
+    def __init__(
+        self,
+        episode_memory: EpisodeMemory,
+    ) -> None:
+
+        self._episode_memory = episode_memory
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        episode = (
+            self._episode_memory.last()
+        )
+
+        if episode is None:
+
+            context.add_result(
+                "found",
+                False,
+            )
+
+            context.add_result(
+                "episode",
+                None,
+            )
+
+            context.add_result(
+                "status",
+                "read",
+            )
+
+            return
+
+        context.add_result(
+            "found",
+            True,
+        )
+
+        context.add_result(
+            "episode",
+            episode.model_dump(),
+        )
+
+        context.add_result(
+            "status",
+            "read",
+        )
+
+        context.add_result(
+            "mode",
+            "last",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_mute.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class GetMuteAction(Action):
+    """
+    Action para consultar el estado actual
+    de silencio de Windows.
+    """
+
+    name = "system.get_mute"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+
+            result = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.get_mute",
+                parameters={},
+            )
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to get mute state: {exc}"
+            )
+
+            return
+
+        context.add_result(
+            "muted",
+            bool(result),
+        )
+
+        context.add_result(
+            "status",
+            "read",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_previous_episode.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.episode_memory import EpisodeMemory
+
+
+class GetPreviousEpisodeAction(Action):
+    """
+    Action para consultar el episodio inmediatamente
+    anterior al último episodio registrado.
+
+    No interpreta intenciones.
+    No ejecuta acciones del sistema.
+    No genera lenguaje natural.
+
+    Devuelve únicamente el episodio estructurado.
+    """
+
+    name = "system.get_previous_episode"
+
+    description = (
+        "Consulta la acción realizada inmediatamente "
+        "antes de la última acción de NEXUS."
+    )
+
+    parameters = {}
+
+    internal = True
+
+    def __init__(
+        self,
+        episode_memory: EpisodeMemory,
+    ) -> None:
+
+        self._episode_memory = episode_memory
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        episode = self._episode_memory.previous()
+
+        if episode is None:
+
+            context.add_result(
+                "found",
+                False,
+            )
+
+            context.add_result(
+                "episode",
+                None,
+            )
+
+            context.add_result(
+                "status",
+                "read",
+            )
+
+            context.add_result(
+                "mode",
+                "previous",
+            )
+
+            return
+
+        context.add_result(
+            "found",
+            True,
+        )
+
+        context.add_result(
+            "episode",
+            episode.model_dump(),
+        )
+
+        context.add_result(
+            "status",
+            "read",
+        )
+
+        context.add_result(
+            "mode",
+            "previous",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_recent_episodes.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.episode_memory import EpisodeMemory
+
+
+class GetRecentEpisodesAction(Action):
+    """
+    Action para consultar la memoria episódica reciente
+    de NEXUS.
+
+    No interpreta intenciones.
+    No ejecuta acciones del sistema.
+    No genera lenguaje natural.
+
+    Devuelve únicamente episodios estructurados.
+    """
+
+    name = "system.get_recent_episodes"
+
+    description = (
+        "Consulta las acciones realizadas "
+        "recientemente por NEXUS."
+    )
+
+    parameters = {
+        "limit": {
+            "type": "integer",
+            "required": False,
+            "description": (
+                "Cantidad de episodios recientes "
+                "a devolver."
+            ),
+        },
+    }
+
+    internal = True
+
+    def __init__(
+        self,
+        episode_memory: EpisodeMemory,
+    ) -> None:
+
+        self._episode_memory = episode_memory
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        limit = step.metadata.get(
+            "limit",
+            5,
+        )
+
+        #
+        # Validar limit
+        #
+
+        if isinstance(
+            limit,
+            bool,
+        ):
+
+            context.add_error(
+                "Episode limit must be an integer."
+            )
+
+            return
+
+        try:
+
+            limit = int(limit)
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            context.add_error(
+                "Episode limit must be an integer."
+            )
+
+            return
+
+        #
+        # Rango razonable
+        #
+
+        if limit <= 0:
+
+            context.add_error(
+                "Episode limit must be greater than zero."
+            )
+
+            return
+
+        #
+        # Evitamos consultas excesivamente grandes.
+        #
+
+        limit = min(
+            limit,
+            20,
+        )
+
+        #
+        # Obtener episodios
+        #
+
+        episodes = (
+            self._episode_memory.recent(
+                limit=limit,
+            )
+        )
+
+        #
+        # Convertir a estructuras serializables
+        #
+
+        items = [
+            episode.model_dump()
+            for episode in episodes
+        ]
+
+        #
+        # Resultado
+        #
+
+        context.add_result(
+            "episodes",
+            items,
+        )
+
+        context.add_result(
+            "count",
+            len(items),
+        )
+
+        context.add_result(
+            "limit",
+            limit,
+        )
+
+        context.add_result(
+            "status",
+            "read",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_time.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from actions.base import Action
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class GetTimeAction(Action):
+    """Acción para consultar la fecha y hora local del equipo."""
+
+    name = "system.get_time"
+    description = "Consultar la fecha y hora local del sistema."
+    internal = True
+
+    produces = ["date", "time"]
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+        now = datetime.now()
+        current_date = now.strftime("%d/%m/%Y")
+        current_time = now.strftime("%H:%M")
+
+        context.add_result("date", current_date)
+        context.add_result("time", current_time)
+        context.add_result("status", "read")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_volume.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class GetVolumeAction(Action):
+    """
+    Action para consultar el volumen
+    maestro de Windows.
+    """
+
+    name = "system.get_volume"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+            result = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.get_volume",
+                parameters={},
+            )
+        except Exception as exc:
+            context.add_error(
+                f"Failed to get volume: {exc}"
+            )
+            return
+
+        context.add_result(
+            "volume",
+            result,
+        )
+
+        context.add_result(
+            "status",
+            "read",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\get_volume_history.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.state_history import StateHistory
+
+
+class GetVolumeHistoryAction(Action):
+    """
+    Action para consultar el historial del volumen.
+
+    No genera lenguaje natural.
+    Devuelve únicamente datos estructurados
+    para que las capas superiores puedan decidir
+    cómo presentar el resultado.
+    """
+
+    name = "system.get_volume_history"
+
+    internal = True
+
+    description = (
+        "Consulta el historial del volumen."
+    )
+
+    parameters = {
+        "mode": {
+            "type": "string",
+            "required": True,
+            "description": (
+                "Modo de consulta: "
+                "previous o find."
+            ),
+        },
+        "value": {
+            "type": "number",
+            "required": False,
+            "description": (
+                "Valor de volumen a buscar "
+                "cuando el modo es find."
+            ),
+        },
+    }
+
+    def __init__(
+        self,
+        state_history: StateHistory,
+    ) -> None:
+
+        self._state_history = state_history
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        mode = step.metadata.get(
+            "mode"
+        )
+
+        #
+        # Volumen anterior
+        #
+
+        if mode == "previous":
+
+            value = self._state_history.previous(
+                "volume"
+            )
+
+            context.add_result(
+                "found",
+                value is not None,
+            )
+
+            context.add_result(
+                "value",
+                value,
+            )
+
+            context.add_result(
+                "mode",
+                "previous",
+            )
+
+            return
+
+        #
+        # Buscar un valor concreto
+        #
+        # Ejemplo:
+        #
+        # ¿Qué dejé en 50%?
+        #
+
+        if mode == "find":
+
+            requested_value = step.metadata.get(
+                "value"
+            )
+
+            events = self._state_history.find_events(
+                "volume",
+                requested_value,
+                status="set",
+            )
+
+            context.add_result(
+                "found",
+                bool(events),
+            )
+
+            context.add_result(
+                "value",
+                requested_value
+                if events
+                else None,
+            )
+
+            context.add_result(
+                "mode",
+                "find",
+            )
+
+            return
+
+        #
+        # Modo desconocido
+        #
+
+        context.add_error(
+            "Unknown volume history mode."
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\inspect_capture.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from actions.base import Action
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class InspectCaptureAction(Action):
+    """
+    Inspecciona la captura de pantalla disponible
+    en los artifacts del ExecutionContext.
+
+    Esta Action es una capacidad cognitiva interna
+    de NEXUS.
+
+    Consume:
+        image
+
+    Produce:
+        capture_inspection
+    """
+
+    name = "system.inspect_capture"
+
+    description = (
+        "Inspecciona una captura de pantalla previamente "
+        "realizada y obtiene información sobre ella."
+    )
+
+    parameters: dict[str, Any] = {}
+
+    internal = True
+
+    produces = [
+        "capture_inspection",
+    ]
+
+    consumes = [
+        "image",
+    ]
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+        image = context.artifacts.get("image")
+
+        if image is None:
+            context.add_error(
+                "Missing required artifact(s) for "
+                f"step '{step.action}': image"
+            )
+            return
+
+        try:
+            width, height = image.size
+        except Exception as exc:
+            context.add_error(
+                f"Failed to inspect captured image: {exc}"
+            )
+            return
+
+        inspection = {
+            "width": width,
+            "height": height,
+            "status": "inspected",
+        }
+
+        context.add_result(
+            "capture_inspection",
+            inspection,
+        )
+
+        context.add_result(
+            "width",
+            width,
+        )
+
+        context.add_result(
+            "height",
+            height,
+        )
+
+        context.add_result(
+            "status",
+            "inspected",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\inspect_screen.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+
+class InspectScreenAction(Action):
+    """
+    Action para inspeccionar una captura de pantalla
+    disponible como artifact del contexto.
+    """
+
+    name = "system.inspect_screen"
+
+    internal = True
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        image = context.get_artifact(
+            "image"
+        )
+
+        if image is None:
+
+            context.add_error(
+                "No screen image artifact available."
+            )
+
+            return
+
+        try:
+
+            width, height = image.size
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to inspect screen image: {exc}"
+            )
+
+            return
+
+        context.add_result(
+            "status",
+            "inspected",
+        )
+
+        context.add_result(
+            "image_width",
+            width,
+        )
+
+        context.add_result(
+            "image_height",
+            height,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\manager.py
+================================================================================
+
+
+from __future__ import annotations
+
+from planner.execution_context import ExecutionContext
+from planner.objective import ObjectiveStatus
+from planner.plan import StepStatus
+
+from actions.registry import ActionRegistry
+from security import ActionAuthorization, Actor, ActorType
+
+
+class ActionManager:
+    """
+    Ejecuta Actions a partir del ExecutionContext.
+
+    El ActionManager coordina la ejecución del paso
+    actual y mantiene sincronizado el estado del
+    Objective con el resultado real de la Action.
+
+    También registra la evidencia producida
+    específicamente por cada PlanStep.
+
+    La autorización, cuando está configurada,
+    se comprueba antes de ejecutar cada Action.
+
+    No decide cuándo finaliza globalmente el Plan.
+    Esa responsabilidad pertenece al Executor.
+    """
+
+    def __init__(
+        self,
+        registry: ActionRegistry,
+        action_authorization: ActionAuthorization | None = None,
+    ) -> None:
+        self._registry = registry
+        self._action_authorization = action_authorization
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+        """
+        Ejecuta el paso actual del plan.
+
+        Si Security está configurado, la acción debe
+        estar autorizada antes de llegar a execute().
+        """
+
+        step = context.current_plan_step()
+
+        if step is None:
+            return
+
+        #
+        # Paso en ejecución.
+        #
+
+        step.status = StepStatus.RUNNING
+        context.objective.status = ObjectiveStatus.RUNNING
+
+        #
+        # Capturamos el estado previo para registrar
+        # únicamente la evidencia producida por este paso.
+        #
+
+        results_before = context.results.copy()
+        artifacts_before = context.artifacts.copy()
+
+        #
+        # Resolver Action.
+        #
+
+        try:
+            action = self._registry.get(step.action)
+
+        except Exception as exc:
+            error = (
+                f"Failed to resolve action "
+                f"'{step.action}': {exc}"
+            )
+
+            step.status = StepStatus.FAILED
+            context.add_error(error)
+
+            context.record_step_evidence(
+                step,
+                status="failed",
+                results_before=results_before,
+                artifacts_before=artifacts_before,
+            )
+
+            context.objective.status = ObjectiveStatus.FAILED
+            context.finished = True
+            context.plan.completed = False
+            return
+
+        #
+        # Autorizar antes de ejecutar la Action.
+        #
+
+        if self._action_authorization is not None:
+            actor = None
+
+            if context.actor_id and context.actor_type:
+                try:
+                    actor = Actor(
+                        id=context.actor_id,
+                        actor_type=ActorType(context.actor_type),
+                    )
+                except (ValueError, TypeError):
+                    actor = None
+
+            allowed = (
+                actor is not None
+                and self._action_authorization.is_allowed(
+                    actor,
+                    step.action,
+                )
+            )
+
+            if not allowed:
+                actor_description = (
+                    context.actor_id
+                    if context.actor_id
+                    else "unknown"
+                )
+
+                error = (
+                    "Authorization denied: actor "
+                    f"'{actor_description}' cannot execute "
+                    f"action '{step.action}'."
+                )
+
+                step.status = StepStatus.FAILED
+                context.add_error(error)
+
+                context.record_step_evidence(
+                    step,
+                    status="failed",
+                    results_before=results_before,
+                    artifacts_before=artifacts_before,
+                )
+
+                context.step_evidence[step.id]["authorization"] = {
+                    "allowed": False,
+                    "actor_id": context.actor_id,
+                    "action": step.action,
+                }
+
+                context.objective.status = ObjectiveStatus.FAILED
+                context.finished = True
+                context.plan.completed = False
+                return
+
+        #
+        # Ejecutar Action.
+        #
+
+        try:
+            await action.execute(
+                context,
+                step,
+            )
+
+        except Exception as exc:
+            error = (
+                f"Action '{step.action}' "
+                f"failed: {exc}"
+            )
+
+            step.status = StepStatus.FAILED
+            context.add_error(error)
+
+            context.record_step_evidence(
+                step,
+                status="failed",
+                results_before=results_before,
+                artifacts_before=artifacts_before,
+            )
+
+            context.objective.status = ObjectiveStatus.FAILED
+            context.finished = True
+            context.plan.completed = False
+            return
+
+        #
+        # La Action puede haber capturado una excepción
+        # internamente y registrado un error en el contexto.
+        #
+
+        if context.has_errors():
+            step.status = StepStatus.FAILED
+
+            context.record_step_evidence(
+                step,
+                status="failed",
+                results_before=results_before,
+                artifacts_before=artifacts_before,
+            )
+
+            context.objective.status = ObjectiveStatus.FAILED
+            context.finished = True
+            context.plan.completed = False
+            return
+
+        #
+        # Registrar evidencia real producida por el Step.
+        #
+
+        context.record_step_evidence(
+            step,
+            status="completed",
+            results_before=results_before,
+            artifacts_before=artifacts_before,
+        )
+
+        #
+        # La Action terminó correctamente.
+        # El Executor determina la finalización global.
+        #
+
+        step.status = StepStatus.COMPLETED
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\mute.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class MuteAction(Action):
+    """
+    Action para silenciar Windows.
+    """
+
+    name = "system.mute"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+            result = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.mute",
+                parameters={},
+            )
+        except Exception as exc:
+            context.add_error(
+                f"Failed to mute system: {exc}"
+            )
+            return
+
+        #
+        # Estado del sistema
+        #
+
+        context.add_result(
+            "muted",
+            True,
+        )
+
+        context.add_result(
+            "status",
+            "muted",
+        )
+
+        #
+        # Resultado original del provider
+        #
+
+        context.add_result(
+            "result",
+            result,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\open_app.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class OpenAppAction(Action):
+    """
+    Action para abrir aplicaciones
+    del sistema operativo.
+
+    La Action no conoce directamente
+    los adapters de Windows.
+
+    Delega la ejecución al ProviderManager.
+    """
+
+    name = "system.open_app"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        application = step.metadata.get(
+            "application"
+        )
+
+        if not application:
+
+            context.add_error(
+                "No application specified."
+            )
+
+            return
+
+        try:
+
+            success = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.open_app",
+                parameters={
+                    "application": application,
+                },
+            )
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to open application "
+                f"'{application}': {exc}"
+            )
+
+            return
+
+        if not success:
+
+            context.add_error(
+                f"Application '{application}' "
+                f"is not supported."
+            )
+
+            return
+
+        context.add_result(
+            "application",
+            application,
+        )
+
+        context.add_result(
+            "status",
+            "opened",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\open_file.py
+================================================================================
+
+from __future__ import annotations
+from actions.base import Action
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+from providers.provider_manager import ProviderManager
+
+class OpenFileAction(Action):
+    """Abre un archivo existente con la aplicación predeterminada."""
+    name = "system.open_file"
+    description = "Busca y abre un archivo en una carpeta personal autorizada."
+    parameters = {
+        "file_name": {"type": "string", "required": True, "description": "Nombre del archivo, sin ruta."},
+        "location": {"type": "string", "required": True, "description": "desktop, documents o downloads."},
+        "extension": {"type": "string", "required": False, "description": "Extensión opcional."},
+    }
+
+    def __init__(self, provider_manager: ProviderManager) -> None:
+        self._provider_manager = provider_manager
+
+    async def execute(self, context: ExecutionContext, step: PlanStep) -> None:
+        file_name = step.metadata.get("file_name")
+        location = step.metadata.get("location", "desktop")
+        extension = step.metadata.get("extension")
+        if not isinstance(file_name, str) or not file_name.strip():
+            context.add_error("No se especificó el nombre del archivo.")
+            return
+        try:
+            success = await self._provider_manager.execute(
+                provider="local", tool="windows.open_file",
+                parameters={"file_name": file_name, "location": location, "extension": extension},
+            )
+        except Exception as exc:
+            context.add_error(f"No se pudo abrir el archivo '{file_name}': {exc}")
+            return
+        if not success:
+            context.add_error(
+                f"No se encontró una coincidencia única para '{file_name}' "
+                f"en '{location}', o Windows no pudo abrirla."
+            )
+            return
+        context.add_result("file_name", file_name)
+        context.add_result("location", location)
+        context.add_result("status", "opened")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\process_list.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from providers.provider_manager import ProviderManager
+
+
+class ProcessListAction(Action):
+    """
+    Action para obtener los procesos
+    actualmente ejecutándose.
+    """
+
+    name = "system.process_list"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+
+            processes = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.list_processes",
+                parameters={},
+            )
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to list processes: {exc}"
+            )
+
+            return
+
+        context.add_result(
+            "processes",
+            processes,
+        )
+
+        context.add_result(
+            "count",
+            len(processes),
+        )
+
+        context.add_result(
+            "status",
+            "ok",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

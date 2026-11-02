@@ -1,0 +1,21 @@
+﻿
+NEXUS - RESUMEN DE EXPORTACION
+
+Fecha: 2026-11-01 20:00:07
+Proyecto: C:\Users\cdi40\Desktop\nexus
+
+Archivos encontrados: 775
+Archivos exportados: 775
+Errores de lectura: 0
+Partes de codigo generadas: 83
+
+Archivos generados:
+
+00_INVENTARIO.txt
+NEXUS_CODIGO_PARTE_001.txt ...
+GIT_ESTADO.txt
+GIT_CAMBIOS_TRACKED.txt
+GIT_CAMBIOS_STAGED.txt
+
+Los archivos sensibles y binarios fueron excluidos.
+

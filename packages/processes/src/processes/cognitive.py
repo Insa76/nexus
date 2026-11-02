@@ -54,8 +54,29 @@ class ProcessCognitiveAccess:
     def get(
         self,
         process_id: str,
+        *,
+        context: object,
     ) -> Process | None:
-        return self._capability.get(process_id)
+        processes = self._capability.relevant(
+            context=context,
+        )
 
-    def list(self) -> tuple[Process, ...]:
-        return tuple(self._capability.list())
+        return next(
+            (
+                process
+                for process in processes
+                if process.id == process_id
+            ),
+            None,
+        )
+
+    def list(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Process, ...]:
+        return tuple(
+            self._capability.relevant(
+                context=context,
+            )
+        )

@@ -1,0 +1,1601 @@
+﻿
+================================================================================
+ARCHIVO: backend\security\policy.py
+================================================================================
+
+# acciones seguras
+SAFE = {
+    "open_app",
+    "list_files",
+    "list_processes"
+}
+
+# acciones que requieren confirmación
+CONFIRM = {
+    "delete_file",
+    "move_files",
+    "run_cmd",
+    "close_active_app"
+}
+
+# sandbox (solo estas rutas permitidas)
+ALLOWED_PATHS = [
+    "C:\\Users",
+    "."
+]
+
+
+def is_path_allowed(path):
+
+    for base in ALLOWED_PATHS:
+        if path.startswith(base):
+            return True
+
+    return False
+
+
+def requires_confirm(action):
+    return action in CONFIRM
+
+
+def is_safe(action):
+    return action in SAFE
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\simulation\workflow_simulator.py
+================================================================================
+
+from workflows.repository import get_workflow_by_name
+
+
+def simulate_workflow(name, tenant_id="default", workspace_id="main"):
+
+    wf = get_workflow_by_name(name, tenant_id, workspace_id)
+
+    if not wf:
+        return {"error":"workflow no encontrado"}
+
+    risks=[]
+    steps = wf.get("steps", [])
+
+    for step in steps:
+
+        action = step.get("action")
+
+        # riesgo común
+        if action == "move_files":
+
+            value = step.get("value",{})
+
+            if isinstance(value,dict):
+
+                folder = value.get("to")
+
+                if not folder:
+                    risks.append({
+                        "step":"move_files",
+                        "risk":"destino no definido"
+                    })
+
+        if action == "delete_file":
+
+            risks.append({
+                "step":"delete_file",
+                "risk":"acción destructiva"
+            })
+
+    return {
+        "workflow": name,
+        "steps": len(steps),
+        "risks": risks,
+        "safe": len(risks) == 0
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\client.py
+================================================================================
+
+import requests
+
+SYNC_URL = "http://192.168.0.15:8000/sync"  # IP del HUB
+
+
+def push_memory(text):
+
+    try:
+        requests.post(SYNC_URL + "/push", json={"content": text})
+    except:
+        pass
+
+
+def pull_memory():
+
+    try:
+        r = requests.get(SYNC_URL + "/pull")
+        return r.json()["items"]
+    except:
+        return []
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\models.py
+================================================================================
+
+from sqlalchemy import create_engine, Column, String, Text
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+engine = create_engine("sqlite:///nexus_sync.db")
+
+Base = declarative_base()
+Session = sessionmaker(bind=engine)
+
+
+class Memory(Base):
+    __tablename__ = "memory"
+
+    id = Column(String, primary_key=True)
+    content = Column(Text)
+
+
+class Habit(Base):
+    __tablename__ = "habits"
+
+    id = Column(String, primary_key=True)
+    content = Column(Text)
+
+
+def init_db():
+    Base.metadata.create_all(engine)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\sync\server.py
+================================================================================
+
+from fastapi import APIRouter
+from sync.models import Session, Memory
+import uuid
+
+router = APIRouter(prefix="/sync")
+
+
+@router.post("/push")
+def push(data: dict):
+
+    db = Session()
+
+    m = Memory(
+        id=str(uuid.uuid4()),
+        content=data["content"]
+    )
+
+    db.add(m)
+    db.commit()
+
+    return {"ok": True}
+
+
+@router.get("/pull")
+def pull():
+
+    db = Session()
+
+    rows = db.query(Memory).all()
+
+    return {"items": [r.content for r in rows]}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\triggers\folder_trigger.py
+================================================================================
+
+import asyncio
+
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
+
+import jobs.manager as manager_module
+
+from core.database import get_connection
+
+
+WATCH_PATH = r"C:\Users\cdi40\Desktop"
+
+
+class FolderHandler(FileSystemEventHandler):
+
+    def on_created(self, event):
+
+        # ignorar carpetas
+        if event.is_directory:
+            return
+
+        print(f"📁 Nuevo archivo detectado: {event.src_path}")
+
+        try:
+
+            # =========================
+            # CARGAR TRIGGERS
+            # =========================
+            conn = get_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT *
+                FROM triggers
+                WHERE enabled = TRUE
+            """)
+
+            triggers = cur.fetchall()
+
+            conn.close()
+
+            print(f"⚡ Triggers activos: {len(triggers)}")
+
+            # =========================
+            # EVALUAR TRIGGERS
+            # =========================
+            for trigger in triggers:
+
+                config = trigger["config"] or {}
+
+                ext = config.get("ext")
+
+                if not ext:
+                    continue
+
+                print(f"🔍 Evaluando trigger: {ext}")
+
+                # match extensión
+                if event.src_path.lower().endswith(ext.lower()):
+
+                    print(f"🔥 Trigger match: {ext}")
+
+                    workflow_id = trigger["workflow_id"]
+
+                    tenant_id = trigger["tenant_id"]
+
+                    print(
+                        f"🚀 Ejecutando workflow: {workflow_id}"
+                    )
+
+                    asyncio.run(
+                        manager_module.manager.create_job(
+                            workflow_id,
+                            tenant_id
+                        )
+                    )
+
+        except Exception as e:
+
+            print(f"❌ Trigger error: {e}")
+
+
+def start_folder_trigger():
+
+    observer = Observer()
+
+    observer.schedule(
+        FolderHandler(),
+        WATCH_PATH,
+        recursive=False
+    )
+
+    observer.start()
+
+    print(f"👀 Watching folder: {WATCH_PATH}")
+
+    return observer
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\voice\listener.py
+================================================================================
+
+import sounddevice as sd
+import whisper
+import numpy as np
+import threading
+import time
+
+from brain.agent import ask_nexus
+from actions.system_actions import execute_action
+from voice.tts import speak
+
+
+model = whisper.load_model("base")
+samplerate = 16000
+
+
+# -----------------------------
+# 🔥 detectar mic dinámicamente
+# -----------------------------
+def get_input_device():
+
+    try:
+        devices = sd.query_devices()
+
+        for i, d in enumerate(devices):
+            if d["max_input_channels"] > 0:
+                print(f"🎤 Mic detectado: {d['name']} (id {i})")
+                return i
+
+    except Exception:
+        pass
+
+    return None   # 👈 NUNCA romper backend
+
+
+# -----------------------------
+def record(seconds, device):
+
+    audio = sd.rec(
+        int(seconds * samplerate),
+        samplerate=samplerate,
+        channels=1,
+        dtype="float32",
+        device=device
+    )
+
+    sd.wait()
+    return audio.flatten()
+
+
+# -----------------------------
+def process(text):
+
+    print("🧠 Usuario:", text)
+
+    result = ask_nexus(text)
+
+    if result.get("action"):
+        output = execute_action(result["action"], result.get("value"))
+        speak(output)
+    else:
+        speak(result["response"])
+
+
+# -----------------------------
+def listen_loop():
+
+    device = get_input_device()
+
+    if device is None:
+        print("🔇 No hay micrófono válido → voz desactivada")
+        return
+
+    print("🎤 Nexus escuchando... decí 'nexus'")
+
+    while True:
+
+        try:
+
+            audio = record(3, device)
+
+            result = model.transcribe(audio, fp16=False)
+            text = result["text"].lower().strip()
+
+            if not text:
+                continue
+
+            print("Oído:", text)
+
+            if "nexus" in text:
+
+                speak("Sí, te escucho")
+
+                audio = record(5, device)
+                result = model.transcribe(audio, fp16=False)
+
+                command = result["text"].strip()
+
+                process(command)
+
+        except Exception as e:
+            print("⚠️ Error mic:", e)
+            print("🔇 Desactivando voz...")
+            return   # 👈 sale del loop sin romper server
+
+
+# -----------------------------
+def start_listener():
+
+    thread = threading.Thread(
+        target=listen_loop,
+        daemon=True
+    )
+
+    thread.start()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\voice\tts.py
+================================================================================
+
+import pyttsx3
+
+engine = pyttsx3.init()
+engine.setProperty("rate", 180)
+
+def speak(text: str):
+    engine.say(text)
+    engine.runAndWait()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\ai_generator.py
+================================================================================
+
+import json
+from brain.llm import ask_llm  # usa tu wrapper actual del LLM
+
+
+SYSTEM_PROMPT = """
+Sos un planificador de automatizaciones.
+
+Convertí la instrucción del usuario en un workflow JSON.
+
+Reglas:
+- devolver SOLO JSON válido
+- formato:
+
+{
+ "name": "nombre",
+ "trigger": "manual",
+ "steps": [
+   {"action":"list_dir","value":"."}
+ ]
+}
+
+Acciones disponibles:
+open_app
+open_url
+list_dir
+read_file
+write_file
+delete_file
+copy_file
+rename_file
+create_folder
+move_files
+list_processes
+kill_process
+get_time
+run_cmd
+sleep
+
+NO inventes acciones nuevas.
+"""
+
+
+def generate_workflow(text: str):
+
+    prompt = f"{SYSTEM_PROMPT}\n\nUsuario: {text}"
+
+    raw = ask_llm(prompt)
+
+    try:
+        data = json.loads(raw)
+        return data
+    except:
+        return {
+            "error": "No se pudo generar workflow",
+            "raw": raw
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\engine.py
+================================================================================
+
+import asyncio
+import uuid
+from datetime import datetime
+import json
+
+from core.database import get_connection
+from actions.system_actions import execute_action
+from realtime.ws import manager
+from events.bus import bus
+from workflows.repository import get_workflow_by_name
+from workflows.types import validate_type
+
+
+# ==========================================================
+# RUN WORKFLOW (ENTRYPOINT OFICIAL)
+# ==========================================================
+
+async def run_workflow(
+    name,
+    tenant_id=None,
+    workspace_id=None,
+    job_id=None,
+    user=None,
+    shared_context=None
+):
+
+    wf = get_workflow_by_name(
+        name,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+    if not wf:
+        raise Exception("Workflow no encontrado")
+
+    context = shared_context if shared_context is not None else {}
+    history = []
+
+    for step in wf["steps"]:
+        result = await execute_step(
+            step,
+            user,
+            context,
+            workflow_name=name,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            job_id=job_id
+        )
+        history.extend(result)
+
+    return history
+
+
+# ==========================================================
+# EXECUTE STEP (MOTOR REAL)
+# ==========================================================
+
+async def execute_step(
+    step,
+    user,
+    context,
+    workflow_name=None,
+    tenant_id=None,
+    workspace_id=None,
+    job_id=None
+):
+
+    history = []
+    step_type = step.get("type", "action")
+
+    try:
+
+        # ==================================================
+        # 1️⃣ ACCIÓN NORMAL
+        # ==================================================
+
+        if step_type == "action":
+
+            value = resolve_variables(step.get("value"), context)
+
+            if step.get("input_type"):
+                if not validate_type(value, step.get("input_type")):
+                    raise Exception(
+                        f"Input inválido para {step['action']}"
+                    )
+
+            await bus.publish("step.start", {
+                "workflow": workflow_name,
+                "step": step["action"],
+                "job_id": job_id
+            })
+
+            out = execute_action(
+                step["action"],
+                value,
+                user
+            )
+
+            # 🔥 FIX IMPORTANTE (si la acción es async)
+            if asyncio.iscoroutine(out):
+                out = await out
+
+            if step.get("output_type"):
+                if not validate_type(out, step.get("output_type")):
+                    raise Exception(
+                        f"Output inválido en {step['action']}"
+                    )
+
+            if step.get("assign"):
+                context[step["assign"]] = out
+
+            history.append({
+                "type": "action",
+                "action": step["action"],
+                "result": out
+            })
+
+            # 🔥 LOG DEL STEP
+            log_step(job_id, step["action"], "success", out)
+
+            await bus.publish("step.success", {
+                "workflow": workflow_name,
+                "step": step["action"],
+                "job_id": job_id
+            })
+
+            await manager.broadcast({
+                "type": "workflow_step",
+                "action": step["action"]
+            })
+
+            await manager.broadcast({
+                "type": "workflow_result",
+                "action": step["action"],
+                "result": out
+            })
+
+            for child in step.get("next", []):
+                child_result = await execute_step(
+                    child,
+                    user,
+                    context,
+                    workflow_name,
+                    tenant_id,
+                    workspace_id,
+                    job_id
+                )
+                history.extend(child_result)
+
+            return history
+
+
+        # ==================================================
+        # 2️⃣ CONDICIÓN
+        # ==================================================
+
+        if step_type == "condition":
+
+            test_value = resolve_variables(
+                step.get("value"),
+                context
+            )
+
+            test_result = execute_action(
+                step["if_action"],
+                test_value,
+                user
+            )
+
+            if asyncio.iscoroutine(test_result):
+                test_result = await test_result
+
+            condition_met = evaluate_condition(
+                test_result,
+                step.get("operator"),
+                step.get("compare")
+            )
+
+            history.append({
+                "type": "condition",
+                "result": condition_met
+            })
+
+            branch = step.get("then") if condition_met else step.get("else_")
+
+            if branch:
+                for s in branch:
+                    branch_result = await execute_step(
+                        s,
+                        user,
+                        context,
+                        workflow_name,
+                        tenant_id,
+                        workspace_id,
+                        job_id
+                    )
+                    history.extend(branch_result)
+
+            return history
+
+
+        # ==================================================
+        # 3️⃣ SUBWORKFLOW
+        # ==================================================
+
+        if step_type == "subworkflow":
+
+            sub_name = step.get("name")
+
+            await manager.broadcast({
+                "type": "workflow_sub_start",
+                "workflow": sub_name
+            })
+
+            sub_history = await run_workflow(
+                sub_name,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                user=user,
+                shared_context=context
+            )
+
+            history.append({
+                "type": "subworkflow",
+                "workflow": sub_name,
+                "result": sub_history
+            })
+
+            await manager.broadcast({
+                "type": "workflow_sub_end",
+                "workflow": sub_name
+            })
+
+            return history
+
+        return history
+
+
+    except Exception as e:
+
+        error = str(e)
+
+        print("🔥 ERROR REAL:", repr(e))
+
+        await bus.publish("step.error", {
+            "workflow": workflow_name,
+            "step": step.get("action"),
+            "error": error,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id
+        })
+
+        await manager.broadcast({
+            "type": "workflow_error",
+            "error": error
+        })
+
+        history.append({
+            "type": "error",
+            "step": step.get("action"),
+            "error": error
+        })
+
+        log_step(job_id, step.get("action"), "error", str(e))
+
+        raise
+
+
+# ==========================================================
+# VARIABLE RESOLUTION
+# ==========================================================
+
+def resolve_variables(value, context):
+
+    if value is None:
+        return value
+
+    if isinstance(value, str):
+        for key, val in context.items():
+            placeholder = "{{" + key + "}}"
+            if placeholder in value:
+                value = value.replace(
+                    placeholder,
+                    str(val)
+                )
+        return value
+
+    if isinstance(value, dict):
+        return {
+            k: resolve_variables(v, context)
+            for k, v in value.items()
+        }
+
+    return value
+
+
+# ==========================================================
+# CONDITION EVALUATOR
+# ==========================================================
+
+def evaluate_condition(result, operator, compare):
+
+    if operator == "contains":
+        return str(compare) in str(result)
+
+    if operator == "equals":
+        return str(result) == str(compare)
+
+    if operator == "not_equals":
+        return str(result) != str(compare)
+
+    if operator == "gt":
+        try:
+            return float(result) > float(compare)
+        except:
+            return False
+
+    if operator == "lt":
+        try:
+            return float(result) < float(compare)
+        except:
+            return False
+
+    return False
+
+
+# ==========================================================
+# STEP LOG
+# ==========================================================
+
+def log_step(job_id, step, status, result):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO job_steps
+        (job_id, step, status, result, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        job_id,
+        step,
+        status,
+        json.dumps(result) if result else "",
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\models.py
+================================================================================
+
+from pydantic import BaseModel
+from typing import List, Optional, Union
+
+
+class StepModel(BaseModel):
+    action: Optional[str] = None
+    value: Optional[dict] = None
+    type: Optional[str] = "action"
+
+    # condición
+    if_action: Optional[str] = None
+    operator: Optional[str] = None
+    compare: Optional[str] = None
+
+    then: Optional[List[dict]] = None
+    else_: Optional[List[dict]] = None
+
+
+class WorkflowModel(BaseModel):
+    name: str
+    trigger: str
+    steps: List[dict]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\recovery.py
+================================================================================
+
+from core.database import get_connection
+from datetime import datetime, timedelta
+
+
+FAIL_THRESHOLD = 5
+COOLDOWN_MINUTES = 10
+
+
+def check_workflow_health(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) as fails
+        FROM jobs
+        WHERE workflow=%s
+        AND status='error'
+        AND updated_at > datetime('now','-10 minutes')
+    """,(workflow_name,))
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    if row["fails"] >= FAIL_THRESHOLD:
+        return False
+
+    return True
+
+
+def disable_workflow(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE workflows
+        SET active=0
+        WHERE name=%s
+    """,(workflow_name,))
+
+    conn.commit()
+    conn.close()
+
+
+def enable_workflow(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE workflows
+        SET active=1
+        WHERE name=%s
+    """,(workflow_name,))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\repository.py
+================================================================================
+
+import json
+from datetime import datetime, timezone
+
+from core.database import get_connection
+
+
+# ==========================================================
+# SAVE WORKFLOW VERSION
+# ==========================================================
+
+def save_workflow_version(
+    name,
+    trigger,
+    steps,
+    tenant_id="default",
+    workspace_id="main"
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # 1️⃣ Obtener versión actual
+    cur.execute("""
+        SELECT MAX(version)
+        FROM workflows
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+    """, (name, tenant_id, workspace_id))
+
+    row = cur.fetchone()
+    current_version = row[0] if row and row[0] else 0
+    new_version = current_version + 1
+
+    # 2️⃣ Desactivar versiones anteriores
+    cur.execute("""
+        UPDATE workflows
+        SET active = FALSE
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+    """, (name, tenant_id, workspace_id))
+
+    # 3️⃣ Crear definición
+    definition = {
+        "name": name,
+        "trigger": trigger,
+        "steps": steps
+    }
+
+    now = datetime.now(timezone.utc)
+
+    # 4️⃣ Insertar nueva versión activa
+    cur.execute("""
+        INSERT INTO workflows
+        (name, version, definition, created_at, tenant_id, workspace_id, active)
+        VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+    """, (
+        name,
+        new_version,
+        json.dumps(definition),
+        now,
+        tenant_id,
+        workspace_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return new_version
+
+
+# ==========================================================
+# GET WORKFLOW ACTIVO
+# ==========================================================
+
+def get_workflow_by_name(name, tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT definition
+        FROM workflows
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+        ORDER BY version DESC
+        LIMIT 1
+    """, (name, tenant_id, workspace_id))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    definition = row[0]
+
+    if not definition:
+        raise Exception("Workflow definition vacía en DB")
+
+    return json.loads(definition)
+
+
+# ==========================================================
+# LIST WORKFLOWS
+# ==========================================================
+
+def load_workflows(tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT name, version
+        FROM workflows
+        WHERE tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+    """, (tenant_id, workspace_id))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "name": r[0],
+            "version": r[1]
+        }
+        for r in rows
+    ]
+
+
+# ==========================================================
+# GET WORKFLOWS BY TRIGGER
+# ==========================================================
+
+def get_workflows_by_trigger(trigger, tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT definition
+        FROM workflows
+        WHERE tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+    """, (tenant_id, workspace_id))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    matched = []
+
+    for row in rows:
+        wf = json.loads(row[0])
+        if wf.get("trigger") == trigger:
+            matched.append(wf)
+
+    return matched
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\routes.py
+================================================================================
+
+from fastapi import APIRouter, HTTPException, Depends
+from typing import List
+
+from workflows.engine import run_workflow
+from workflows.repository import (
+    load_workflows,
+    save_workflow_version
+)
+from workflows.schema import WorkflowModel
+from workflows.ai_generator import generate_workflow 
+from auth.deps import get_current_user
+from audit.service import log_event
+
+
+router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+# ==========================================================
+# LIST WORKFLOWS
+# ==========================================================
+
+@router.get("/")
+def list_workflows(user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+    workspace_id = user.get("workspace_id", "main")  # fallback seguro
+
+    return load_workflows(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+
+# ==========================================================
+# SAVE WORKFLOW (VERSIONADO REAL)
+# ==========================================================
+
+@router.post("/save")
+def save(data: dict, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+    workspace_id = user.get("workspace_id", "main")
+
+    version = save_workflow_version(
+        name=data["name"],
+        trigger=data["trigger"],
+        steps=data["steps"],
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+    log_event(
+        user,
+        action="workflow_saved",
+        entity="workflow",
+        entity_id=data["name"],
+        metadata={
+            "version": version,
+            "steps_count": len(data["steps"])
+        }
+    )
+
+    return {"ok": True, "version": version}
+
+
+# ==========================================================
+# RUN WORKFLOW
+# ==========================================================
+
+@router.post("/run")
+async def run(data: dict, user=Depends(get_current_user)):
+
+    # 🔥 IMPORTANTE: el engine debe respetar tenant internamente
+    result = await run_workflow(
+        name=data["name"],
+        user=user
+    )
+
+    return {"result": result}
+
+
+# ==========================================================
+# GENERATE WORKFLOW (IA)
+# ==========================================================
+
+@router.post("/generate")
+def generate(data: dict, user=Depends(get_current_user)):  # 🔒 protegido
+
+    raw = generate_workflow(data["prompt"])
+
+    if "error" in raw:
+        raise HTTPException(status_code=400, detail=raw["error"])
+
+    try:
+        validated = WorkflowModel(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return validated.dict()
+
+
+# ==========================================================
+# LIST PACKS (placeholder)
+# ==========================================================
+
+@router.get("/packs")
+def list_packs(user=Depends(get_current_user)):
+    return []
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\schema.py
+================================================================================
+
+from pydantic import BaseModel, Field, validator
+from typing import List, Optional, Any
+
+
+ALLOWED_ACTIONS = {
+    "open_app",
+    "open_url",
+    "list_dir",
+    "read_file",
+    "write_file",
+    "delete_file",
+    "copy_file",
+    "rename_file",
+    "create_folder",
+    "move_files",
+    "list_processes",
+    "kill_process",
+    "get_time",
+    "run_cmd",
+    "sleep"
+}
+
+
+class StepModel(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+    @validator("action")
+    def validate_action(cls, v):
+        if v not in ALLOWED_ACTIONS:
+            raise ValueError(f"Acción no permitida: {v}")
+        return v
+
+
+class WorkflowModel(BaseModel):
+    name: str
+    trigger: str = Field(default="manual")
+    fail_fast: bool = Field(default=False)  # 🔥 NUEVO
+    steps: List[StepModel]
+
+    @validator("steps")
+    def validate_steps_not_empty(cls, v):
+        if not v:
+            raise ValueError("Workflow sin pasos")
+        return v
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\bar.json
+================================================================================
+
+[
+  {
+    "name": "Abrir BarSync",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_url","value":"http://localhost:5173"}
+    ]
+  },
+  {
+    "name": "Exportar ventas",
+    "trigger": "manual",
+    "steps": [
+      {"action":"run_cmd","value":"echo Exportando ventas..."}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\hotel.json
+================================================================================
+
+[
+  {
+    "name": "Abrir sistema hotel",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_url","value":"http://localhost:3000"},
+      {"action":"open_app","value":"chrome"}
+    ]
+  },
+  {
+    "name": "Backup reportes diarios",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"backup"},
+      {"action":"move_files","value":{"ext":".csv","to":"backup"}}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\office.json
+================================================================================
+
+[
+  {
+    "name": "Ordenar Descargas PDF",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"pdfs"},
+      {"action":"move_files","value":{"ext":".pdf","to":"pdfs"}}
+    ]
+  },
+  {
+    "name": "Abrir apps trabajo",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_app","value":"chrome"},
+      {"action":"open_app","value":"notepad"}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates_loader.py
+================================================================================
+
+import json
+from pathlib import Path
+from workflows.engine import load_workflows, save_workflows
+
+TEMPLATES_DIR = Path("workflows/templates")
+
+
+def list_templates():
+
+    return [f.stem for f in TEMPLATES_DIR.glob("*.json")]
+
+
+def load_template(name):
+
+    file = TEMPLATES_DIR / f"{name}.json"
+
+    if not file.exists():
+        return None
+
+    return json.loads(file.read_text())
+
+
+def import_template(name):
+
+    tpl = load_template(name)
+
+    if not tpl:
+        return False
+
+    current = load_workflows()
+
+    merged = current + tpl
+
+    save_workflows(merged)
+
+    return True
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\types.py
+================================================================================
+
+from typing import Any
+
+
+TYPE_MAP = {
+    "string": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict
+}
+
+
+def validate_type(value: Any, declared_type: str):
+
+    if not declared_type:
+        return True
+
+    py_type = TYPE_MAP.get(declared_type)
+
+    if not py_type:
+        return True  # tipo desconocido → no bloquea
+
+    return isinstance(value, py_type)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\validator.py
+================================================================================
+
+VALID_ACTIONS = {
+    "create_folder",
+    "move_files",
+    "list_dir",
+    "read_file",
+    "write_file",
+    "delete_file",
+    "run_cmd",
+    "open_url"
+}
+
+# acciones que requieren confirmación humana
+DANGEROUS_ACTIONS = {
+    "delete_file",
+    "run_cmd"
+}
+
+MAX_STEPS = 25
+
+
+def validate_workflow(workflow):
+
+    if not workflow:
+        raise Exception("Workflow vacío")
+
+    if "steps" not in workflow:
+        raise Exception("Workflow sin steps")
+
+    steps = workflow["steps"]
+
+    if not isinstance(steps, list):
+        raise Exception("Steps debe ser una lista")
+
+    if len(steps) > MAX_STEPS:
+        raise Exception("Workflow demasiado grande")
+
+    for step in steps:
+        validate_step(step)
+
+    return workflow
+
+
+def validate_step(step):
+
+    if not isinstance(step, dict):
+        raise Exception("Step inválido")
+
+    if "action" not in step and step.get("type") != "condition":
+        raise Exception("Step sin acción")
+
+    # =========================
+    # ACTION STEPS
+    # =========================
+
+    if "action" in step:
+
+        action = step["action"]
+
+        if action not in VALID_ACTIONS:
+            raise Exception(f"Acción no válida: {action}")
+
+        # advertencia acciones peligrosas
+        if action in DANGEROUS_ACTIONS:
+            print(f"⚠ Acción peligrosa detectada: {action}")
+
+        value = step.get("value")
+
+        # ---------------------
+        # autocorrecciones
+        # ---------------------
+
+        if action == "move_files":
+
+            if isinstance(value, str):
+
+                step["value"] = {
+                    "ext": ".pdf",
+                    "to": "PDF"
+                }
+
+        if action == "list_dir":
+
+            if not value:
+                step["value"] = "."
+
+    # =========================
+    # SUBSTEPS (next)
+    # =========================
+
+    if "next" in step:
+
+        if not isinstance(step["next"], list):
+            raise Exception("next debe ser lista")
+
+        for s in step["next"]:
+            validate_step(s)
+
+    # =========================
+    # CONDITIONS
+    # =========================
+
+    if step.get("type") == "condition":
+
+        for branch in ["then", "else_"]:
+
+            if branch in step:
+
+                if not isinstance(step[branch], list):
+                    raise Exception(f"{branch} debe ser lista")
+
+                for s in step[branch]:
+                    validate_step(s)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

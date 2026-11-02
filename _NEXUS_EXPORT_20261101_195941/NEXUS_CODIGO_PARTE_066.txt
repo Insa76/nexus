@@ -1,0 +1,1264 @@
+﻿
+================================================================================
+ARCHIVO: packages\planner\src\planner\intent_recognizer.py.bak-20261020-183304
+================================================================================
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from planner.intent import Intent
+from planner.reference_resolver import ReferenceResolver
+from planner.episode_query_resolver import EpisodeQueryResolver
+
+
+class IntentRecognizer:
+    """
+    Convierte texto libre en un Intent estructurado.
+
+    Soporta:
+    - intenciones simples
+    - intenciones contextuales
+    - referencias semánticas
+    - intenciones compuestas
+    """
+
+    def __init__(
+        self,
+        reference_resolver: ReferenceResolver | None = None,
+    ) -> None:
+        self._reference_resolver = (
+            reference_resolver
+            or ReferenceResolver()
+        )
+        self._episode_query_resolver = EpisodeQueryResolver()
+
+    def recognize(
+        self,
+        text: str,
+        context: dict[str, Any] | None = None,
+    ) -> Intent:
+        normalized = text.lower().strip()
+
+        #
+        # Compound Intent
+        #
+        # Se evalúa antes de las intenciones simples para evitar
+        # que una acción contenida dentro de una orden compuesta
+        # capture toda la solicitud.
+        #
+
+        compound_parts = re.split(
+            r"\s+(?:y|e|luego|después|despues|además|ademas)\s+",
+            normalized,
+            maxsplit=1,
+        )
+
+        if len(compound_parts) == 2:
+            first_text = compound_parts[0].strip()
+            second_text = compound_parts[1].strip()
+
+            first_intent = self._recognize_single(
+                first_text,
+                context,
+            )
+
+            second_intent = self._recognize_single(
+                second_text,
+                context,
+                previous_intent=first_intent,
+            )
+
+            if (
+                first_intent.action != "system.unknown"
+                and second_intent.action != "system.unknown"
+            ):
+                return Intent(
+                    action=first_intent.action,
+                    confidence=min(
+                        first_intent.confidence,
+                        second_intent.confidence,
+                    ),
+                    parameters=first_intent.parameters.copy(),
+                    original_text=text,
+                    sub_intents=[
+                        Intent(
+                            action=first_intent.action,
+                            confidence=first_intent.confidence,
+                            parameters=first_intent.parameters.copy(),
+                            original_text=first_text,
+                        ),
+                        Intent(
+                            action=second_intent.action,
+                            confidence=second_intent.confidence,
+                            parameters=second_intent.parameters.copy(),
+                            original_text=second_text,
+                        ),
+                    ],
+                )
+
+        return self._recognize_single(
+            normalized,
+            context,
+            original_text=text,
+        )
+
+    def _recognize_single(
+        self,
+        normalized: str,
+        context: dict[str, Any] | None = None,
+        original_text: str | None = None,
+        previous_intent: Intent | None = None,
+    ) -> Intent:
+        text = original_text or normalized
+
+        #
+        # Semantic reference resolution
+        #
+        # El resolver identifica el objeto al que hace referencia
+        # el usuario. No decide por sí mismo qué acción ejecutar.
+        #
+
+        reference = self._reference_resolver.resolve(
+            normalized,
+            context,
+        )
+
+        #
+        # Semantic Episode Query
+        #
+        # Interpreta preguntas sobre episodios anteriores.
+        # El resolver solamente determina qué acción y qué campo
+        # deben consultarse; la recuperación real queda a cargo
+        # de QueryEpisodeAction.
+        #
+
+        episode_query = self._episode_query_resolver.resolve(
+            normalized
+        )
+
+        if episode_query is not None:
+            return Intent(
+                action="system.query_episode",
+                original_text=text,
+                parameters={
+                    "action": episode_query.action,
+                    "field": episode_query.field,
+                },
+            )
+
+        #
+        # Anaphoric references inside compound intents
+        #
+        # Permite que la segunda acción haga referencia al resultado
+        # inmediato de la primera acción, por ejemplo:
+        #
+        #   "capturá la pantalla e inspeccionala"
+        #   "capturá la pantalla y analizala"
+        #   "sacá una captura y revisala"
+        #
+        # La referencia solo se resuelve cuando existe una intención
+        # anterior conocida y el objeto referenciado es compatible.
+        #
+
+        if (
+            previous_intent is not None
+            and previous_intent.action == "system.screen_capture"
+        ):
+            capture_reference_patterns = (
+                r"^(inspeccion[aá]la|inspeccionala)$",
+                r"^(analiz[aá]la|analizala)$",
+                r"^(revis[aá]la|revisala)$",
+                r"^(mir[aá]la|mirala)$",
+            )
+
+            if any(
+                re.fullmatch(
+                    pattern,
+                    normalized,
+                )
+                for pattern in capture_reference_patterns
+            ):
+                return Intent(
+                    action="system.inspect_capture",
+                    original_text=text,
+                    parameters={},
+                )
+
+        #
+        # Contextual Volume References
+        #
+        # Estas expresiones dependen de una interacción anterior.
+        #
+        # Ejemplos:
+        #
+        #   "ahora ponelo al 50%"
+        #   "dejalo en 30%"
+        #   "subilo al 70%"
+        #
+        # La presencia de una referencia contextual no crea una
+        # capacidad. Solamente permite completar el significado
+        # cuando la acción resultante ya es conocida.
+        #
+
+        contextual_volume = self._resolve_contextual_volume(
+            normalized,
+            context,
+        )
+
+        if contextual_volume is not None:
+            return Intent(
+                action="system.set_volume",
+                original_text=text,
+                parameters={
+                    "level": contextual_volume,
+                },
+            )
+
+        #
+        # Contextual application reference
+        #
+        # La referencia semántica es el objeto ("esa aplicación"),
+        # mientras que la frase completa contiene además la acción
+        # ("abrí", "ejecutá", "iniciá").
+        #
+        # Por eso primero identificamos la estructura lingüística
+        # y después entregamos solamente el referente al resolver.
+        #
+
+        contextual_open_patterns = (
+            r"^(abr[ií]|abrir|ejecut[aá]|ejecutar|"
+            r"inici[aá]|iniciar)\s+(esa\s+aplicaci[oó]n)$",
+            r"^(abr[ií]|abrir|ejecut[aá]|ejecutar|"
+            r"inici[aá]|iniciar)\s+(esa\s+app)$",
+        )
+
+        contextual_open_match = None
+
+        for pattern in contextual_open_patterns:
+            contextual_open_match = re.fullmatch(
+                pattern,
+                normalized,
+            )
+
+            if contextual_open_match:
+                break
+
+        if contextual_open_match:
+            reference_text = (
+                contextual_open_match.group(2)
+            )
+
+            reference = self._reference_resolver.resolve(
+                reference_text,
+                context,
+            )
+
+            if (
+                reference is not None
+                and reference.kind == "application"
+            ):
+                application = str(
+                    reference.value
+                ).strip()
+
+                if application:
+                    return Intent(
+                        action="system.open_app",
+                        original_text=text,
+                        parameters={
+                            "application": application,
+                        },
+                    )
+
+        #
+        # Open Application
+        #
+        match = re.match(
+            r"^(abr[ií]|abrir|ejecut[aá]|ejecutar|"
+            r"inici[aá]|iniciar)\s+(.+)$",
+            normalized,
+        )
+
+        if match:
+            application = match.group(2).strip()
+
+            #
+            # Evitamos arrastrar artículos innecesarios hacia
+            # el launcher cuando el usuario dice:
+            #
+            #   "abrí la calculadora"
+            #   "abrí el notepad"
+            #
+
+            application = re.sub(
+                r"^(la|el|un|una)\s+",
+                "",
+                application,
+            ).strip()
+
+            return Intent(
+                action="system.open_app",
+                original_text=text,
+                parameters={
+                    "application": application,
+                },
+            )
+
+        #
+        # Screen Capture
+        #
+
+        screen_capture_patterns = (
+            r"\bcaptur[aá]\s+la\s+pantalla\b",
+            r"\bhacé\s+una\s+captura\s+de\s+pantalla\b",
+            r"\bhace\s+una\s+captura\s+de\s+pantalla\b",
+            r"\bsacá\s+una\s+captura\s+de\s+pantalla\b",
+            r"\bsaca\s+una\s+captura\s+de\s+pantalla\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in screen_capture_patterns
+        ):
+            return Intent(
+                action="system.screen_capture",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Inspect Capture
+        #
+        # Además de las formas explícitas, una referencia semántica
+        # a una captura previamente disponible permite expresiones
+        # naturales como:
+        #
+        #   "inspeccioná esa captura"
+        #   "analizá esa pantalla"
+        #
+
+        inspect_capture_patterns = (
+            r"\binspeccion[aá]\s+(la\s+)?captura\b",
+            r"\binspeccion[aá]\s+(la\s+)?pantalla\b",
+            r"\banaliz[aá]\s+(la\s+)?captura\b",
+            r"\banaliz[aá]\s+(la\s+)?pantalla\b",
+            r"\brevis[aá]\s+(la\s+)?captura\b",
+            r"\brevis[aá]\s+(la\s+)?pantalla\b",
+            r"\bm[aí]r[aá]\s+(la\s+)?captura\b",
+            r"\bm[aí]r[aá]\s+(la\s+)?pantalla\b",
+            r"\binspeccion[aá]\s+esa\s+captura\b",
+            r"\binspeccion[aá]\s+esa\s+pantalla\b",
+            r"\banaliz[aá]\s+esa\s+captura\b",
+            r"\banaliz[aá]\s+esa\s+pantalla\b",
+            r"\brevis[aá]\s+esa\s+captura\b",
+            r"\brevis[aá]\s+esa\s+pantalla\b",
+            r"\bm[aí]r[aá]\s+esa\s+captura\b",
+            r"\bm[aí]r[aá]\s+esa\s+pantalla\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in inspect_capture_patterns
+        ):
+            if (
+                "esa captura" in normalized
+                or "esa pantalla" in normalized
+            ):
+                if (
+                    reference is not None
+                    and reference.kind == "capture"
+                ):
+                    return Intent(
+                        action="system.inspect_capture",
+                        original_text=text,
+                        parameters={},
+                    )
+
+                return Intent(
+                    action="system.unknown",
+                    original_text=text,
+                    parameters={},
+                )
+
+            return Intent(
+                action="system.inspect_capture",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Contextual Close Application
+        #
+        # Permite referencias como:
+        #
+        #   "Abrí Chrome"
+        #   "Cerralo"
+        #   "Cerrala"
+        #   "Cerrá esa aplicación"
+        #   "Cerrá esa app"
+        #
+        # La aplicación solo se resuelve si existe una
+        # referencia contextual explícita y válida.
+        #
+
+        contextual_close_patterns = (
+            r"^(cerr[aá]lo|cerralo)$",
+            r"^(cerr[aá]la|cerrala)$",
+            r"^cerr[aá]\s+esa\s+aplicación$",
+            r"^cerra\s+esa\s+aplicación$",
+            r"^cerr[aá]\s+esa\s+app$",
+            r"^cerra\s+esa\s+app$",
+        )
+
+        if context and any(
+            re.fullmatch(
+                pattern,
+                normalized,
+            )
+            for pattern in contextual_close_patterns
+        ):
+            application = self._resolve_contextual_application(
+                normalized,
+                context,
+            )
+
+            if application:
+                return Intent(
+                    action="system.close_app",
+                    original_text=text,
+                    parameters={
+                        "application": application,
+                    },
+                )
+
+        #
+        # Close Application
+        #
+        # Ejemplos:
+        #
+        #   "Cerrá notepad"
+        #   "Cierra notepad"
+        #   "Cerrar notepad"
+        #   "Cerrá la calculadora"
+        #   "Cierra Spotify"
+        #
+
+        match = re.match(
+            r"^(cerr[aá]|cierra|cerrar)\s+(.+)$",
+            normalized,
+        )
+
+        if match:
+            application = match.group(2).strip()
+
+            application = re.sub(
+                r"^(la|el|un|una)\s+",
+                "",
+                application,
+            ).strip()
+
+            if application:
+                return Intent(
+                    action="system.close_app",
+                    original_text=text,
+                    parameters={
+                        "application": application,
+                    },
+                )
+
+        #
+        # Mute
+        #
+
+        mute_patterns = (
+            r"\bsilenci[aá]\b",
+            r"\bsilencia\b",
+            r"\bpon[eé]\s+mute\b",
+            r"\bponelo\s+en\s+silencio\b",
+            r"\bponelo\s+en\s+mute\b",
+            r"\bactivar\s+silencio\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in mute_patterns
+        ):
+            return Intent(
+                action="system.mute",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Unmute
+        #
+
+        unmute_patterns = (
+            r"\bactiv[aá]\s+el\s+sonido\b",
+            r"\bactiv[aá]\s+nuevamente\s+el\s+sonido\b",
+            r"\bquit[aá]\s+el\s+silencio\b",
+            r"\bquit[aá]le\s+el\s+mute\b",
+            r"\bsac[aá]le\s+el\s+mute\b",
+            r"\bdesactiv[aá]\s+el\s+silencio\b",
+            r"\bdesactiv[aá]le\s+el\s+mute\b",
+            r"\bsac[aá]\s+el\s+silencio\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in unmute_patterns
+        ):
+            return Intent(
+                action="system.unmute",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Set Volume
+        #
+
+        match = re.search(
+            r"(?:"
+            r"(?:volumen|volume)\s+"
+            r"(?:al|a|en)\s*"
+            r"|"
+            r"(?:subilo|subirlo|sube)\s+"
+            r"(?:al|a|en)\s*"
+            r"|"
+            r"(?:bajalo|bajarlo|baja)\s+"
+            r"(?:al|a|en)\s*"
+            r"|"
+            r"(?:ponelo|ponerlo|ponélo|ponelo)\s+"
+            r"(?:al|a|en)\s*"
+            r"|"
+            r"(?:dejalo|dejarlo|déjalo)\s+"
+            r"(?:al|a|en)\s*"
+            r")"
+            r"(\d+(?:[.,]\d+)?)\s*%?",
+            normalized,
+        )
+
+        if match:
+            level = float(
+                match.group(1).replace(",", ".")
+            )
+
+            return Intent(
+                action="system.set_volume",
+                original_text=text,
+                parameters={
+                    "level": level,
+                },
+            )
+
+        #
+        # Get Current Volume
+        #
+
+        current_volume_patterns = (
+            r"\ba cuánto está\b",
+            r"\ba cuanto esta\b",
+            r"\ba cuánto quedó\b",
+            r"\ba cuanto quedo\b",
+            r"\bvolumen actual\b",
+            r"\bqué volumen tengo\b",
+            r"\bque volumen tengo\b",
+            r"\bqué volumen hay\b",
+            r"\bque volumen hay\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in current_volume_patterns
+        ):
+            return Intent(
+                action="system.get_volume",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Get Current Mute State
+        #
+
+        mute_status_patterns = (
+            r"\bestá silenciado\b",
+            r"\besta silenciado\b",
+            r"\bestá en mute\b",
+            r"\besta en mute\b",
+            r"\bsistema está silenciado\b",
+            r"\bsistema esta silenciado\b",
+            r"\bestá activado el mute\b",
+            r"\besta activado el mute\b",
+            r"\bhay sonido\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in mute_status_patterns
+        ):
+            return Intent(
+                action="system.get_mute",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Restore previous mute
+        #
+
+        if (
+            re.search(
+                r"(volv[eé]|restaur[aá]|dej[aá]|pon[eé]).*"
+                r"(mute|silencio|silenciado|sonido)",
+                normalized,
+            )
+            or re.search(
+                r"(mute|silencio|silenciado|sonido).*"
+                r"(anterior|previo|como estaba|como antes)",
+                normalized,
+            )
+        ):
+            return Intent(
+                action="system.restore_previous_mute",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Restore previous volume
+        #
+
+        if (
+            re.search(
+                r"(volv[eé]|restaur[aá]|dej[aá]|pon[eé]).*"
+                r"(como estaba|como antes|anterior|previo)",
+                normalized,
+            )
+            or re.search(
+                r"restaur[aá]\s+(el\s+)?volumen",
+                normalized,
+            )
+        ):
+            return Intent(
+                action="system.restore_previous_volume",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Historical Volume - Previous
+        #
+
+        if (
+            re.search(
+                r"\b(antes|anterior|previamente)\b",
+                normalized,
+            )
+            and re.search(
+                r"\b(volumen|volume)\b",
+                normalized,
+            )
+        ):
+            return Intent(
+                action="system.get_volume_history",
+                original_text=text,
+                parameters={
+                    "mode": "previous",
+                },
+            )
+
+        #
+        # Historical Volume - Specific Value
+        #
+
+        percentage_match = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*%",
+            normalized,
+        )
+
+        if percentage_match:
+            requested_level = float(
+                percentage_match.group(1).replace(",", ".")
+            )
+
+            historical_phrases = (
+                "qué dejé",
+                "que deje",
+                "qué puse",
+                "que puse",
+                "qué tenía",
+                "que tenia",
+                "estuvo",
+                "había estado",
+                "habia estado",
+                "dejé",
+                "deje",
+                "puse",
+            )
+
+            if any(
+                phrase in normalized
+                for phrase in historical_phrases
+            ):
+                return Intent(
+                    action="system.get_volume_history",
+                    original_text=text,
+                    parameters={
+                        "mode": "find",
+                        "value": requested_level,
+                    },
+                )
+
+        #
+        # Contextual Volume History Compatibility
+        #
+        # Mantiene la capacidad anterior de consultar un valor
+        # histórico específico cuando ese valor aparece en una
+        # expresión contextual.
+        #
+
+        if context:
+            percentage_match = re.search(
+                r"(\d+(?:[.,]\d+)?)\s*%",
+                normalized,
+            )
+
+            if percentage_match:
+                requested_level = float(
+                    percentage_match.group(1).replace(",", ".")
+                )
+
+                recent_interactions = context.get(
+                    "recent_interactions",
+                    [],
+                )
+
+                for interaction in reversed(
+                    recent_interactions
+                ):
+                    if interaction.get("type") != "intent":
+                        continue
+
+                    data = interaction.get(
+                        "data",
+                        {},
+                    )
+
+                    if (
+                        data.get("action")
+                        != "system.set_volume"
+                    ):
+                        continue
+
+                    parameters = data.get(
+                        "parameters",
+                        {},
+                    )
+
+                    level = parameters.get(
+                        "level"
+                    )
+
+                    if level is None:
+                        continue
+
+                    try:
+                        level = float(level)
+                    except (
+                        TypeError,
+                        ValueError,
+                    ):
+                        continue
+
+                    if level == requested_level:
+                        return Intent(
+                            action="system.get_volume_history",
+                            original_text=text,
+                            parameters={
+                                "mode": "find",
+                                "value": requested_level,
+                            },
+                        )
+
+        #
+        # Last Episode
+        #
+
+        last_episode_patterns = (
+            r"\bqué hice recién\b",
+            r"\bque hice recien\b",
+            r"\bcuál fue mi última acción\b",
+            r"\bcual fue mi ultima accion\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in last_episode_patterns
+        ):
+            return Intent(
+                action="system.get_last_episode",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Previous Episode
+        #
+
+        previous_episode_patterns = (
+            r"\bqué hice antes\b",
+            r"\bque hice antes\b",
+            r"\bcuál fue la acción anterior\b",
+            r"\bcual fue la accion anterior\b",
+            r"\bqué hice inmediatamente antes\b",
+            r"\bque hice inmediatamente antes\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in previous_episode_patterns
+        ):
+            return Intent(
+                action="system.get_previous_episode",
+                original_text=text,
+                parameters={},
+            )
+
+        #
+        # Recent Episodes
+        #
+
+        recent_episode_patterns = (
+            r"\bqué hice recientemente\b",
+            r"\bque hice recientemente\b",
+            r"\bcuáles fueron mis últimas acciones\b",
+            r"\bcuales fueron mis ultimas acciones\b",
+            r"\bqué acciones hice\b",
+            r"\bque acciones hice\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in recent_episode_patterns
+        ):
+            return Intent(
+                action="system.get_recent_episodes",
+                original_text=text,
+                parameters={
+                    "limit": 5,
+                },
+            )
+
+        #
+        # Process List
+        #
+
+        process_list_patterns = (
+            # Aplicaciones
+            r"\bqué aplicaciones están ejecutándose\b",
+            r"\bque aplicaciones están ejecutándose\b",
+            r"\bque aplicaciones estan ejecutandose\b",
+            r"\bqué aplicaciones están abiertas\b",
+            r"\bque aplicaciones estan abiertas\b",
+            r"\bmostrame las aplicaciones abiertas\b",
+            r"\bmostrá las aplicaciones abiertas\b",
+            r"\bmostrame las aplicaciones\b",
+            r"\bmostrá las aplicaciones\b",
+            r"\blistame las aplicaciones\b",
+            r"\blistá las aplicaciones\b",
+
+            # Procesos
+            r"\bmostrame los procesos activos\b",
+            r"\bmostrá los procesos activos\b",
+            r"\bmostrame los procesos\b",
+            r"\bmostrá los procesos\b",
+            r"\blistame los procesos\b",
+            r"\blistá los procesos\b",
+            r"\bqué procesos se están ejecutando\b",
+            r"\bque procesos se estan ejecutando\b",
+            r"\bqué procesos están ejecutándose\b",
+            r"\bque procesos estan ejecutandose\b",
+            r"\blista los procesos\b",
+            r"\blista los procesos que están ejecutándose actualmente\b",
+
+            # Programas
+            r"\bqué programas están abiertos\b",
+            r"\bque programas estan abiertos\b",
+            r"\bqué programas están ejecutándose\b",
+            r"\bque programas están ejecutándose\b",
+            r"\bque programas estan ejecutandose\b",
+            r"\bqué programas se están ejecutando\b",
+            r"\bque programas se estan ejecutando\b",
+            r"\bmostrame qué programas están ejecutándose\b",
+            r"\bmostrame que programas estan ejecutandose\b",
+            r"\bmostrá qué programas están ejecutándose\b",
+            r"\bmostrá que programas estan ejecutandose\b",
+
+            # Formas generales
+            r"\bqué está corriendo\b",
+            r"\bque está corriendo\b",
+            r"\bque esta corriendo\b",
+            r"\bqué aplicaciones tengo abiertas\b",
+            r"\bque aplicaciones tengo abiertas\b",
+        )
+
+        if any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in process_list_patterns
+        ):
+            return Intent(
+                action="system.process_list",
+                original_text=text,
+                parameters={},
+            )
+
+        # Time
+        time_patterns = (
+            r"\bqué hora es\b",
+            r"\bque hora es\b",
+            r"\bdecime la hora\b",
+            r"\bdecíme la hora\b",
+            r"\bdime la hora\b",
+            r"\bdecime qué hora es\b",
+            r"\bdecime que hora es\b",
+            r"\bdecíme qué hora es\b",
+            r"\bqué hora tenemos\b",
+            r"\bque hora tenemos\b",
+            r"\bme decís la hora\b",
+            r"\bme decis la hora\b",
+        )
+
+        if any(
+            re.search(pattern, normalized)
+            for pattern in time_patterns
+        ):
+            return Intent(
+                action="system.get_time",
+                original_text=text,
+                parameters={},
+            )
+
+
+        #
+        # Unknown
+        #
+
+        return Intent(
+            action="system.unknown",
+            original_text=text,
+            parameters={},
+        )
+
+    @staticmethod
+    def _resolve_contextual_volume(
+        normalized: str,
+        context: dict[str, Any] | None,
+    ) -> float | None:
+        """
+        Resuelve referencias contextuales al volumen.
+
+        Ejemplos:
+            "ahora ponelo al 50%"
+            "dejalo en 30%"
+            "subilo al 70%"
+        """
+
+        if not context:
+            return None
+
+        percentage_match = re.search(
+            r"(\d+(?:[.,]\d+)?)\s*%?",
+            normalized,
+        )
+
+        if percentage_match is None:
+            return None
+
+        requested_level = float(
+            percentage_match.group(1).replace(",", ".")
+        )
+
+        contextual_patterns = (
+            r"\bahora\s+ponelo\s+(?:al|a|en)\s*"
+            r"\d+(?:[.,]\d+)?\s*%?",
+            r"\bdejalo\s+(?:al|a|en)\s*"
+            r"\d+(?:[.,]\d+)?\s*%?",
+            r"\bdejálo\s+(?:al|a|en)\s*"
+            r"\d+(?:[.,]\d+)?\s*%?",
+            r"\bsubilo\s+(?:al|a|en)\s*"
+            r"\d+(?:[.,]\d+)?\s*%?",
+            r"\bbajalo\s+(?:al|a|en)\s*"
+            r"\d+(?:[.,]\d+)?\s*%?",
+        )
+
+        if not any(
+            re.search(
+                pattern,
+                normalized,
+            )
+            for pattern in contextual_patterns
+        ):
+            return None
+
+        references = context.get(
+            "references",
+            {},
+        )
+
+        if not isinstance(
+            references,
+            dict,
+        ):
+            return None
+
+        last_volume = references.get(
+            "last_volume"
+        )
+
+        if last_volume is None:
+            return None
+
+        try:
+            float(last_volume)
+        except (
+            TypeError,
+            ValueError,
+        ):
+            return None
+
+        return requested_level
+
+    @staticmethod
+    def _resolve_contextual_application(
+        normalized: str,
+        context: dict[str, Any] | None,
+    ) -> str | None:
+        """
+        Resuelve la aplicación asociada al contexto actual.
+
+        Prioridad:
+            1. última aplicación ejecutada
+            2. última aplicación conocida
+            3. última intención de apertura válida
+        """
+
+        if not context:
+            return None
+
+        references = context.get(
+            "references",
+            {},
+        )
+
+        if isinstance(
+            references,
+            dict,
+        ):
+            application = references.get(
+                "last_executed_application"
+            )
+
+            if (
+                isinstance(application, str)
+                and application.strip()
+            ):
+                return application.strip()
+
+            application = references.get(
+                "last_application"
+            )
+
+            if (
+                isinstance(application, str)
+                and application.strip()
+            ):
+                return application.strip()
+
+        recent_interactions = context.get(
+            "recent_interactions",
+            [],
+        )
+
+        if not isinstance(
+            recent_interactions,
+            list,
+        ):
+            return None
+
+        for interaction in reversed(
+            recent_interactions
+        ):
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get(
+                "type"
+            ) != "intent":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            if data.get(
+                "action"
+            ) != "system.open_app":
+                continue
+
+            parameters = data.get(
+                "parameters",
+                {},
+            )
+
+            if not isinstance(
+                parameters,
+                dict,
+            ):
+                continue
+
+            application = parameters.get(
+                "application"
+            )
+
+            if (
+                isinstance(application, str)
+                and application.strip()
+            ):
+                return application.strip()
+
+        return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\objective.py
+================================================================================
+
+from __future__ import annotations
+
+from enum import Enum
+
+from pydantic import BaseModel, Field
+
+
+class ObjectiveStatus(str, Enum):
+    """
+    Estado de un objetivo.
+    """
+
+    CREATED = "created"
+    PLANNING = "planning"
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Objective(BaseModel):
+    """
+    Representa un objetivo que NEXUS debe cumplir.
+    """
+
+    id: str
+
+    title: str
+
+    status: ObjectiveStatus = ObjectiveStatus.CREATED
+
+    priority: int = 100
+
+    metadata: dict = Field(default_factory=dict)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\objective_factory.py
+================================================================================
+
+from __future__ import annotations
+
+from uuid import uuid4
+
+from planner.intent import Intent
+from planner.objective import Objective
+
+
+class ObjectiveFactory:
+    """
+    Responsable de crear Objectives
+    a partir de un Intent.
+    """
+
+    def create(
+        self,
+        intent: Intent,
+    ) -> Objective:
+
+        return Objective(
+
+    id=str(uuid4()),
+
+    title=intent.action,
+
+    metadata={
+        **intent.parameters,
+        "original_text": intent.original_text,
+    },
+
+)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

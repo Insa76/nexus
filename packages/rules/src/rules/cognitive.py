@@ -54,8 +54,29 @@ class RuleCognitiveAccess:
     def get(
         self,
         rule_id: str,
+        *,
+        context: object,
     ) -> Rule | None:
-        return self._capability.get(rule_id)
+        rules = self._capability.relevant(
+            context=context,
+        )
 
-    def list(self) -> tuple[Rule, ...]:
-        return tuple(self._capability.list())
+        return next(
+            (
+                rule
+                for rule in rules
+                if rule.id == rule_id
+            ),
+            None,
+        )
+
+    def list(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Rule, ...]:
+        return tuple(
+            self._capability.relevant(
+                context=context,
+            )
+        )

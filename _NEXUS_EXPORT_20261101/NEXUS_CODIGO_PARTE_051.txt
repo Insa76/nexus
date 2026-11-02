@@ -1,0 +1,1187 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion_record.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from documents.document_type import DocumentType
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DocumentIngestionRecord:
+    """
+    Immutable record of a document ingestion attempt that produced content.
+
+    The record represents historical ingestion state. It does not replace
+    the current ingestion_evidence stored on Document.
+    """
+
+    id: str
+    document_id: str
+    artifact_id: str
+    content_id: str
+
+    declared_type: DocumentType
+    detected_type: DocumentType | None = None
+    detection_strategy: str | None = None
+    type_matches: bool | None = None
+
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        document_id: str,
+        artifact_id: str,
+        content_id: str,
+        declared_type: str | DocumentType,
+        detected_type: str | DocumentType | None = None,
+        detection_strategy: str | None = None,
+        type_matches: bool | None = None,
+    ) -> DocumentIngestionRecord:
+        resolved_declared_type = (
+            declared_type
+            if isinstance(declared_type, DocumentType)
+            else DocumentType.from_mime_type(declared_type)
+        )
+
+        resolved_detected_type = None
+
+        if detected_type is not None:
+            resolved_detected_type = (
+                detected_type
+                if isinstance(detected_type, DocumentType)
+                else DocumentType.from_mime_type(detected_type)
+            )
+
+        resolved_type_matches = type_matches
+
+        if (
+            resolved_type_matches is None
+            and resolved_detected_type is not None
+        ):
+            resolved_type_matches = (
+                resolved_declared_type.mime_type
+                == resolved_detected_type.mime_type
+            )
+
+        return cls(
+            id=str(uuid4()),
+            document_id=document_id,
+            artifact_id=artifact_id,
+            content_id=content_id,
+            declared_type=resolved_declared_type,
+            detected_type=resolved_detected_type,
+            detection_strategy=detection_strategy,
+            type_matches=resolved_type_matches,
+            created_at=_utc_now(),
+        )
+
+    @property
+    def type_mismatch(self) -> bool | None:
+        if self.type_matches is None:
+            return None
+
+        return not self.type_matches
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion_record_store.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.ingestion_record import DocumentIngestionRecord
+
+
+class DocumentIngestionRecordStore:
+    def __init__(self) -> None:
+        self._records: dict[str, DocumentIngestionRecord] = {}
+
+    def add(
+        self,
+        record: DocumentIngestionRecord,
+    ) -> DocumentIngestionRecord:
+        self._records[record.id] = record
+        return record
+
+    def get(
+        self,
+        record_id: str,
+    ) -> DocumentIngestionRecord | None:
+        return self._records.get(record_id)
+
+    def list(self) -> list[DocumentIngestionRecord]:
+        return list(self._records.values())
+
+    def list_for_document(
+        self,
+        document_id: str,
+    ) -> list[DocumentIngestionRecord]:
+        return [
+            record
+            for record in self._records.values()
+            if record.document_id == document_id
+        ]
+
+    def remove(
+        self,
+        record_id: str,
+    ) -> DocumentIngestionRecord | None:
+        return self._records.pop(record_id, None)
+
+    def remove_for_document(
+        self,
+        document_id: str,
+    ) -> int:
+        records = [
+            record
+            for record in self._records.values()
+            if record.document_id == document_id
+        ]
+
+        for record in records:
+            self._records.pop(record.id, None)
+
+        return len(records)
+
+    def clear(self) -> None:
+        self._records.clear()
+
+    def count(self) -> int:
+        return len(self._records)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion_registry.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.document_type import DocumentType
+from documents.ingestion import DocumentIngestor
+
+
+class IngestionRegistry:
+    def __init__(self) -> None:
+        self._ingestors: dict[str, DocumentIngestor] = {}
+
+    @staticmethod
+    def _normalize_content_type(
+        content_type: str | DocumentType,
+    ) -> str:
+        if isinstance(content_type, DocumentType):
+            return content_type.mime_type
+
+        return DocumentType.from_mime_type(
+            content_type
+        ).mime_type
+
+    def register(
+        self,
+        content_type: str | DocumentType,
+        ingestor: DocumentIngestor,
+    ) -> None:
+        normalized_type = self._normalize_content_type(
+            content_type
+        )
+
+        self._ingestors[normalized_type] = ingestor
+
+    def get(
+        self,
+        content_type: str | DocumentType,
+    ) -> DocumentIngestor | None:
+        normalized_type = self._normalize_content_type(
+            content_type
+        )
+
+        return self._ingestors.get(
+            normalized_type
+        )
+
+    def supports(
+        self,
+        content_type: str | DocumentType,
+    ) -> bool:
+        normalized_type = self._normalize_content_type(
+            content_type
+        )
+
+        return normalized_type in self._ingestors
+
+    def remove(
+        self,
+        content_type: str | DocumentType,
+    ) -> DocumentIngestor | None:
+        normalized_type = self._normalize_content_type(
+            content_type
+        )
+
+        return self._ingestors.pop(
+            normalized_type,
+            None,
+        )
+
+    def clear(self) -> None:
+        self._ingestors.clear()
+
+    def content_types(self) -> list[str]:
+        return list(
+            self._ingestors
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\ingestion_service.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.artifacts import DocumentArtifact
+from documents.document_type import DocumentType
+from documents.ingestion import IngestionResult
+from documents.ingestion_registry import IngestionRegistry
+from documents.type_resolver import DocumentTypeResolver
+
+
+class DocumentIngestionService:
+    def __init__(
+        self,
+        registry: IngestionRegistry,
+        type_resolver: DocumentTypeResolver | None = None,
+    ) -> None:
+        self._registry = registry
+        self._type_resolver = (
+            type_resolver
+            if type_resolver is not None
+            else DocumentTypeResolver()
+        )
+
+    def ingest(
+        self,
+        artifact: DocumentArtifact,
+        content_type: str | DocumentType,
+    ) -> IngestionResult:
+        document_type = (
+            content_type
+            if isinstance(content_type, DocumentType)
+            else self._type_resolver.resolve(content_type)
+        )
+
+        ingestor = self._registry.get(
+            document_type.mime_type
+        )
+
+        if ingestor is None:
+            raise ValueError(
+                "No ingestor registered for content type: "
+                f"{document_type.mime_type}"
+            )
+
+        return ingestor.ingest(
+            artifact
+        )
+
+    def supported_content_types(self) -> list[str]:
+        """
+        Devuelve los tipos MIME normalizados para los cuales
+        existe un ingestor registrado.
+        """
+
+        return self._registry.content_types()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.semantic_change import DocumentSemanticChange
+
+
+@dataclass(frozen=True)
+class DocumentKnowledge:
+    source_change: DocumentSemanticChange
+    statement: str
+    topic: str | None = None
+    confidence: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.statement.strip():
+            raise ValueError(
+                "Document knowledge statement cannot be empty"
+            )
+
+        if self.topic is not None:
+            normalized_topic = self.topic.strip()
+            object.__setattr__(
+                self,
+                "topic",
+                normalized_topic or None,
+            )
+
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(
+                "Document knowledge confidence must be between 0 and 1"
+            )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge_extraction.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.knowledge import DocumentKnowledge
+from documents.semantic_analysis import DocumentSemanticAnalysis
+
+
+@dataclass(frozen=True)
+class DocumentKnowledgeExtraction:
+    source: DocumentSemanticAnalysis
+    knowledge: tuple[DocumentKnowledge, ...]
+
+    @property
+    def extracted(self) -> bool:
+        return bool(self.knowledge)
+
+    @property
+    def empty(self) -> bool:
+        return not self.extracted
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge_extraction_service.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.knowledge_extraction import DocumentKnowledgeExtraction
+from documents.knowledge_extractor import DocumentKnowledgeExtractor
+from documents.semantic_analysis import DocumentSemanticAnalysis
+
+
+class DocumentKnowledgeExtractionService:
+    def __init__(
+        self,
+        extractor: DocumentKnowledgeExtractor,
+    ):
+        self.extractor = extractor
+
+    def extract(
+        self,
+        analysis: DocumentSemanticAnalysis,
+    ) -> DocumentKnowledgeExtraction:
+        knowledge = tuple(
+            item
+            for change in analysis.changes
+            for item in self.extractor.extract(change)
+        )
+
+        return DocumentKnowledgeExtraction(
+            source=analysis,
+            knowledge=knowledge,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge_extractor.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from documents.knowledge import DocumentKnowledge
+from documents.semantic_change import DocumentSemanticChange
+
+
+@runtime_checkable
+class DocumentKnowledgeExtractor(Protocol):
+    def extract(
+        self,
+        change: DocumentSemanticChange,
+    ) -> tuple[DocumentKnowledge, ...]:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge_record.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from documents.knowledge import DocumentKnowledge
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DocumentKnowledgeRecord:
+    id: str
+    document_id: str
+    content_version_id: str
+    knowledge: DocumentKnowledge
+    created_at: datetime
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        document_id: str,
+        content_version_id: str,
+        knowledge: DocumentKnowledge,
+    ) -> DocumentKnowledgeRecord:
+        return cls(
+            id=str(uuid4()),
+            document_id=document_id,
+            content_version_id=content_version_id,
+            knowledge=knowledge,
+            created_at=_utc_now(),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\knowledge_record_store.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.knowledge_record import DocumentKnowledgeRecord
+
+
+
+class DocumentKnowledgeRecordStore:
+    def __init__(self) -> None:
+        self._records: dict[str, DocumentKnowledgeRecord] = {}
+
+    def add(
+        self,
+        record: DocumentKnowledgeRecord,
+    ) -> DocumentKnowledgeRecord:
+        self._records[record.id] = record
+        return record
+
+    def get(
+        self,
+        record_id: str,
+    ) -> DocumentKnowledgeRecord | None:
+        return self._records.get(record_id)
+
+    def list(self) -> list[DocumentKnowledgeRecord]:
+        return list(self._records.values())
+
+    def list_for_document(
+        self,
+        document_id: str,
+    ) -> list[DocumentKnowledgeRecord]:
+        return [
+            record
+            for record in self._records.values()
+            if record.document_id == document_id
+        ]
+
+    def list_for_content_version(
+        self,
+        content_version_id: str,
+    ) -> list[DocumentKnowledgeRecord]:
+        return [
+            record
+            for record in self._records.values()
+            if record.content_version_id == content_version_id
+        ]
+
+    def find(
+        self,
+        *,
+        document_id: str,
+        content_version_id: str,
+        knowledge: DocumentKnowledge,
+    ) -> DocumentKnowledgeRecord | None:
+        for record in self._records.values():
+            if (
+                record.document_id == document_id
+                and record.content_version_id == content_version_id
+                and record.knowledge == knowledge
+            ):
+                return record
+
+        return None
+
+    def remove_for_content_version(
+        self,
+        content_version_id: str,
+    ) -> int:
+        records = [
+            record
+            for record in self._records.values()
+            if record.content_version_id == content_version_id
+        ]
+
+        for record in records:
+            self._records.pop(record.id, None)
+
+        return len(records)
+
+    def remove_for_document(
+        self,
+        document_id: str,
+    ) -> int:
+        records = [
+            record
+            for record in self._records.values()
+            if record.document_id == document_id
+        ]
+
+        for record in records:
+            self._records.pop(record.id, None)
+
+        return len(records)
+
+    def remove(
+        self,
+        record_id: str,
+    ) -> DocumentKnowledgeRecord | None:
+        return self._records.pop(record_id, None)
+
+    def clear(self) -> None:
+        self._records.clear()
+
+    def count(self) -> int:
+        return len(self._records)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\local_artifact_reader.py
+================================================================================
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from documents.artifacts import DocumentArtifact
+from documents.sources import DocumentSource
+
+
+class LocalArtifactReader:
+    def __init__(
+        self,
+        encoding: str = "utf-8",
+    ) -> None:
+        self._encoding = encoding
+
+    def read(
+        self,
+        artifact: DocumentArtifact,
+    ) -> str:
+        source = DocumentSource.from_location(
+            artifact.location
+        )
+
+        if source.scheme != "local":
+            raise ValueError(
+                "LocalArtifactReader cannot read source scheme: "
+                f"{source.scheme}"
+            )
+
+        path = Path(
+            source.location
+        )
+
+        return path.read_text(
+            encoding=self._encoding
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\metadata.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(frozen=True)
+class DocumentMetadata:
+    """
+    Metadata descriptiva y semántica de un documento.
+
+    No representa el artefacto físico ni su almacenamiento.
+    """
+
+    filename: str | None = None
+    title: str | None = None
+    author: str | None = None
+    language: str | None = None
+    document_type: str | None = None
+    tags: tuple[str, ...] = ()
+    extra: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "filename": self.filename,
+            "title": self.title,
+            "author": self.author,
+            "language": self.language,
+            "document_type": self.document_type,
+            "tags": self.tags,
+            "extra": dict(self.extra),
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        metadata: dict[str, object] | None = None,
+    ) -> DocumentMetadata:
+        data = dict(metadata or {})
+
+        raw_tags = data.pop("tags", ())
+        tags = tuple(str(tag) for tag in raw_tags) if raw_tags else ()
+
+        known_fields = {
+            "filename",
+            "title",
+            "author",
+            "language",
+            "document_type",
+        }
+
+        values = {
+            key: data.pop(key, None)
+            for key in known_fields
+        }
+
+        extra = {
+            str(key): str(value)
+            for key, value in data.items()
+        }
+
+        return cls(
+            filename=values["filename"],
+            title=values["title"],
+            author=values["author"],
+            language=values["language"],
+            document_type=values["document_type"],
+            tags=tags,
+            extra=extra,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from documents.ingestion_evidence import DocumentIngestionEvidence
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class Document:
+    id: str
+    name: str
+    mime_type: str
+    source: str
+    description: str | None = None
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    artifact_id: str | None = None
+    content_id: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
+    ingestion_evidence: DocumentIngestionEvidence | None = None
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        mime_type: str,
+        source: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+        artifact_id: str | None = None,
+        content_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Document:
+        now = _utc_now()
+
+        normalized_metadata = {
+            str(key): str(value)
+            for key, value in (metadata or {}).items()
+        }
+
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            mime_type=mime_type,
+            source=source,
+            description=description,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            artifact_id=artifact_id,
+            content_id=content_id,
+            metadata=normalized_metadata,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\query.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from documents.context_relevance import DocumentContextMatch
+from documents.models import Document
+
+
+@dataclass(frozen=True)
+class DocumentQueryResult:
+    """
+    Resultado de una consulta sobre documentos.
+
+    `documents` contiene los documentos de la página actual.
+
+    `total` representa la cantidad total de documentos encontrados
+    antes de aplicar paginación.
+
+    `query` conserva los parámetros utilizados para producir
+    el resultado, permitiendo trazabilidad.
+
+    `matches` conserva, cuando están disponibles, las relaciones
+    de relevancia contextual asociadas a los documentos de la página.
+    """
+
+    documents: tuple[Document, ...]
+    total: int
+    query: dict[str, object] = field(default_factory=dict)
+    matches: tuple[DocumentContextMatch, ...] = ()
+    offset: int = 0
+    limit: int | None = None
+
+    @classmethod
+    def from_documents(
+        cls,
+        documents: tuple[Document, ...],
+        *,
+        query: dict[str, object] | None = None,
+        matches: tuple[DocumentContextMatch, ...] = (),
+        total: int | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        if offset < 0:
+            raise ValueError("offset must be greater than or equal to zero")
+
+        if limit is not None and limit < 0:
+            raise ValueError("limit must be greater than or equal to zero")
+
+        return cls(
+            documents=documents,
+            total=len(documents) if total is None else total,
+            query=dict(query or {}),
+            matches=matches,
+            offset=offset,
+            limit=limit,
+        )
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.documents
+
+    @property
+    def has_results(self) -> bool:
+        return bool(self.documents)
+
+    @property
+    def has_more(self) -> bool:
+        return self.offset + len(self.documents) < self.total
+
+    def ordered_matches(self) -> tuple[DocumentContextMatch, ...]:
+        if not self.matches:
+            return ()
+
+        return tuple(
+            sorted(
+                self.matches,
+                key=lambda match: match.relevance,
+                reverse=True,
+            )
+        )
+
+    def ordered_documents(self) -> tuple[Document, ...]:
+        if not self.matches:
+            return self.documents
+
+        return tuple(
+            match.document
+            for match in self.ordered_matches()
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.artifact_store import ArtifactStore
+from documents.artifacts import DocumentArtifact
+from documents.content import DocumentContent
+from documents.content_store import ContentStore
+from documents.models import Document
+from documents.store import DocumentStore
+
+
+@dataclass(frozen=True)
+class DocumentResolution:
+    document: Document
+    artifact: DocumentArtifact | None
+    content: DocumentContent | None
+
+
+class DocumentResolver:
+    def __init__(
+        self,
+        document_store: DocumentStore,
+        artifact_store: ArtifactStore,
+        content_store: ContentStore | None = None,
+    ) -> None:
+        self._document_store = document_store
+        self._artifact_store = artifact_store
+        self._content_store = content_store
+
+    def resolve(self, document_id: str) -> DocumentResolution | None:
+        document = self._document_store.get(document_id)
+
+        if document is None:
+            return None
+
+        artifact = None
+        if document.artifact_id is not None:
+            artifact = self._artifact_store.get(document.artifact_id)
+
+        content = None
+        if self._content_store is not None and document.content_id is not None:
+            content = self._content_store.get(document.content_id)
+
+        return DocumentResolution(
+            document=document,
+            artifact=artifact,
+            content=content,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\rule_based_knowledge_extractor.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.knowledge import DocumentKnowledge
+from documents.semantic_change import DocumentSemanticChange
+from documents.knowledge_extractor import DocumentKnowledgeExtractor
+
+
+class RuleBasedDocumentKnowledgeExtractor(
+    DocumentKnowledgeExtractor
+):
+    def extract(
+        self,
+        change: DocumentSemanticChange,
+    ) -> tuple[DocumentKnowledge, ...]:
+        return (
+            DocumentKnowledge(
+                source_change=change,
+                statement=change.meaning,
+                topic=(
+                    change.topics[0]
+                    if change.topics
+                    else None
+                ),
+                confidence=change.confidence,
+            ),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\rule_based_semantic_analyzer.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.change import DocumentChange
+from documents.semantic_analyzer import DocumentSemanticAnalyzer
+from documents.semantic_change import DocumentSemanticChange
+
+
+class RuleBasedSemanticAnalyzer(DocumentSemanticAnalyzer):
+    def analyze(self, change: DocumentChange) -> DocumentSemanticChange:
+        if change.change_type.value == "added":
+            meaning = "Se agregó contenido al documento."
+        elif change.change_type.value == "removed":
+            meaning = "Se eliminó contenido del documento."
+        else:
+            meaning = "Se modificó contenido existente del documento."
+
+        return DocumentSemanticChange(
+            source_change=change,
+            meaning=meaning,
+            confidence=1.0,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\semantic_analysis.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.semantic_change import DocumentSemanticChange
+from documents.version_change import DocumentVersionChangeResult
+
+
+@dataclass(frozen=True)
+class DocumentSemanticAnalysis:
+    source: DocumentVersionChangeResult
+    changes: tuple[DocumentSemanticChange, ...]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.changes)
+
+    @property
+    def unchanged(self) -> bool:
+        return not self.changed
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\semantic_analysis_service.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.semantic_analysis import DocumentSemanticAnalysis
+from documents.semantic_analyzer import DocumentSemanticAnalyzer
+from documents.version_change import DocumentVersionChangeResult
+
+
+class DocumentSemanticAnalysisService:
+    def __init__(
+        self,
+        analyzer: DocumentSemanticAnalyzer,
+    ):
+        self.analyzer = analyzer
+
+    def analyze(
+        self,
+        result: DocumentVersionChangeResult,
+    ) -> DocumentSemanticAnalysis:
+        semantic_changes = tuple(
+            self.analyzer.analyze(change)
+            for change in result.changes
+        )
+
+        return DocumentSemanticAnalysis(
+            source=result,
+            changes=semantic_changes,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\semantic_analyzer.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
+
+from documents.change import DocumentChange
+from documents.semantic_change import DocumentSemanticChange
+
+
+@runtime_checkable
+class DocumentSemanticAnalyzer(Protocol):
+    def analyze(self, change: DocumentChange) -> DocumentSemanticChange:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\semantic_change.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.change import DocumentChange
+
+
+@dataclass(frozen=True)
+class DocumentSemanticChange:
+    source_change: DocumentChange
+    meaning: str
+    topics: tuple[str, ...] = ()
+    impact: str | None = None
+    confidence: float | None = None
+
+    def __post_init__(self) -> None:
+        if not self.meaning.strip():
+            raise ValueError(
+                "Semantic change meaning cannot be empty"
+            )
+
+        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(
+                "Semantic change confidence must be between 0 and 1"
+            )
+
+        normalized_topics = tuple(
+            topic.strip()
+            for topic in self.topics
+            if topic.strip()
+        )
+
+        object.__setattr__(
+            self,
+            "topics",
+            normalized_topics,
+        )
+
+        if self.impact is not None:
+            normalized_impact = self.impact.strip()
+
+            object.__setattr__(
+                self,
+                "impact",
+                normalized_impact or None,
+            )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

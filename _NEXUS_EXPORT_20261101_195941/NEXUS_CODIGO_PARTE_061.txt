@@ -1,0 +1,1715 @@
+﻿
+================================================================================
+ARCHIVO: packages\engine\tests\test_cognitive_capability_operation_lookup.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import DocumentCognitiveAccess
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityOperation,
+    CognitiveCapabilityRouter,
+)
+
+
+def test_router_finds_operation_by_action():
+    access = MagicMock(spec=DocumentCognitiveAccess)
+
+    router = CognitiveCapabilityRouter(
+        document_access=access,
+    )
+
+    assert router.find_operation(
+        action="documents.find_relevant",
+    ) == CognitiveCapabilityOperation(
+        capability="documents",
+        operation="find_relevant",
+        action="documents.find_relevant",
+    )
+
+
+def test_router_returns_none_for_unknown_action():
+    access = MagicMock(spec=DocumentCognitiveAccess)
+
+    router = CognitiveCapabilityRouter(
+        document_access=access,
+    )
+
+    assert router.find_operation(
+        action="documents.unknown",
+    ) is None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_cognitive_capability_operations.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import DocumentCognitiveAccess
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityOperation,
+    CognitiveCapabilityRouter,
+)
+
+
+def test_router_reports_available_cognitive_operations():
+    access = MagicMock(spec=DocumentCognitiveAccess)
+
+    router = CognitiveCapabilityRouter(
+        document_access=access,
+    )
+
+    operations = router.available_operations()
+
+    assert operations == (
+        CognitiveCapabilityOperation(
+            capability="documents",
+            operation="find_relevant",
+            action="documents.find_relevant",
+        ),
+    )
+
+
+def test_router_reports_no_available_cognitive_operations():
+    router = CognitiveCapabilityRouter()
+
+    assert router.available_operations() == ()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_cognitive_capability_result_summary.py
+================================================================================
+
+from __future__ import annotations
+
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityRouter,
+)
+from processes.models import Process
+from rules.models import Rule
+
+
+def test_summarize_process_get_result() -> None:
+    process = Process.create(
+        name="Proceso de prueba",
+        description="Descripción",
+    )
+
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        process,
+        operation="processes.get",
+    )
+
+    assert summary == {
+        "operation": "processes.get",
+        "result_count": 1,
+        "has_results": True,
+        "status": "found",
+    }
+
+
+def test_summarize_process_list_result() -> None:
+    processes = (
+        Process.create(
+            name="Proceso 1",
+            description="Descripción 1",
+        ),
+        Process.create(
+            name="Proceso 2",
+            description="Descripción 2",
+        ),
+    )
+
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        processes,
+        operation="processes.list",
+    )
+
+    assert summary == {
+        "operation": "processes.list",
+        "result_count": 2,
+        "has_results": True,
+        "status": "found",
+    }
+
+
+def test_summarize_empty_process_list_result() -> None:
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        (),
+        operation="processes.list",
+    )
+
+    assert summary == {
+        "operation": "processes.list",
+        "result_count": 0,
+        "has_results": False,
+        "status": "empty",
+    }
+
+
+def test_summarize_rule_get_result() -> None:
+    rule = Rule.create(
+        name="Regla de prueba",
+        description="Descripción",
+    )
+
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        rule,
+        operation="rules.get",
+    )
+
+    assert summary == {
+        "operation": "rules.get",
+        "result_count": 1,
+        "has_results": True,
+        "status": "found",
+    }
+
+
+def test_summarize_rule_list_result() -> None:
+    rules = (
+        Rule.create(
+            name="Regla 1",
+            description="Descripción 1",
+        ),
+        Rule.create(
+            name="Regla 2",
+            description="Descripción 2",
+        ),
+    )
+
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        rules,
+        operation="rules.list",
+    )
+
+    assert summary == {
+        "operation": "rules.list",
+        "result_count": 2,
+        "has_results": True,
+        "status": "found",
+    }
+
+
+def test_summarize_empty_rule_list_result() -> None:
+    summary = CognitiveCapabilityRouter.summarize_operation_result(
+        (),
+        operation="rules.list",
+    )
+
+    assert summary == {
+        "operation": "rules.list",
+        "result_count": 0,
+        "has_results": False,
+        "status": "empty",
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_cognitive_capability_router_invoke.py
+================================================================================
+
+
+from unittest.mock import MagicMock
+
+from documents.cognitive import DocumentCognitiveAccess
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityInvocation,
+    CognitiveCapabilityRouter,
+)
+
+
+def test_router_invoke_forwards_document_parameters():
+    document_access = MagicMock(spec=DocumentCognitiveAccess)
+    expected_result = MagicMock()
+    document_access.find_relevant.return_value = expected_result
+
+    router = CognitiveCapabilityRouter(
+        document_access=document_access,
+    )
+
+    invocation = CognitiveCapabilityInvocation(
+        capability="documents",
+        operation="find_relevant",
+        parameters={
+            "name": "manual.pdf",
+            "mime_type": "application/pdf",
+            "offset": 2,
+            "limit": 5,
+        },
+    )
+
+    context = {"user": "test"}
+
+    result = router.invoke(
+        invocation,
+        context=context,
+    )
+
+    assert result is expected_result
+
+    document_access.find_relevant.assert_called_once_with(
+        context=context,
+        name="manual.pdf",
+        mime_type="application/pdf",
+        offset=2,
+        limit=5,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_cognitive_capability_selection.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import DocumentCognitiveAccess
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityInvocation,
+    CognitiveCapabilityRouter,
+)
+
+
+def test_router_selects_documents_capability():
+    document_access = MagicMock(
+        spec=DocumentCognitiveAccess,
+    )
+
+    router = CognitiveCapabilityRouter(
+        document_access=document_access,
+    )
+
+    invocation = router.select(
+        action="documents.find_relevant",
+        parameters={
+            "name": "manual.pdf",
+        },
+    )
+
+    assert isinstance(
+        invocation,
+        CognitiveCapabilityInvocation,
+    )
+
+    assert invocation.capability == "documents"
+    assert invocation.operation == "find_relevant"
+    assert invocation.parameters == {
+        "name": "manual.pdf",
+    }
+
+
+def test_router_does_not_select_unknown_capability():
+    document_access = MagicMock(
+        spec=DocumentCognitiveAccess,
+    )
+
+    router = CognitiveCapabilityRouter(
+        document_access=document_access,
+    )
+
+    invocation = router.select(
+        action="unknown.operation",
+    )
+
+    assert invocation is None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_document_capability.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import DocumentCapability
+from engine.engine import Engine
+
+
+def test_engine_exposes_document_capability():
+    capability = DocumentCapability(
+        context_access=None,
+    )
+
+    runtime = MagicMock()
+    runtime.tool_registry = MagicMock()
+    runtime.tool_registry.resolve = MagicMock()
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=MagicMock(),
+        document_capability=capability,
+    )
+
+    assert engine.document_capability is capability
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_document_cognitive_access.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import (
+    DocumentCapability,
+    DocumentCognitiveAccess,
+)
+from engine.engine import Engine
+
+
+def test_engine_exposes_document_cognitive_access():
+    capability = MagicMock(spec=DocumentCapability)
+    cognitive_access = DocumentCognitiveAccess(capability)
+
+    runtime = MagicMock()
+    runtime.tool_registry = MagicMock()
+    runtime.tool_registry.resolve = MagicMock()
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=MagicMock(),
+        document_capability=capability,
+        document_cognitive_access=cognitive_access,
+    )
+
+    assert engine.document_cognitive_access is cognitive_access
+    assert (
+        engine.document_cognitive_access._capability
+        is capability
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from documents import DocumentCapability
+from documents.context_access import DocumentContextAccess
+
+from engine.engine import Engine
+from runtime.runtime import Runtime
+
+
+def test_engine_exposes_document_capability():
+    context_access = MagicMock(
+        spec=DocumentContextAccess,
+    )
+
+    capability = DocumentCapability(
+        context_access=context_access,
+    )
+
+    runtime = MagicMock(
+        spec=Runtime,
+    )
+
+    runtime.tool_registry = MagicMock()
+    runtime.tool_registry.resolve = MagicMock()
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=MagicMock(),
+        document_capability=capability,
+    )
+
+    assert engine.document_capability is capability
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capabilities_context.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+from runtime.execution_result import ExecutionResult
+
+
+@pytest.mark.asyncio
+async def test_engine_exposes_cognitive_operations_to_decision():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+
+    runtime.execute = AsyncMock(
+        return_value=ExecutionResult(
+            success=True,
+            message="ok",
+            output={},
+            metadata={},
+        ),
+    )
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca documentos",
+        ),
+    )
+
+    router = MagicMock()
+
+    operation = MagicMock()
+    operation.action = "documents.find_relevant"
+    operation.capability = "documents"
+    operation.operation = "find_relevant"
+
+    router.available_operations.return_value = (operation,)
+    router.select.return_value = None
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-test"
+    decision.selected_action = "documents.find_relevant"
+    decision.confidence = 1.0
+    decision.reason = "capability disponible"
+    decision.requires_execution = True
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = True
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca documentos")
+
+    capabilities = (
+        engine.decision_engine.decide.call_args.kwargs["capabilities"]
+    )
+
+    assert {
+        "action": "documents.find_relevant",
+        "capability": "documents",
+        "operation": "find_relevant",
+        "type": "cognitive",
+    } in capabilities
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capability_cycle.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_selects_cognitive_capability_without_executing_it():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={
+                "name": "manual.pdf",
+            },
+            original_text="busca el manual",
+        ),
+    )
+
+    router = MagicMock()
+    router.select.return_value = MagicMock(
+        capability="documents",
+        operation="find_relevant",
+        parameters={
+            "name": "manual.pdf",
+        },
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-test"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "capability cognitiva"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    result = await engine.execute("busca el manual")
+
+    router.select.assert_called_once_with(
+        action="documents.find_relevant",
+        parameters={
+            "name": "manual.pdf",
+        },
+    )
+
+    engine.decision_engine.decide.assert_called_once()
+
+    assert any(
+    entry.type == "cognitive_capability"
+    for entry in engine.memory._entries
+    )
+    assert result.success is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capability_document_response.py
+================================================================================
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_returns_found_documents_in_execution_result():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={"name": "manual.pdf"},
+            original_text="busca el manual",
+        ),
+    )
+
+    document = SimpleNamespace(
+        name="manual.pdf",
+        mime_type="application/pdf",
+        description="Manual de diagnóstico",
+        source="diagnostic://manual",
+    )
+
+    query_result = SimpleNamespace(
+        total=1,
+        offset=0,
+        limit=None,
+        has_more=False,
+    )
+
+    cognitive_result = SimpleNamespace(
+        query=query_result,
+        documents=(document,),
+    )
+
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "status": "found",
+        "has_results": True,
+        "result_count": 1,
+    }
+
+    router = MagicMock()
+    invocation = SimpleNamespace(
+        capability="documents",
+        operation="find_relevant",
+        parameters={"name": "manual.pdf"},
+    )
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = (
+        cognitive_summary
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-document-test"
+    decision.selected_action = "documents.find_relevant"
+    decision.confidence = 1.0
+    decision.reason = "Consulta documental"
+    decision.requires_execution = True
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = True
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    result = await engine.execute("busca el manual")
+
+    assert result.success is True
+    assert result.output["operation"] == "documents.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.output["total"] == 1
+    assert result.output["documents"] == [
+        {
+            "name": "manual.pdf",
+            "mime_type": "application/pdf",
+            "description": "Manual de diagnóstico",
+            "source": "diagnostic://manual",
+        }
+    ]
+
+    assert result.metadata["response"]
+    router.invoke.assert_called_once()
+    runtime.execute.assert_not_called()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capability_empty_context.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_passes_empty_cognitive_result_to_decision():
+    runtime = MagicMock()
+    runtime.execute = AsyncMock()
+    runtime.tool_registry.describe.return_value = []
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca documentos",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    cognitive_result = MagicMock()
+
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "document_count": 0,
+        "query_count": 0,
+        "has_results": False,
+        "status": "empty",
+        "result_count": 0,
+    }
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = cognitive_summary
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-empty"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "no se encontraron documentos"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    result = await engine.execute("busca documentos")
+
+    assert result.success is True
+    assert result.output["operation"] == "documents.find_relevant"
+    assert result.output["status"] == "empty"
+    assert result.output["documents"] == []
+    assert "No encontré documentos" in result.metadata["response"]
+    runtime.execute.assert_not_awaited()
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert (
+        decision_context["cognitive_capability_summary"]
+        == cognitive_summary
+    )
+
+    assert (
+        decision_context["cognitive_capability_summary"]["status"]
+        == "empty"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capability_invocation.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_invokes_selected_cognitive_capability():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={
+                "name": "manual.pdf",
+            },
+            original_text="busca el manual",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {
+        "name": "manual.pdf",
+    }
+
+    result = {
+        "operation": "find_relevant",
+        "documents": [],
+        "metadata": {
+            "count": 0,
+        },
+    }
+
+    router.select.return_value = invocation
+    router.invoke.return_value = result
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-test"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "capability cognitiva"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca el manual")
+
+    router.select.assert_called_once_with(
+        action="documents.find_relevant",
+        parameters={
+            "name": "manual.pdf",
+        },
+    )
+
+    router.invoke.assert_called_once()
+
+    invoke_args = router.invoke.call_args
+
+    assert invoke_args.args[0] is invocation
+
+    assert invoke_args.kwargs["context"] is not None
+    assert isinstance(
+        invoke_args.kwargs["context"],
+        dict,
+    )
+
+    assert result["operation"] == "find_relevant"
+    assert result["metadata"]["count"] == 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_capability_summary_context.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_passes_cognitive_capability_summary_to_decision():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.execute = AsyncMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca documentos",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    cognitive_result = MagicMock()
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "document_count": 2,
+        "query_count": 2,
+        "has_results": True,
+        "status": "found",
+        "result_count": 2,
+    }
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = cognitive_summary
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-test"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "capability cognitiva"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca documentos")
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert (
+        decision_context["cognitive_capability_summary"]
+        == cognitive_summary
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_context.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_passes_cognitive_capability_result_to_decision():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={
+                "name": "manual.pdf",
+            },
+            original_text="busca el manual",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {
+        "name": "manual.pdf",
+    }
+
+    cognitive_result = MagicMock()
+
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-test"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "capability cognitiva"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca el manual")
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert (
+        decision_context["cognitive_capability_result"]
+        is cognitive_result
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_empty_decision_behavior.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_can_block_execution_after_empty_cognitive_result():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca el manual",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    cognitive_result = MagicMock()
+
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "document_count": 0,
+        "query_count": 0,
+        "has_results": False,
+        "status": "empty",
+        "result_count": 0,
+    }
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = cognitive_summary
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-empty"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "No se encontraron documentos relevantes."
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {
+        "status": "cognitive_empty",
+    }
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca el manual")
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert decision_context["cognitive_evidence"]["status"] == "empty"
+    assert decision.requires_execution is False
+    assert decision.selected_action is None
+
+    runtime.execute.assert_not_called()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_evidence_context.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+
+
+@pytest.mark.asyncio
+async def test_engine_passes_cognitive_evidence_to_decision():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.execute = AsyncMock()
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca documentos",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    cognitive_result = MagicMock()
+
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "document_count": 2,
+        "query_count": 2,
+        "has_results": True,
+        "status": "found",
+        "result_count": 2,
+    }
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = cognitive_summary
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-evidence"
+    decision.selected_action = None
+    decision.confidence = 0.0
+    decision.reason = "evidencia cognitiva disponible"
+    decision.requires_execution = False
+    decision.alternatives = []
+    decision.metadata = {}
+    decision.is_executable = False
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    await engine.execute("busca documentos")
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert decision_context["cognitive_evidence"] == {
+        "operation": "documents.find_relevant",
+        "status": "found",
+        "has_results": True,
+        "result_count": 2,
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_found_decision_behavior.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent import Intent
+from runtime.execution_result import ExecutionResult
+from documents.cognitive import DocumentCognitiveResult
+from documents.query import DocumentQueryResult
+
+
+@pytest.mark.asyncio
+async def test_engine_can_continue_execution_after_found_cognitive_result():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.execute = AsyncMock(
+    return_value=ExecutionResult(
+        success=True,
+        message="ok",
+        output={},
+        metadata={},
+    ),
+)
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="documents.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="busca el manual",
+        ),
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "documents"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    document_one = MagicMock()
+    document_one.name = "manual.pdf"
+    document_one.mime_type = "application/pdf"
+    document_one.description = "Manual de usuario"
+    document_one.source = "local"
+
+    document_two = MagicMock()
+    document_two.name = "guia.pdf"
+    document_two.mime_type = "application/pdf"
+    document_two.description = "Guía de referencia"
+    document_two.source = "local"
+
+    query_result = DocumentQueryResult.from_documents(
+        (document_one, document_two),
+        total=2,
+        offset=0,
+        limit=10,
+    )
+
+    cognitive_result = DocumentCognitiveResult(
+        query=query_result,
+        documents=(document_one, document_two),
+        metadata={
+            "operation": "find_relevant",
+            "count": 2,
+        },
+    )
+
+    cognitive_summary = {
+        "operation": "documents.find_relevant",
+        "document_count": 2,
+        "query_count": 2,
+        "has_results": True,
+        "status": "found",
+        "result_count": 2,
+    }
+
+    router.available_operations.return_value = ()
+    router.select.return_value = invocation
+    router.invoke.return_value = cognitive_result
+    router.summarize_operation_result.return_value = cognitive_summary
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+    )
+
+    decision = MagicMock()
+    decision.decision_id = "decision-found"
+    decision.selected_action = "documents.find_relevant"
+    decision.confidence = 1.0
+    decision.reason = "Se encontraron documentos relevantes."
+    decision.requires_execution = True
+    decision.alternatives = []
+    decision.metadata = {
+        "status": "cognitive_found",
+    }
+    decision.is_executable = True
+
+    engine.decision_engine.decide = MagicMock(
+        return_value=decision,
+    )
+
+    result = await engine.execute("busca el manual")
+
+    decision_context = (
+        engine.decision_engine.decide.call_args.kwargs["context"]
+    )
+
+    assert decision_context["cognitive_evidence"]["status"] == "found"
+    assert decision.requires_execution is True
+    assert decision.selected_action == "documents.find_relevant"
+
+    runtime.execute.assert_not_awaited()
+
+    assert result.success is True
+    assert result.output["operation"] == "documents.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.metadata["response"]
+    runtime.execute.assert_not_awaited()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_cognitive_process_rule_read_operations.py
+================================================================================
+
+
+from unittest.mock import MagicMock
+
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityInvocation,
+    CognitiveCapabilityRouter,
+)
+from processes.cognitive import ProcessCognitiveAccess
+from rules.cognitive import RuleCognitiveAccess
+
+
+def test_router_invokes_process_get():
+    process_access = MagicMock(spec=ProcessCognitiveAccess)
+    expected = MagicMock()
+    context = MagicMock()
+    process_access.get.return_value = expected
+
+    router = CognitiveCapabilityRouter(process_access=process_access)
+    invocation = CognitiveCapabilityInvocation(
+        capability="processes",
+        operation="get",
+        parameters={"process_id": "process-1"},
+    )
+
+    result = router.invoke(
+        invocation,
+        context=context,
+        assistant_context=context,
+    )
+
+    assert result is expected
+    process_access.get.assert_called_once_with(
+        "process-1",
+        context=context,
+    )
+
+
+def test_router_invokes_process_list():
+    process_access = MagicMock(spec=ProcessCognitiveAccess)
+    expected = (MagicMock(), MagicMock())
+    context = MagicMock()
+    process_access.list.return_value = expected
+
+    router = CognitiveCapabilityRouter(process_access=process_access)
+    invocation = CognitiveCapabilityInvocation(
+        capability="processes",
+        operation="list",
+        parameters={},
+    )
+
+    result = router.invoke(
+        invocation,
+        context=context,
+        assistant_context=context,
+    )
+
+    assert result is expected
+    process_access.list.assert_called_once_with(context=context)
+
+
+def test_router_invokes_rule_get():
+    rule_access = MagicMock(spec=RuleCognitiveAccess)
+    expected = MagicMock()
+    context = MagicMock()
+    rule_access.get.return_value = expected
+
+    router = CognitiveCapabilityRouter(rule_access=rule_access)
+    invocation = CognitiveCapabilityInvocation(
+        capability="rules",
+        operation="get",
+        parameters={"rule_id": "rule-1"},
+    )
+
+    result = router.invoke(
+        invocation,
+        context=context,
+        assistant_context=context,
+    )
+
+    assert result is expected
+    rule_access.get.assert_called_once_with(
+        "rule-1",
+        context=context,
+    )
+
+
+def test_router_invokes_rule_list():
+    rule_access = MagicMock(spec=RuleCognitiveAccess)
+    expected = (MagicMock(), MagicMock())
+    context = MagicMock()
+    rule_access.list.return_value = expected
+
+    router = CognitiveCapabilityRouter(rule_access=rule_access)
+    invocation = CognitiveCapabilityInvocation(
+        capability="rules",
+        operation="list",
+        parameters={},
+    )
+
+    result = router.invoke(
+        invocation,
+        context=context,
+        assistant_context=context,
+    )
+
+    assert result is expected
+    rule_access.list.assert_called_once_with(context=context)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_process_capabilities_context.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from processes import ProcessCognitiveAccess
+
+
+def test_engine_capability_catalog_contains_processes():
+    process_access = MagicMock(
+        spec=ProcessCognitiveAccess,
+    )
+
+    router = CognitiveCapabilityRouter(
+        process_access=process_access,
+    )
+
+    operations = router.available_operations()
+
+    capabilities = [
+        {
+            "action": operation.action,
+            "capability": operation.capability,
+            "operation": operation.operation,
+            "type": "cognitive",
+        }
+        for operation in operations
+    ]
+
+    process_capability = next(
+        item
+        for item in capabilities
+        if item["action"] == "processes.find_relevant"
+    )
+
+    assert process_capability == {
+        "action": "processes.find_relevant",
+        "capability": "processes",
+        "operation": "find_relevant",
+        "type": "cognitive",
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_process_cognitive_capability_cycle.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from processes.cognitive import ProcessCognitiveAccess
+
+
+def test_process_capability_router_exposes_process_operations():
+    process_access = MagicMock(
+        spec=ProcessCognitiveAccess,
+    )
+
+    router = CognitiveCapabilityRouter(
+        process_access=process_access,
+    )
+
+    operations = router.available_operations()
+
+    assert len(operations) == 3
+
+    assert {
+        (operation.capability, operation.operation, operation.action)
+        for operation in operations
+    } == {
+        (
+            "processes",
+            "find_relevant",
+            "processes.find_relevant",
+        ),
+        (
+            "processes",
+            "get",
+            "processes.get",
+        ),
+        (
+            "processes",
+            "list",
+            "processes.list",
+        ),
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_process_cognitive_cycle.py
+================================================================================
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from context import AssistantContext
+
+from engine.engine import Engine
+from processes import ProcessCognitiveAccess
+from runtime.execution_result import ExecutionResult
+
+
+@pytest.mark.asyncio
+async def test_engine_executes_process_cognitive_capability():
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+
+    runtime.execute = AsyncMock(
+        return_value=ExecutionResult(
+            success=True,
+            message="ok",
+            output={},
+            metadata={},
+        ),
+    )
+
+    process_access = MagicMock(
+        spec=ProcessCognitiveAccess,
+    )
+
+    process_access.find_relevant.return_value = MagicMock(
+        processes=(),
+        metadata={
+            "operation": "processes.find_relevant",
+            "count": 0,
+        },
+    )
+
+    router = MagicMock()
+
+    invocation = MagicMock()
+    invocation.capability = "processes"
+    invocation.operation = "find_relevant"
+    invocation.parameters = {}
+
+    router.select.return_value = invocation
+    router.invoke.return_value = process_access.find_relevant.return_value
+
+    router.summarize_operation_result.return_value = {
+        "operation": "processes.find_relevant",
+        "document_count": 0,
+        "query_count": 0,
+        "has_results": False,
+        "status": "empty",
+        "result_count": 0,
+    }
+
+    intent_provider = MagicMock()
+
+    intent = MagicMock()
+    intent.action = "processes.find_relevant"
+    intent.original_text = "buscá los procesos relevantes"
+    intent.parameters = {}
+    intent.confidence = 1.0
+    intent.is_compound = False
+
+    intent_provider.recognize = AsyncMock(
+        return_value=intent,
+    )
+
+    engine = Engine(
+        runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+        process_cognitive_access=process_access,
+        assistant_context=AssistantContext(
+            user=None,
+            organization=None,
+            projects=[],
+        ),
+    )
+
+    result = await engine.execute(
+        "buscá los procesos relevantes",
+    )
+
+    router.select.assert_called_once()
+    router.invoke.assert_called_once()
+    assert result is not None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

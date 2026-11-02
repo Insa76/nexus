@@ -1,0 +1,2090 @@
+﻿
+================================================================================
+ARCHIVO: tests\test_reference_resolver.py
+================================================================================
+
+from planner.reference_resolver import ReferenceResolver
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def main() -> None:
+
+    resolver = ReferenceResolver()
+
+    context = {
+        "references": {
+            "last_action": "system.open_app",
+            "last_application": "chrome",
+            "last_executed_application": "chrome",
+            "last_volume": 50,
+            "previous_volume": 30,
+            "last_capture_available": True,
+        }
+    }
+
+    #
+    # APPLICATION
+    #
+
+    reference = resolver.resolve(
+        "esa aplicación",
+        context,
+    )
+
+    check(
+        reference is not None,
+        "No resolvió la aplicación contextual.",
+    )
+
+    check(
+        reference.kind == "application",
+        "La referencia debería ser de tipo application.",
+    )
+
+    check(
+        reference.value == "chrome",
+        "La aplicación contextual debería ser chrome.",
+    )
+
+    #
+    # CAPTURE
+    #
+
+    reference = resolver.resolve(
+        "esa captura",
+        context,
+    )
+
+    check(
+        reference is not None,
+        "No resolvió la captura contextual.",
+    )
+
+    check(
+        reference.kind == "capture",
+        "La referencia debería ser de tipo capture.",
+    )
+
+    #
+    # VOLUME
+    #
+
+    reference = resolver.resolve(
+        "el volumen",
+        context,
+    )
+
+    check(
+        reference is not None,
+        "No resolvió el volumen contextual.",
+    )
+
+    check(
+        reference.kind == "volume",
+        "La referencia debería ser de tipo volume.",
+    )
+
+    check(
+        reference.value == 50.0,
+        "El volumen contextual debería ser 50.",
+    )
+
+    #
+    # PREVIOUS ACTION
+    #
+
+    reference = resolver.resolve(
+        "eso",
+        context,
+    )
+
+    check(
+        reference is not None,
+        "No resolvió la acción contextual.",
+    )
+
+    check(
+        reference.kind == "action",
+        "La referencia debería ser de tipo action.",
+    )
+
+    check(
+        reference.value == "system.open_app",
+        "La acción contextual debería ser system.open_app.",
+    )
+
+    #
+    # SAFETY: NO CONTEXT
+    #
+
+    reference = resolver.resolve(
+        "esa aplicación",
+        {},
+    )
+
+    check(
+        reference is None,
+        "No debería resolver sin contexto.",
+    )
+
+    #
+    # SAFETY: CAPTURE UNAVAILABLE
+    #
+
+    context_without_capture = {
+        "references": {
+            "last_capture_available": False,
+        }
+    }
+
+    reference = resolver.resolve(
+        "esa captura",
+        context_without_capture,
+    )
+
+    check(
+        reference is None,
+        "No debería resolver una captura inexistente.",
+    )
+
+    #
+    # SAFETY: UNKNOWN REFERENCE
+    #
+
+    reference = resolver.resolve(
+        "algo completamente distinto",
+        context,
+    )
+
+    check(
+        reference is None,
+        "Una expresión desconocida no debería resolverse.",
+    )
+
+    print("=" * 72)
+    print("REFERENCE RESOLVER")
+    print("=" * 72)
+    print("PASSED : 7")
+    print("FAILED : 0")
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_lifecycle.py
+================================================================================
+
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import (
+    InvalidReminderTransition,
+    Reminder,
+    ReminderStatus,
+    can_reminder_transition,
+    transition_reminder,
+)
+
+
+TRIGGER_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_pending_can_be_triggered() -> None:
+    assert can_reminder_transition(
+        ReminderStatus.PENDING,
+        ReminderStatus.TRIGGERED,
+    )
+
+
+def test_pending_can_be_cancelled() -> None:
+    assert can_reminder_transition(
+        ReminderStatus.PENDING,
+        ReminderStatus.CANCELLED,
+    )
+
+
+def test_triggered_has_no_outgoing_transitions() -> None:
+    assert not can_reminder_transition(
+        ReminderStatus.TRIGGERED,
+        ReminderStatus.PENDING,
+    )
+
+    assert not can_reminder_transition(
+        ReminderStatus.TRIGGERED,
+        ReminderStatus.CANCELLED,
+    )
+
+
+def test_cancelled_has_no_outgoing_transitions() -> None:
+    assert not can_reminder_transition(
+        ReminderStatus.CANCELLED,
+        ReminderStatus.PENDING,
+    )
+
+    assert not can_reminder_transition(
+        ReminderStatus.CANCELLED,
+        ReminderStatus.TRIGGERED,
+    )
+
+
+def test_transition_to_triggered_returns_new_reminder() -> None:
+    reminder = Reminder.create(
+        message="Revisar propuesta",
+        trigger_at=TRIGGER_AT,
+    )
+
+    triggered = transition_reminder(
+        reminder,
+        ReminderStatus.TRIGGERED,
+    )
+
+    assert triggered.id == reminder.id
+    assert triggered.message == reminder.message
+    assert triggered.trigger_at == reminder.trigger_at
+    assert triggered.status == ReminderStatus.TRIGGERED
+    assert reminder.status == ReminderStatus.PENDING
+
+
+def test_transition_to_cancelled_returns_new_reminder() -> None:
+    reminder = Reminder.create(
+        message="Cancelar reunión",
+        trigger_at=TRIGGER_AT,
+    )
+
+    cancelled = transition_reminder(
+        reminder,
+        ReminderStatus.CANCELLED,
+    )
+
+    assert cancelled.id == reminder.id
+    assert cancelled.status == ReminderStatus.CANCELLED
+    assert reminder.status == ReminderStatus.PENDING
+
+
+def test_triggered_reminder_cannot_be_reopened() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    triggered = transition_reminder(
+        reminder,
+        ReminderStatus.TRIGGERED,
+    )
+
+    with pytest.raises(InvalidReminderTransition):
+        transition_reminder(
+            triggered,
+            ReminderStatus.PENDING,
+        )
+
+
+def test_triggered_reminder_cannot_be_cancelled() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    triggered = transition_reminder(
+        reminder,
+        ReminderStatus.TRIGGERED,
+    )
+
+    with pytest.raises(InvalidReminderTransition):
+        transition_reminder(
+            triggered,
+            ReminderStatus.CANCELLED,
+        )
+
+
+def test_cancelled_reminder_cannot_be_reopened() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    cancelled = transition_reminder(
+        reminder,
+        ReminderStatus.CANCELLED,
+    )
+
+    with pytest.raises(InvalidReminderTransition):
+        transition_reminder(
+            cancelled,
+            ReminderStatus.PENDING,
+        )
+
+
+def test_invalid_pending_to_pending_transition() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    with pytest.raises(InvalidReminderTransition):
+        transition_reminder(
+            reminder,
+            ReminderStatus.PENDING,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_model.py
+================================================================================
+
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import Reminder, ReminderStatus
+
+
+def test_reminder_creation() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    reminder = Reminder.create(
+        message="Revisar la propuesta",
+        trigger_at=trigger_at,
+    )
+
+    assert reminder.id
+    assert reminder.message == "Revisar la propuesta"
+    assert reminder.trigger_at == trigger_at
+    assert reminder.status == ReminderStatus.PENDING
+    assert reminder.task_id is None
+
+
+def test_reminder_can_reference_task() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    reminder = Reminder.create(
+        message="Revisar la propuesta",
+        trigger_at=trigger_at,
+        task_id="task-123",
+    )
+
+    assert reminder.task_id == "task-123"
+
+
+def test_reminder_can_have_context_references() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    reminder = Reminder.create(
+        message="Reunión de equipo",
+        trigger_at=trigger_at,
+        user_id="user-123",
+        organization_id="org-123",
+        project_id="project-123",
+    )
+
+    assert reminder.user_id == "user-123"
+    assert reminder.organization_id == "org-123"
+    assert reminder.project_id == "project-123"
+
+
+def test_reminder_ids_are_unique() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    first = Reminder.create(
+        message="Primer recordatorio",
+        trigger_at=trigger_at,
+    )
+
+    second = Reminder.create(
+        message="Segundo recordatorio",
+        trigger_at=trigger_at,
+    )
+
+    assert first.id != second.id
+
+
+def test_reminder_is_immutable() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=trigger_at,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        reminder.message = "Modificado"  # type: ignore[misc]
+
+
+def test_reminder_default_status_is_pending() -> None:
+    trigger_at = datetime(
+        2026,
+        9,
+        21,
+        9,
+        0,
+        tzinfo=timezone.utc,
+    )
+
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=trigger_at,
+    )
+
+    assert reminder.status == ReminderStatus.PENDING
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_resolver.py
+================================================================================
+
+from datetime import datetime, timezone
+
+from context import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+from tasks import Reminder, ReminderResolver, ReminderStore
+
+
+TRIGGER_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_resolver_returns_user_reminders() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    context = AssistantContext(
+        user=user,
+    )
+
+    matching = Reminder.create(
+        message="Recordatorio del usuario",
+        trigger_at=TRIGGER_AT,
+        user_id=user.id,
+    )
+
+    unrelated = Reminder.create(
+        message="Otro usuario",
+        trigger_at=TRIGGER_AT,
+        user_id="other-user",
+    )
+
+    store = ReminderStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = ReminderResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_returns_organization_reminders() -> None:
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    context = AssistantContext(
+        organization=organization,
+    )
+
+    matching = Reminder.create(
+        message="Recordatorio de la organización",
+        trigger_at=TRIGGER_AT,
+        organization_id=organization.id,
+    )
+
+    unrelated = Reminder.create(
+        message="Otra organización",
+        trigger_at=TRIGGER_AT,
+        organization_id="other-organization",
+    )
+
+    store = ReminderStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = ReminderResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_returns_project_reminders() -> None:
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    project = ProjectContext.create(
+        name="ORBIT",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        organization=organization,
+        projects=(project,),
+    )
+
+    matching = Reminder.create(
+        message="Recordatorio de ORBIT",
+        trigger_at=TRIGGER_AT,
+        project_id=project.id,
+    )
+
+    unrelated = Reminder.create(
+        message="Otro proyecto",
+        trigger_at=TRIGGER_AT,
+        project_id="other-project",
+    )
+
+    store = ReminderStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = ReminderResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_combines_context_reminders() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    project = ProjectContext.create(
+        name="ORBIT",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=(project,),
+    )
+
+    user_reminder = Reminder.create(
+        message="Recordatorio personal",
+        trigger_at=TRIGGER_AT,
+        user_id=user.id,
+    )
+
+    organization_reminder = Reminder.create(
+        message="Recordatorio de agencia",
+        trigger_at=TRIGGER_AT,
+        organization_id=organization.id,
+    )
+
+    project_reminder = Reminder.create(
+        message="Recordatorio de ORBIT",
+        trigger_at=TRIGGER_AT,
+        project_id=project.id,
+    )
+
+    unrelated = Reminder.create(
+        message="Recordatorio externo",
+        trigger_at=TRIGGER_AT,
+        user_id="other-user",
+        organization_id="other-organization",
+        project_id="other-project",
+    )
+
+    store = ReminderStore()
+
+    for reminder in (
+        user_reminder,
+        organization_reminder,
+        project_reminder,
+        unrelated,
+    ):
+        store.add(reminder)
+
+    resolver = ReminderResolver(store)
+
+    assert resolver.resolve(context) == [
+        user_reminder,
+        organization_reminder,
+        project_reminder,
+    ]
+
+
+def test_resolver_returns_empty_for_empty_context() -> None:
+    context = AssistantContext()
+
+    store = ReminderStore()
+
+    store.add(
+        Reminder.create(
+            message="Sin contexto",
+            trigger_at=TRIGGER_AT,
+        )
+    )
+
+    resolver = ReminderResolver(store)
+
+    assert resolver.resolve(context) == []
+
+
+def test_resolver_does_not_mutate_store() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    context = AssistantContext(
+        user=user,
+    )
+
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+        user_id=user.id,
+    )
+
+    store = ReminderStore()
+    store.add(reminder)
+
+    resolver = ReminderResolver(store)
+
+    resolved = resolver.resolve(context)
+
+    assert resolved == [reminder]
+    assert store.list() == [reminder]
+    assert store.count() == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_scheduler.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from bootstrap.reminder_scheduler import ReminderScheduler
+from bootstrap.temporal_scheduler import TemporalSchedulerAdapter
+from runtime.scheduler import Scheduler
+from tasks import Reminder, ReminderStatus, ReminderStore
+
+
+def test_schedule_registers_one_shot() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Revisar el informe",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    store.add(reminder)
+    reminder_scheduler.schedule(reminder)
+
+    assert scheduler.one_shots() == [
+        f"reminder:{reminder.id}",
+    ]
+
+
+def test_schedule_rejects_non_pending_reminder() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Recordatorio cancelado",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+    )
+
+    cancelled = reminder.__class__(
+        **{
+            **reminder.__dict__,
+            "status": ReminderStatus.CANCELLED,
+        }
+    )
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    try:
+        reminder_scheduler.schedule(cancelled)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Expected ValueError")
+
+
+def test_trigger_updates_store() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Revisar el informe",
+        trigger_at=datetime.now(timezone.utc),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(reminder)
+
+    async def run() -> None:
+        await scheduler.start()
+
+    asyncio.run(run())
+
+    stored = reminder_scheduler.get(reminder.id)
+
+    assert stored is not None
+    assert stored.status is ReminderStatus.TRIGGERED
+
+
+def test_trigger_callback_receives_result() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Llamar al cliente",
+        trigger_at=datetime.now(timezone.utc),
+    )
+
+    store.add(reminder)
+
+    received = []
+
+    async def on_trigger(result) -> None:
+        received.append(result)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(
+        reminder,
+        on_trigger=on_trigger,
+    )
+
+    async def run() -> None:
+        await scheduler.start()
+
+    asyncio.run(run())
+
+    assert len(received) == 1
+    assert received[0].reminder_id == reminder.id
+    assert received[0].message == "Llamar al cliente"
+    assert received[0].reminder.status is ReminderStatus.TRIGGERED
+
+
+def test_get_returns_current_reminder_state() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Enviar propuesta",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    result = reminder_scheduler.get(reminder.id)
+
+    assert result == reminder
+
+def test_cancel_reminder_updates_store_and_removes_schedule() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Cancelar esta tarea",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(reminder)
+
+    assert scheduler.one_shots() == [
+        f"reminder:{reminder.id}",
+    ]
+
+    cancelled = reminder_scheduler.cancel(reminder.id)
+
+    assert cancelled is True
+    assert scheduler.one_shots() == []
+
+    stored = reminder_scheduler.get(reminder.id)
+
+    assert stored is not None
+    assert stored.status is ReminderStatus.CANCELLED
+
+
+def test_cancel_unknown_reminder_returns_false() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    cancelled = reminder_scheduler.cancel("unknown-reminder")
+
+    assert cancelled is False
+
+def test_reschedule_updates_time_and_replaces_schedule() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    original_trigger_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+    new_trigger_at = datetime.now(timezone.utc) + timedelta(minutes=20)
+
+    reminder = Reminder.create(
+        message="Reprogramar reunión",
+        trigger_at=original_trigger_at,
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(reminder)
+
+    assert scheduler.one_shots() == [
+        f"reminder:{reminder.id}",
+    ]
+
+    result = reminder_scheduler.reschedule(
+        reminder.id,
+        new_trigger_at,
+    )
+
+    assert result is True
+
+    stored = reminder_scheduler.get(reminder.id)
+
+    assert stored is not None
+    assert stored.trigger_at == new_trigger_at
+    assert stored.status is ReminderStatus.PENDING
+
+    assert scheduler.one_shots() == [
+        f"reminder:{reminder.id}",
+    ]
+
+
+def test_reschedule_removes_old_execution_before_registering_new_one() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Cambiar horario",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(reminder)
+
+    original_schedule_count = len(scheduler.one_shots())
+
+    reminder_scheduler.reschedule(
+        reminder.id,
+        datetime.now(timezone.utc) + timedelta(minutes=30),
+    )
+
+    assert original_schedule_count == 1
+    assert len(scheduler.one_shots()) == 1
+
+
+def test_reschedule_cancelled_reminder_returns_false() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Reminder cancelado",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.cancel(reminder.id)
+
+    result = reminder_scheduler.reschedule(
+        reminder.id,
+        datetime.now(timezone.utc) + timedelta(minutes=20),
+    )
+
+    assert result is False
+    assert scheduler.one_shots() == []
+
+
+def test_reschedule_unknown_reminder_returns_false() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    result = reminder_scheduler.reschedule(
+        "unknown-reminder",
+        datetime.now(timezone.utc) + timedelta(minutes=20),
+    )
+
+    assert result is False
+    assert scheduler.one_shots() == []
+
+def test_reconcile_schedules_pending_reminders() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder_one = Reminder.create(
+        message="Reminder uno",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    reminder_two = Reminder.create(
+        message="Reminder dos",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=20),
+    )
+
+    store.add(reminder_one)
+    store.add(reminder_two)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    scheduled_count = reminder_scheduler.reconcile()
+
+    assert scheduled_count == 2
+
+    assert set(scheduler.one_shots()) == {
+        f"reminder:{reminder_one.id}",
+        f"reminder:{reminder_two.id}",
+    }
+
+
+def test_reconcile_ignores_cancelled_reminders() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Reminder cancelado",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.cancel(reminder.id)
+
+    scheduled_count = reminder_scheduler.reconcile()
+
+    assert scheduled_count == 0
+    assert scheduler.one_shots() == []
+
+
+def test_reconcile_does_not_duplicate_existing_schedule() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Reminder existente",
+        trigger_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+
+    reminder_scheduler.schedule(reminder)
+
+    scheduled_count = reminder_scheduler.reconcile()
+
+    assert scheduled_count == 0
+
+    assert scheduler.one_shots() == [
+        f"reminder:{reminder.id}",
+    ]
+
+
+def test_reschedule_while_scheduler_is_running_executes_new_time() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Reprogramar durante la espera",
+        trigger_at=datetime.now(timezone.utc) + timedelta(seconds=0.15),
+    )
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+    reminder_scheduler.schedule(reminder)
+
+    async def run() -> None:
+        task = asyncio.create_task(scheduler.start())
+
+        # Permite que el scheduler comience a esperar el horario original.
+        await asyncio.sleep(0.03)
+
+        new_trigger_at = datetime.now(timezone.utc) + timedelta(seconds=0.15)
+        assert reminder_scheduler.reschedule(
+            reminder.id,
+            new_trigger_at,
+        ) is True
+
+        # Espera más allá del nuevo horario.
+        await asyncio.sleep(0.22)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    stored = reminder_scheduler.get(reminder.id)
+    assert stored is not None
+    assert stored.status is ReminderStatus.TRIGGERED
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_store.py
+================================================================================
+
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import Reminder, ReminderStore
+
+
+TRIGGER_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_store_add_and_get_reminder() -> None:
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Revisar propuesta",
+        trigger_at=TRIGGER_AT,
+    )
+
+    store.add(reminder)
+
+    assert store.get(reminder.id) == reminder
+
+
+def test_store_list_reminders() -> None:
+    store = ReminderStore()
+
+    first = Reminder.create(
+        message="Primer recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    second = Reminder.create(
+        message="Segundo recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == [first, second]
+    assert store.count() == 2
+
+
+def test_store_update_reminder() -> None:
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    store.add(reminder)
+
+    updated = Reminder(
+        id=reminder.id,
+        message="Recordatorio actualizado",
+        trigger_at=reminder.trigger_at,
+        status=reminder.status,
+        task_id=reminder.task_id,
+        user_id=reminder.user_id,
+        organization_id=reminder.organization_id,
+        project_id=reminder.project_id,
+        created_at=reminder.created_at,
+    )
+
+    store.update(updated)
+
+    assert store.get(reminder.id) == updated
+    assert store.get(reminder.id).message == "Recordatorio actualizado"
+
+
+def test_store_update_missing_reminder_raises() -> None:
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="No existe",
+        trigger_at=TRIGGER_AT,
+    )
+
+    with pytest.raises(KeyError):
+        store.update(reminder)
+
+
+def test_store_remove_reminder() -> None:
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Eliminar",
+        trigger_at=TRIGGER_AT,
+    )
+
+    store.add(reminder)
+
+    removed = store.remove(reminder.id)
+
+    assert removed == reminder
+    assert store.get(reminder.id) is None
+    assert store.count() == 0
+
+
+def test_store_remove_missing_reminder_is_safe() -> None:
+    store = ReminderStore()
+
+    assert store.remove("missing-reminder") is None
+
+
+def test_store_clear() -> None:
+    store = ReminderStore()
+
+    store.add(
+        Reminder.create(
+            message="Primero",
+            trigger_at=TRIGGER_AT,
+        )
+    )
+
+    store.add(
+        Reminder.create(
+            message="Segundo",
+            trigger_at=TRIGGER_AT,
+        )
+    )
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_store_persistence.py
+================================================================================
+
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+from bootstrap.assistant_services import build_assistant_services
+from bootstrap.assistant_services_lifecycle import AssistantServicesLifecycle
+from tasks import Reminder, ReminderStatus, ReminderStore
+
+
+def test_reminders_persist_after_reopening_database(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reminders.db"
+    trigger_at = datetime(2026, 12, 1, 15, 30, tzinfo=timezone.utc)
+
+    first = ReminderStore(db_path)
+    reminder = Reminder.create(
+        message="Revisar propuesta",
+        trigger_at=trigger_at,
+        task_id="task-1",
+        user_id="user-1",
+        organization_id="org-1",
+        project_id="project-1",
+    )
+    first.add(reminder)
+    first.close()
+
+    second = ReminderStore(db_path)
+    restored = second.get(reminder.id)
+
+    assert restored == reminder
+    assert restored is not None
+    assert restored.status is ReminderStatus.PENDING
+    assert restored.task_id == "task-1"
+    assert restored.user_id == "user-1"
+    assert restored.organization_id == "org-1"
+    assert restored.project_id == "project-1"
+
+    second.close()
+
+
+def test_reminder_updates_and_removal_persist(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reminders.db"
+    store = ReminderStore(db_path)
+
+    reminder = Reminder.create(
+        message="Recordatorio original",
+        trigger_at=datetime(2026, 12, 1, tzinfo=timezone.utc),
+    )
+    store.add(reminder)
+
+    updated = Reminder(
+        id=reminder.id,
+        message="Recordatorio actualizado",
+        trigger_at=reminder.trigger_at,
+        status=ReminderStatus.CANCELLED,
+        task_id=reminder.task_id,
+        user_id=reminder.user_id,
+        organization_id=reminder.organization_id,
+        project_id=reminder.project_id,
+        created_at=reminder.created_at,
+    )
+    store.update(updated)
+    store.close()
+
+    reopened = ReminderStore(db_path)
+    assert reopened.get(reminder.id) == updated
+    assert reopened.remove(reminder.id) == updated
+    assert reopened.get(reminder.id) is None
+    reopened.close()
+
+    final_store = ReminderStore(db_path)
+    assert final_store.count() == 0
+    final_store.close()
+
+
+def test_lifecycle_restores_pending_reminder_after_restart(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "reminders.db"
+
+    first_services = build_assistant_services(db_path)
+    reminder = Reminder.create(
+        message="Recordatorio recuperado",
+        trigger_at=datetime.now(timezone.utc) + timedelta(seconds=0.2),
+    )
+    first_services.reminder_store.add(reminder)
+
+    # Simula el cierre del proceso: los datos permanecen en SQLite.
+    first_services.reminder_store.close()
+
+    second_services = build_assistant_services(db_path)
+    lifecycle = AssistantServicesLifecycle(second_services)
+
+    async def run() -> None:
+        await lifecycle.start()
+        await asyncio.sleep(0.5)
+        await lifecycle.stop()
+
+    asyncio.run(run())
+
+    restored = second_services.reminder_store.get(reminder.id)
+    assert restored is not None
+    assert restored.status is ReminderStatus.TRIGGERED
+
+    second_services.reminder_store.close()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_reminder_trigger.py
+================================================================================
+
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import (
+    InvalidReminderTransition,
+    Reminder,
+    ReminderStatus,
+    ReminderTriggerHandler,
+)
+
+
+TRIGGER_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_handler_triggers_pending_reminder() -> None:
+    reminder = Reminder.create(
+        message="Revisar propuesta",
+        trigger_at=TRIGGER_AT,
+    )
+
+    handler = ReminderTriggerHandler()
+
+    result = handler.handle(reminder)
+
+    assert result.reminder_id == reminder.id
+    assert result.message == reminder.message
+    assert result.reminder.status == ReminderStatus.TRIGGERED
+    assert result.triggered_at.tzinfo == timezone.utc
+
+
+def test_handler_does_not_mutate_original_reminder() -> None:
+    reminder = Reminder.create(
+        message="Llamar a Juan",
+        trigger_at=TRIGGER_AT,
+    )
+
+    handler = ReminderTriggerHandler()
+
+    result = handler.handle(reminder)
+
+    assert reminder.status == ReminderStatus.PENDING
+    assert result.reminder.status == ReminderStatus.TRIGGERED
+
+
+def test_handler_preserves_reminder_identity() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+        task_id="task-123",
+        user_id="user-123",
+        organization_id="org-123",
+        project_id="project-123",
+    )
+
+    handler = ReminderTriggerHandler()
+
+    result = handler.handle(reminder)
+
+    triggered = result.reminder
+
+    assert triggered.id == reminder.id
+    assert triggered.task_id == reminder.task_id
+    assert triggered.user_id == reminder.user_id
+    assert triggered.organization_id == reminder.organization_id
+    assert triggered.project_id == reminder.project_id
+    assert triggered.trigger_at == reminder.trigger_at
+
+
+def test_handler_cannot_trigger_triggered_reminder() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    handler = ReminderTriggerHandler()
+
+    first = handler.handle(reminder)
+
+    with pytest.raises(InvalidReminderTransition):
+        handler.handle(first.reminder)
+
+
+def test_handler_cannot_trigger_cancelled_reminder() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    from tasks import transition_reminder
+
+    cancelled = transition_reminder(
+        reminder,
+        ReminderStatus.CANCELLED,
+    )
+
+    handler = ReminderTriggerHandler()
+
+    with pytest.raises(InvalidReminderTransition):
+        handler.handle(cancelled)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_response_formatter_episode_query.py
+================================================================================
+
+from __future__ import annotations
+
+from runtime.execution_result import ExecutionResult
+from response.formatter import ResponseFormatter
+
+
+def test_format_open_app_episode_query() -> None:
+    formatter = ResponseFormatter()
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "episode_query_result": {
+                "status": "found",
+                "action": "system.open_app",
+                "field": "application",
+                "value": "chrome",
+                "original_text": "Abrí Chrome",
+            },
+            "status": "found",
+            "action": "system.open_app",
+            "field": "application",
+            "value": "chrome",
+        },
+    )
+
+    response = formatter.format(result)
+
+    assert response == (
+        "La última aplicación que abriste fue chrome."
+    )
+
+
+def test_format_close_app_episode_query() -> None:
+    formatter = ResponseFormatter()
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "episode_query_result": {
+                "status": "found",
+                "action": "system.close_app",
+                "field": "application",
+                "value": "chrome",
+                "original_text": "Cerrá Chrome",
+            },
+            "status": "found",
+            "action": "system.close_app",
+            "field": "application",
+            "value": "chrome",
+        },
+    )
+
+    response = formatter.format(result)
+
+    assert response == (
+        "La última aplicación que cerraste fue chrome."
+    )
+
+
+def test_format_set_volume_episode_query() -> None:
+    formatter = ResponseFormatter()
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "episode_query_result": {
+                "status": "found",
+                "action": "system.set_volume",
+                "field": "level",
+                "value": 30.0,
+                "original_text": "Poné el volumen al 30%",
+            },
+            "status": "found",
+            "action": "system.set_volume",
+            "field": "level",
+            "value": 30.0,
+        },
+    )
+
+    response = formatter.format(result)
+
+    assert response == (
+        "El último volumen que pusiste fue 30%."
+    )
+
+
+def test_format_unknown_episode_query_action() -> None:
+    formatter = ResponseFormatter()
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "episode_query_result": {
+                "status": "found",
+                "action": "system.some_future_action",
+                "field": "value",
+                "value": "algo",
+            }
+        },
+    )
+
+    response = formatter.format(result)
+
+    assert response == (
+        "Encontré la información en la memoria, "
+        "pero todavía no puedo expresarla "
+        "de forma natural."
+    )
+
+
+def test_format_episode_query_not_found() -> None:
+    formatter = ResponseFormatter()
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "episode_query_result": {
+                "status": "not_found",
+                "action": "system.open_app",
+                "field": "application",
+                "value": None,
+            }
+        },
+    )
+
+    response = formatter.format(result)
+
+    assert response == (
+        "No encontré la información "
+        "que buscabas en la memoria."
+    )
+
+
+if __name__ == "__main__":
+    tests = [
+        test_format_open_app_episode_query,
+        test_format_close_app_episode_query,
+        test_format_set_volume_episode_query,
+        test_format_unknown_episode_query_action,
+        test_format_episode_query_not_found,
+    ]
+
+    for test in tests:
+        test()
+
+    print(f"PASS: {len(tests)}/{len(tests)}")
+from runtime.execution_result import ExecutionResult
+from response.formatter import ResponseFormatter
+
+
+def test_format_current_time() -> None:
+    formatter = ResponseFormatter()
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "read",
+            "time": "14:35",
+        },
+    )
+
+    assert formatter.format(result) == "Son las 14:35."
+
+def test_format_current_date_and_time() -> None:
+    formatter = ResponseFormatter()
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "read",
+            "date": "28/10/2026",
+            "time": "14:35",
+        },
+    )
+
+    assert formatter.format(result) == "Hoy es 28/10/2026 y son las 14:35."
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_scheduler_one_shot.py
+================================================================================
+
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from runtime.scheduler import Scheduler
+
+
+def test_register_at_registers_one_shot() -> None:
+    scheduler = Scheduler()
+
+    async def callback() -> None:
+        pass
+
+    execute_at = datetime.now(timezone.utc)
+
+    scheduler.register_at(
+        name="test-reminder",
+        execute_at=execute_at,
+        callback=callback,
+    )
+
+    assert scheduler.one_shots() == ["test-reminder"]
+
+
+def test_one_shot_executes_once() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    execute_at = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=0.01)
+    )
+
+    scheduler.register_at(
+        name="test-reminder",
+        execute_at=execute_at,
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.05)
+
+        await scheduler.stop()
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+    asyncio.run(run())
+
+    assert executions == ["executed"]
+
+
+def test_one_shot_waits_until_execute_at() -> None:
+    scheduler = Scheduler()
+    executions: list[float] = []
+
+    start = datetime.now(timezone.utc)
+
+    async def callback() -> None:
+        elapsed = (
+            datetime.now(timezone.utc) - start
+        ).total_seconds()
+
+        executions.append(elapsed)
+
+    execute_at = (
+        start + timedelta(seconds=0.08)
+    )
+
+    scheduler.register_at(
+        name="delayed-reminder",
+        execute_at=execute_at,
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.03)
+
+        assert executions == []
+
+        await asyncio.sleep(0.10)
+
+        await scheduler.stop()
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+    asyncio.run(run())
+
+    assert len(executions) == 1
+    assert executions[0] >= 0.07
+
+
+def test_stop_prevents_future_one_shot_execution() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    execute_at = (
+        datetime.now(timezone.utc)
+        + timedelta(seconds=0.15)
+    )
+
+    scheduler.register_at(
+        name="future-reminder",
+        execute_at=execute_at,
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.02)
+
+        await scheduler.stop()
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+        await asyncio.sleep(0.18)
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+def test_clear_removes_periodic_and_one_shot_tasks() -> None:
+    scheduler = Scheduler()
+
+    async def callback() -> None:
+        pass
+
+    scheduler.register(
+        name="periodic",
+        interval=60,
+        callback=callback,
+    )
+
+    scheduler.register_at(
+        name="one-shot",
+        execute_at=datetime.now(timezone.utc),
+        callback=callback,
+    )
+
+    scheduler.clear()
+
+    assert scheduler.tasks() == []
+    assert scheduler.one_shots() == []
+
+
+def test_cancel_one_shot_prevents_execution_after_scheduler_starts() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="cancelled-reminder",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(seconds=0.20)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        # Deja que el scheduler comience a esperar la ejecución.
+        await asyncio.sleep(0.03)
+
+        assert scheduler.cancel_one_shot(
+            "cancelled-reminder"
+        ) is True
+
+        # Espera más allá de la fecha programada originalmente.
+        await asyncio.sleep(0.25)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+def test_stop_cancels_future_one_shot_immediately() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="future-reminder",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(hours=2)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.02)
+
+        await asyncio.wait_for(
+            scheduler.stop(),
+            timeout=1.0,
+        )
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+        assert task.done()
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+def test_register_at_from_another_thread() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start(keep_alive=True)
+        )
+
+        await asyncio.sleep(0.03)
+
+        await asyncio.to_thread(
+            scheduler.register_at,
+            name="http-thread-reminder",
+            execute_at=(
+                datetime.now(timezone.utc)
+                + timedelta(seconds=0.10)
+            ),
+            callback=callback,
+        )
+
+        await asyncio.sleep(0.20)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == ["executed"]
+
+
+def test_cancel_one_shot_from_another_thread() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="http-thread-cancel",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(seconds=0.30)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start(keep_alive=True)
+        )
+
+        await asyncio.sleep(0.03)
+
+        cancelled = await asyncio.to_thread(
+            scheduler.cancel_one_shot,
+            "http-thread-cancel",
+        )
+
+        assert cancelled is True
+
+        await asyncio.sleep(0.35)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

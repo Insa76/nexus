@@ -1,0 +1,1665 @@
+﻿
+================================================================================
+ARCHIVO: packages\planner\src\planner\planner_service.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.objective import Objective
+from planner.plan import ExecutionPlan
+from planner.planner import Planner
+
+
+class PlannerService:
+    """
+    Fachada del sistema de planificación.
+
+    Expone una interfaz simple para que el Runtime
+    solicite planes sin conocer la implementación
+    del Planner.
+    """
+
+    def __init__(self, planner: Planner) -> None:
+
+        self._planner = planner
+
+    def create_plan(
+        self,
+        objective: Objective,
+    ) -> ExecutionPlan:
+        """
+        Genera un plan para un objetivo.
+        """
+
+        return self._planner.create_plan(
+            objective
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\reference_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True)
+class Reference:
+    """
+    Referencia contextual resuelta por NEXUS.
+
+    kind:
+        Tipo de objeto al que hace referencia el usuario.
+
+    value:
+        Valor concreto asociado a la referencia.
+
+    confidence:
+        Confianza de la resolución.
+
+    source:
+        Origen del dato contextual.
+    """
+
+    kind: str
+    value: Any
+    confidence: float = 1.0
+    source: str = "context"
+
+
+class ReferenceResolver:
+    """
+    Resuelve referencias contextuales utilizando el contexto
+    cognitivo construido por NEXUS.
+
+    Este componente NO decide qué acción ejecutar.
+
+    Su única responsabilidad es determinar si una expresión
+    hace referencia de manera suficientemente segura a un
+    objeto conocido del contexto.
+    """
+
+    _APPLICATION_REFERENCES = {
+        "esa aplicación",
+        "esa app",
+        "la aplicación",
+        "la app",
+        "esa aplicacion",
+        "la aplicacion",
+    }
+
+    _CAPTURE_REFERENCES = {
+        "esa captura",
+        "la captura",
+        "esa pantalla",
+        "la pantalla",
+    }
+
+    _VOLUME_REFERENCES = {
+        "el volumen",
+        "el sonido",
+        "el audio",
+    }
+
+    _PREVIOUS_ACTION_REFERENCES = {
+        "eso",
+        "lo mismo",
+        "esa acción",
+        "esa accion",
+    }
+
+    def resolve(
+        self,
+        text: str,
+        context: dict[str, Any] | None = None,
+    ) -> Reference | None:
+        """
+        Resuelve una referencia contextual.
+
+        Devuelve None cuando:
+        - no existe contexto suficiente;
+        - la expresión no corresponde a una referencia conocida;
+        - existe una referencia pero no hay evidencia suficiente
+          para resolverla.
+        """
+
+        if not text or not context:
+            return None
+
+        normalized = self._normalize(text)
+        references = context.get("references", {})
+
+        if not isinstance(references, dict):
+            return None
+
+        application = self._resolve_application(
+            normalized,
+            references,
+        )
+
+        if application is not None:
+            return application
+
+        capture = self._resolve_capture(
+            normalized,
+            references,
+        )
+
+        if capture is not None:
+            return capture
+
+        volume = self._resolve_volume(
+            normalized,
+            references,
+        )
+
+        if volume is not None:
+            return volume
+
+        previous_action = self._resolve_previous_action(
+            normalized,
+            references,
+        )
+
+        if previous_action is not None:
+            return previous_action
+
+        return None
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return " ".join(
+            text.lower().strip().split()
+        )
+
+    def _resolve_application(
+        self,
+        normalized: str,
+        references: dict[str, Any],
+    ) -> Reference | None:
+
+        if normalized not in self._APPLICATION_REFERENCES:
+            return None
+
+        application = references.get(
+            "last_executed_application"
+        )
+
+        if not isinstance(application, str):
+            application = references.get(
+                "last_application"
+            )
+
+        if not isinstance(application, str):
+            return None
+
+        application = application.strip()
+
+        if not application:
+            return None
+
+        return Reference(
+            kind="application",
+            value=application,
+            confidence=1.0,
+            source="last_executed_application",
+        )
+
+    def _resolve_capture(
+        self,
+        normalized: str,
+        references: dict[str, Any],
+    ) -> Reference | None:
+
+        if normalized not in self._CAPTURE_REFERENCES:
+            return None
+
+        if references.get(
+            "last_capture_available"
+        ) is not True:
+            return None
+
+        return Reference(
+            kind="capture",
+            value=True,
+            confidence=1.0,
+            source="last_capture_available",
+        )
+
+    def _resolve_volume(
+        self,
+        normalized: str,
+        references: dict[str, Any],
+    ) -> Reference | None:
+
+        if normalized not in self._VOLUME_REFERENCES:
+            return None
+
+        volume = references.get(
+            "last_volume"
+        )
+
+        if volume is None:
+            return None
+
+        try:
+            volume = float(volume)
+        except (TypeError, ValueError):
+            return None
+
+        return Reference(
+            kind="volume",
+            value=volume,
+            confidence=1.0,
+            source="last_volume",
+        )
+
+    def _resolve_previous_action(
+        self,
+        normalized: str,
+        references: dict[str, Any],
+    ) -> Reference | None:
+
+        if normalized not in self._PREVIOUS_ACTION_REFERENCES:
+            return None
+
+        action = references.get(
+            "last_action"
+        )
+
+        if not isinstance(action, str):
+            return None
+
+        action = action.strip()
+
+        if not action:
+            return None
+
+        return Reference(
+            kind="action",
+            value=action,
+            confidence=1.0,
+            source="last_action",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\request.py
+================================================================================
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+
+class Request(BaseModel):
+    """
+    Solicitud original realizada por el usuario.
+    """
+
+    text: str
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\rule_intent_provider.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from planner.intent import Intent
+from planner.intent_recognizer import IntentRecognizer
+from planner.intent_provider import IntentProvider
+
+
+class RuleIntentProvider(IntentProvider):
+    """
+    IntentProvider basado en reglas.
+    """
+
+    def __init__(
+        self,
+        recognizer: IntentRecognizer | None = None,
+    ) -> None:
+
+        self._recognizer = (
+            recognizer
+            or IntentRecognizer()
+        )
+
+    async def recognize(
+        self,
+        text: str,
+        capabilities: list[dict[str, Any]] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Intent:
+
+        return self._recognizer.recognize(
+            text,
+            context,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\verification.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from planner.objective import Objective
+from planner.plan import (
+    ExecutionPlan,
+    StepStatus,
+)
+from runtime.execution_result import ExecutionResult
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    verified: bool
+    confidence: float
+    reason: str
+    evidence: list[dict[str, Any]] = field(
+        default_factory=list
+    )
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+
+    @property
+    def status(self) -> str:
+        if self.verified:
+            return "verified"
+
+        return "not_verified"
+
+
+class Verifier:
+    """
+    Verificador determinista de NEXUS.
+
+    Comprueba:
+
+        EXECUTION
+            +
+        PLAN
+            +
+        STEP EVIDENCE
+            +
+        OBJECTIVE EVIDENCE
+
+    Para planes simples se verifica la evidencia de la
+    Action principal.
+
+    Para planes compuestos se verifica además cada
+    PlanStep individual.
+    """
+
+    def verify(
+        self,
+        objective: Objective,
+        plan: ExecutionPlan,
+        result: ExecutionResult,
+    ) -> VerificationResult:
+
+        evidence: list[dict[str, Any]] = []
+
+        #
+        # ---------------------------------------------------------
+        # 1. EJECUCIÓN GLOBAL
+        # ---------------------------------------------------------
+        #
+
+        if not result.success:
+
+            evidence.append(
+                {
+                    "type": "execution",
+                    "status": "failed",
+                    "message": result.message,
+                }
+            )
+
+            return VerificationResult(
+                verified=False,
+                confidence=1.0,
+                reason=(
+                    "La ejecución terminó con error, "
+                    "por lo que el objetivo no puede "
+                    "considerarse verificado."
+                ),
+                evidence=evidence,
+                metadata={
+                    "status": "execution_failed",
+                    "objective_id": objective.id,
+                },
+            )
+
+        evidence.append(
+            {
+                "type": "execution",
+                "status": "success",
+            }
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 2. PLAN GLOBAL
+        # ---------------------------------------------------------
+        #
+
+        if not plan.completed:
+
+            evidence.append(
+                {
+                    "type": "plan",
+                    "status": "incomplete",
+                }
+            )
+
+            return VerificationResult(
+                verified=False,
+                confidence=0.95,
+                reason=(
+                    "La ejecución fue exitosa, pero el plan "
+                    "todavía no figura como completado."
+                ),
+                evidence=evidence,
+                metadata={
+                    "status": "plan_incomplete",
+                    "objective_id": objective.id,
+                },
+            )
+
+        evidence.append(
+            {
+                "type": "plan",
+                "status": "completed",
+            }
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 3. VERIFICACIÓN POR STEP
+        # ---------------------------------------------------------
+        #
+        # La verificación estricta por step es necesaria para planes
+        # compuestos. Los planes simples conservan el contrato anterior:
+        # su evidencia principal se valida contra el resultado global.
+        # También mantenemos compatibilidad con doubles mínimos que no
+        # exponen ``steps``.
+        #
+
+        plan_steps = getattr(plan, "steps", None)
+
+        if isinstance(plan_steps, (list, tuple)) and len(plan_steps) > 1:
+            step_verification = self._verify_plan_steps(
+                objective,
+                plan,
+                result,
+            )
+
+            evidence.extend(
+                step_verification["evidence"]
+            )
+
+            if not step_verification["verified"]:
+                return VerificationResult(
+                    verified=False,
+                    confidence=step_verification[
+                        "confidence"
+                    ],
+                    reason=step_verification[
+                        "reason"
+                    ],
+                    evidence=evidence,
+                    metadata={
+                        "status": "step_evidence_failed",
+                        "objective_id": objective.id,
+                        "steps_verified": step_verification[
+                            "verified_count"
+                        ],
+                        "steps_total": len(plan_steps),
+                    },
+                )
+        else:
+            evidence.append(
+                {
+                    "type": "step",
+                    "status": "not_required",
+                    "reason": "Single-step or legacy plan; global action evidence is authoritative.",
+                }
+            )
+
+        #
+        # ---------------------------------------------------------
+        # 4. EVIDENCIA GLOBAL DEL RESULTADO
+        # ---------------------------------------------------------
+        #
+
+        output = result.output
+
+        if not output:
+
+            evidence.append(
+                {
+                    "type": "output",
+                    "status": "empty",
+                }
+            )
+
+            #
+            # Un plan puede producir solamente artifacts.
+            # Por eso no rechazamos todavía si existen artifacts.
+            #
+
+            # La ausencia de output global no invalida por sí sola una
+            # ejecución exitosa. La regla específica de la Action decidirá
+            # si necesita evidencia adicional (por ejemplo screen capture).
+            # Esto preserva el contrato histórico del Verifier para planes
+            # simples y dobles mínimos usados por tests/regresión.
+            if getattr(result, "artifacts", None):
+                evidence.append(
+                    {
+                        "type": "artifact",
+                        "status": "available",
+                    }
+                )
+
+        else:
+
+            evidence.append(
+                {
+                    "type": "output",
+                    "status": "available",
+                    "keys": sorted(
+                        str(key)
+                        for key in output.keys()
+                    )
+                    if isinstance(output, dict)
+                    else [],
+                }
+            )
+
+        #
+        # ---------------------------------------------------------
+        # 5. EVIDENCIA ESPECÍFICA DEL OBJETIVO
+        # ---------------------------------------------------------
+        #
+
+        action = self._resolve_primary_action(
+            plan
+        )
+
+        specific = self._verify_action_evidence(
+            action=action,
+            objective=objective,
+            plan=plan,
+            result=result,
+        )
+
+        evidence.extend(
+            specific["evidence"]
+        )
+
+        if not specific["verified"]:
+
+            return VerificationResult(
+                verified=False,
+                confidence=specific[
+                    "confidence"
+                ],
+                reason=specific["reason"],
+                evidence=evidence,
+                metadata={
+                    "status": "evidence_mismatch",
+                    "objective_id": objective.id,
+                    "action": action,
+                    "steps_verified": len(plan_steps)
+                    if isinstance(plan_steps, (list, tuple))
+                    else 0,
+                },
+            )
+
+        #
+        # ---------------------------------------------------------
+        # 6. VERIFICADO
+        # ---------------------------------------------------------
+        #
+
+        return VerificationResult(
+            verified=True,
+            confidence=specific[
+                "confidence"
+            ],
+            reason=(
+                "El plan terminó correctamente, "
+                "todos sus pasos presentan evidencia "
+                "de ejecución y la evidencia del objetivo "
+                "coincide con lo solicitado."
+            ),
+            evidence=evidence,
+            metadata={
+                "status": (
+                    "verified_with_limited_evidence"
+                    if specific["confidence"] < 1.0
+                    else "verified"
+                ),
+                "objective_id": objective.id,
+                "action": action,
+                "evidence_checked": True,
+                "steps_verified": len(plan_steps)
+                if isinstance(plan_steps, (list, tuple))
+                else 0,
+                "steps_total": len(plan_steps)
+                if isinstance(plan_steps, (list, tuple))
+                else 0,
+            },
+        )
+
+    def _verify_plan_steps(
+        self,
+        objective: Objective,
+        plan: ExecutionPlan,
+        result: ExecutionResult,
+    ) -> dict[str, Any]:
+        evidence: list[dict[str, Any]] = []
+        plan_steps = getattr(plan, "steps", None)
+
+        if not isinstance(plan_steps, (list, tuple)):
+            return {
+                "verified": True,
+                "confidence": 1.0,
+                "reason": "Plan legacy/simple; step-level verification is not applicable.",
+                "evidence": [
+                    {
+                        "type": "steps",
+                        "status": "not_applicable",
+                    }
+                ],
+                "verified_count": 0,
+            }
+
+        if not plan_steps:
+            return {
+                "verified": False,
+                "confidence": 0.95,
+                "reason": (
+                    "El plan no contiene pasos "
+                    "que puedan ser verificados."
+                ),
+                "evidence": [
+                    {
+                        "type": "steps",
+                        "status": "empty",
+                    }
+                ],
+                "verified_count": 0,
+            }
+
+        step_evidence = {}
+        if isinstance(result.metadata, dict):
+            raw_step_evidence = result.metadata.get(
+                "step_evidence"
+            )
+            if isinstance(raw_step_evidence, dict):
+                step_evidence = raw_step_evidence
+
+        # Los planes compuestos deben verificar evidencia real por step.
+        # Los planes simples conservan la compatibilidad con la validación
+        # estructural anterior cuando no existe step_evidence.
+        if len(plan_steps) > 1 and step_evidence is not None:
+            return self._verify_compound_steps(
+                plan,
+                result,
+                step_evidence,
+                objective,
+            )
+
+        verified_count = 0
+
+        for step in plan_steps:
+            execution_metadata = (
+                step.metadata.get(
+                    "execution",
+                    {}
+                )
+                if isinstance(
+                    step.metadata,
+                    dict,
+                )
+                else {}
+            )
+
+            execution_status = execution_metadata.get(
+                "status"
+            )
+
+            result_keys = execution_metadata.get(
+                "result_keys",
+                [],
+            )
+
+            artifact_keys = execution_metadata.get(
+                "artifact_keys",
+                [],
+            )
+
+            if step.status != StepStatus.COMPLETED:
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "failed",
+                    "step_status": step.status.value,
+                })
+
+                return {
+                    "verified": False,
+                    "confidence": 0.95,
+                    "reason": (
+                        f"El paso '{step.id}' "
+                        "no terminó correctamente."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            if execution_status != "completed":
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "missing_execution_evidence",
+                })
+
+                return {
+                    "verified": False,
+                    "confidence": 0.90,
+                    "reason": (
+                        f"El paso '{step.id}' figura como "
+                        "completado, pero no contiene evidencia "
+                        "estructural de ejecución."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            expected_results = set(
+                getattr(
+                    step,
+                    "produces",
+                    [],
+                )
+            )
+
+            expected_results = {
+                value
+                for value in expected_results
+                if value in {
+                    "result",
+                    "results",
+                }
+            }
+
+            has_evidence = bool(
+                result_keys
+                or artifact_keys
+                or not getattr(
+                    step,
+                    "produces",
+                    [],
+                )
+            )
+
+            if not has_evidence:
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "no_evidence",
+                    "result_keys": list(result_keys),
+                    "artifact_keys": list(artifact_keys),
+                })
+
+                return {
+                    "verified": False,
+                    "confidence": 0.85,
+                    "reason": (
+                        f"El paso '{step.id}' terminó, "
+                        "pero no produjo evidencia."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            verified_count += 1
+            evidence.append({
+                "type": "step",
+                "step_id": step.id,
+                "action": step.action,
+                "status": "verified",
+                "result_keys": list(result_keys),
+                "artifact_keys": list(artifact_keys),
+            })
+
+        return {
+            "verified": True,
+            "confidence": 1.0,
+            "reason": (
+                "Todos los pasos del plan terminaron "
+                "correctamente y presentan evidencia "
+                "estructural de ejecución."
+            ),
+            "evidence": evidence,
+            "verified_count": verified_count,
+        }
+
+    def _verify_compound_steps(
+        self,
+        plan: ExecutionPlan,
+        result: ExecutionResult,
+        step_evidence: dict[str, Any],
+        objective: Objective,
+    ) -> dict[str, Any]:
+        evidence: list[dict[str, Any]] = []
+        verified_count = 0
+
+        for step in plan.steps:
+            if step.status != StepStatus.COMPLETED:
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "failed",
+                    "step_status": step.status.value,
+                })
+                return {
+                    "verified": False,
+                    "confidence": 0.95,
+                    "reason": (
+                        f"El paso '{step.id}' "
+                        "no terminó correctamente."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            individual = step_evidence.get(step.id)
+
+            if not isinstance(individual, dict):
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "missing_evidence",
+                })
+                return {
+                    "verified": False,
+                    "confidence": 0.90,
+                    "reason": (
+                        f"El paso '{step.id}' no contiene "
+                        "evidencia individual de ejecución."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            individual_status = individual.get("status")
+
+            if individual_status != "completed":
+                evidence.append({
+                    "type": "step",
+                    "step_id": step.id,
+                    "action": step.action,
+                    "status": "execution_failed",
+                    "execution_status": individual_status,
+                })
+                return {
+                    "verified": False,
+                    "confidence": 0.95,
+                    "reason": (
+                        f"La evidencia del paso '{step.id}' "
+                        "indica que su ejecución no terminó correctamente."
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            individual_results = individual.get("results")
+            if not isinstance(individual_results, dict):
+                individual_results = {}
+
+            individual_artifacts = individual.get("artifacts")
+            if not isinstance(individual_artifacts, dict):
+                individual_artifacts = {}
+
+            specific = self._verify_action_evidence_data(
+                action=step.action,
+                objective=objective,
+                output=individual_results,
+                artifacts=individual_artifacts,
+            )
+
+            evidence.append({
+                "type": "step_verification",
+                "step_id": step.id,
+                "action": step.action,
+                "status": (
+                    "verified"
+                    if specific["verified"]
+                    else "mismatch"
+                ),
+                "evidence": specific["evidence"],
+            })
+
+            if not specific["verified"]:
+                return {
+                    "verified": False,
+                    "confidence": specific["confidence"],
+                    "reason": (
+                        f"La evidencia del paso '{step.id}' "
+                        f"no coincide con el objetivo: {specific['reason']}"
+                    ),
+                    "evidence": evidence,
+                    "verified_count": verified_count,
+                }
+
+            verified_count += 1
+
+        return {
+            "verified": True,
+            "confidence": 1.0,
+            "reason": (
+                "Todos los pasos del plan compuesto presentan "
+                "evidencia individual válida."
+            ),
+            "evidence": evidence,
+            "verified_count": verified_count,
+        }
+
+    def _verify_action_evidence_data(
+        self,
+        action: str | None,
+        objective: Objective,
+        output: dict[str, Any],
+        artifacts: dict[str, Any],
+    ) -> dict[str, Any]:
+        parameters = (
+            getattr(objective, "metadata", None)
+            if isinstance(getattr(objective, "metadata", None), dict)
+            else {}
+        )
+
+        if action == "system.open_app":
+            expected = parameters.get("application")
+            actual = output.get("application")
+            status = output.get("status")
+            verified = (
+                status == "opened"
+                and self._same_value(actual, expected)
+            )
+            return {
+                "verified": verified,
+                "confidence": 1.0 if verified else 0.95,
+                "reason": (
+                    "La aplicación solicitada figura como abierta."
+                    if verified
+                    else "La evidencia no coincide con la aplicación solicitada."
+                ),
+                "evidence": [{
+                    "type": "state",
+                    "action": action,
+                    "expected": {"application": expected, "status": "opened"},
+                    "actual": {"application": actual, "status": status},
+                }],
+            }
+
+        if action == "system.close_app":
+            expected = parameters.get("application")
+            actual = output.get("application")
+            status = output.get("status")
+            verified = (
+                status == "closed"
+                and self._same_value(actual, expected)
+            )
+            return {
+                "verified": verified,
+                "confidence": 1.0 if verified else 0.95,
+                "reason": (
+                    "La aplicación solicitada figura como cerrada."
+                    if verified
+                    else "La evidencia no coincide con la aplicación que debía cerrarse."
+                ),
+                "evidence": [{
+                    "type": "state",
+                    "action": action,
+                    "expected": {"application": expected, "status": "closed"},
+                    "actual": {"application": actual, "status": status},
+                }],
+            }
+
+        if action == "system.set_volume":
+            expected = parameters.get("level")
+            actual = output.get("volume")
+            status = output.get("status")
+            verified = (
+                status == "set"
+                and self._same_number(actual, expected)
+            )
+            return {
+                "verified": verified,
+                "confidence": 1.0 if verified else 0.95,
+                "reason": (
+                    "El volumen registrado coincide con el nivel solicitado."
+                    if verified
+                    else "El volumen registrado no coincide con el nivel solicitado."
+                ),
+                "evidence": [{
+                    "type": "state",
+                    "action": action,
+                    "expected": {"volume": expected, "status": "set"},
+                    "actual": {"volume": actual, "status": status},
+                }],
+            }
+
+        if action == "system.screen_capture":
+            status = output.get("status")
+            image_available = (
+                output.get("image") is not None
+                or artifacts.get("image") is not None
+            )
+            verified = status == "captured" and image_available
+            return {
+                "verified": verified,
+                "confidence": 1.0 if verified else 0.95,
+                "reason": (
+                    "La captura fue realizada y existe evidencia visual asociada."
+                    if verified
+                    else "La ejecución de captura no presenta evidencia visual suficiente."
+                ),
+                "evidence": [{
+                    "type": "artifact",
+                    "action": action,
+                    "status": status,
+                    "image_available": image_available,
+                }],
+            }
+
+        has_evidence = bool(output or artifacts)
+        return {
+            "verified": has_evidence,
+            "confidence": 0.75 if has_evidence else 0.40,
+            "reason": (
+                "La evidencia individual está disponible."
+                if has_evidence
+                else "El paso no presenta evidencia individual suficiente."
+            ),
+            "evidence": [{
+                "type": "generic",
+                "action": action,
+                "status": (
+                    "evidence_available"
+                    if has_evidence
+                    else "missing_evidence"
+                ),
+            }],
+        }
+
+    def _resolve_primary_action(
+        self,
+        plan: ExecutionPlan,
+    ) -> str | None:
+
+        plan_steps = getattr(plan, "steps", None)
+
+        if isinstance(plan_steps, (list, tuple)):
+            if not plan_steps:
+                return None
+            return getattr(plan_steps[0], "action", None)
+
+        # Legacy/minimal plan doubles may expose the action directly.
+        return getattr(plan, "action", None)
+
+    def _verify_action_evidence(
+        self,
+        action: str | None,
+        objective: Objective,
+        plan: ExecutionPlan,
+        result: ExecutionResult,
+    ) -> dict[str, Any]:
+
+        output = (
+            result.output
+            if isinstance(
+                result.output,
+                dict,
+            )
+            else {}
+        )
+
+        objective_metadata = getattr(objective, "metadata", None)
+        parameters = (
+            objective_metadata
+            if isinstance(objective_metadata, dict)
+            else {}
+        )
+
+        #
+        # OPEN APPLICATION
+        #
+
+        if action == "system.open_app":
+
+            expected_application = (
+                parameters.get(
+                    "application"
+                )
+            )
+
+            actual_application = (
+                output.get(
+                    "application"
+                )
+            )
+
+            status = output.get(
+                "status"
+            )
+
+            if (
+                status == "opened"
+                and self._same_value(
+                    actual_application,
+                    expected_application,
+                )
+            ):
+
+                return {
+                    "verified": True,
+                    "confidence": 1.0,
+                    "reason": (
+                        "La aplicación solicitada figura "
+                        "como abierta en la evidencia."
+                    ),
+                    "evidence": [
+                        {
+                            "type": "state",
+                            "action": action,
+                            "expected": {
+                                "application":
+                                    expected_application,
+                                "status": "opened",
+                            },
+                            "actual": {
+                                "application":
+                                    actual_application,
+                                "status": status,
+                            },
+                        }
+                    ],
+                }
+
+            return {
+                "verified": False,
+                "confidence": 0.95,
+                "reason": (
+                    "La evidencia no coincide con "
+                    "la aplicación solicitada."
+                ),
+                "evidence": [
+                    {
+                        "type": "state",
+                        "action": action,
+                        "expected": {
+                            "application":
+                                expected_application,
+                            "status": "opened",
+                        },
+                        "actual": {
+                            "application":
+                                actual_application,
+                            "status": status,
+                        },
+                    }
+                ],
+            }
+
+        #
+        # CLOSE APPLICATION
+        #
+
+        if action == "system.close_app":
+
+            expected_application = (
+                parameters.get(
+                    "application"
+                )
+            )
+
+            actual_application = (
+                output.get(
+                    "application"
+                )
+            )
+
+            status = output.get(
+                "status"
+            )
+
+            if (
+                status == "closed"
+                and self._same_value(
+                    actual_application,
+                    expected_application,
+                )
+            ):
+
+                return {
+                    "verified": True,
+                    "confidence": 1.0,
+                    "reason": (
+                        "La aplicación solicitada figura "
+                        "como cerrada en la evidencia."
+                    ),
+                    "evidence": [
+                        {
+                            "type": "state",
+                            "action": action,
+                            "expected": {
+                                "application":
+                                    expected_application,
+                                "status": "closed",
+                            },
+                            "actual": {
+                                "application":
+                                    actual_application,
+                                "status": status,
+                            },
+                        }
+                    ],
+                }
+
+            return {
+                "verified": False,
+                "confidence": 0.95,
+                "reason": (
+                    "La evidencia no coincide con "
+                    "la aplicación que debía cerrarse."
+                ),
+                "evidence": [
+                    {
+                        "type": "state",
+                        "action": action,
+                        "expected": {
+                            "application":
+                                expected_application,
+                            "status": "closed",
+                        },
+                        "actual": {
+                            "application":
+                                actual_application,
+                            "status": status,
+                        },
+                    }
+                ],
+            }
+
+        #
+        # SET VOLUME
+        #
+
+        if action == "system.set_volume":
+
+            expected_level = (
+                parameters.get(
+                    "level"
+                )
+            )
+
+            actual_level = (
+                output.get(
+                    "volume"
+                )
+            )
+
+            status = output.get(
+                "status"
+            )
+
+            if (
+                status == "set"
+                and self._same_number(
+                    actual_level,
+                    expected_level,
+                )
+            ):
+
+                return {
+                    "verified": True,
+                    "confidence": 1.0,
+                    "reason": (
+                        "El volumen registrado coincide "
+                        "con el nivel solicitado."
+                    ),
+                    "evidence": [
+                        {
+                            "type": "state",
+                            "action": action,
+                            "expected": {
+                                "volume":
+                                    expected_level,
+                                "status": "set",
+                            },
+                            "actual": {
+                                "volume":
+                                    actual_level,
+                                "status": status,
+                            },
+                        }
+                    ],
+                }
+
+            return {
+                "verified": False,
+                "confidence": 0.95,
+                "reason": (
+                    "El volumen registrado no coincide "
+                    "con el nivel solicitado."
+                ),
+                "evidence": [
+                    {
+                        "type": "state",
+                        "action": action,
+                        "expected": {
+                            "volume":
+                                expected_level,
+                            "status": "set",
+                        },
+                        "actual": {
+                            "volume":
+                                actual_level,
+                            "status": status,
+                        },
+                    }
+                ],
+            }
+
+        #
+        # SCREEN CAPTURE
+        #
+
+        if action == "system.screen_capture":
+
+            image_available = False
+
+            if isinstance(
+                output,
+                dict,
+            ):
+
+                image_available = (
+                    output.get(
+                        "image"
+                    )
+                    is not None
+                )
+
+            if (
+                not image_available
+                and isinstance(
+                    result.artifacts,
+                    dict,
+                )
+            ):
+
+                image_available = (
+                    result.artifacts.get(
+                        "image"
+                    )
+                    is not None
+                )
+
+            status = output.get(
+                "status"
+            )
+
+            if (
+                status == "captured"
+                and image_available
+            ):
+
+                return {
+                    "verified": True,
+                    "confidence": 1.0,
+                    "reason": (
+                        "La captura fue realizada y existe "
+                        "evidencia visual asociada."
+                    ),
+                    "evidence": [
+                        {
+                            "type": "artifact",
+                            "action": action,
+                            "status": status,
+                            "image_available": True,
+                        }
+                    ],
+                }
+
+            return {
+                "verified": False,
+                "confidence": 0.95,
+                "reason": (
+                    "La ejecución indicó una captura, "
+                    "pero no existe evidencia visual suficiente."
+                ),
+                "evidence": [
+                    {
+                        "type": "artifact",
+                        "action": action,
+                        "status": status,
+                        "image_available":
+                            image_available,
+                    }
+                ],
+            }
+
+        #
+        # ACTION GENÉRICA / LEGACY
+        #
+        # Si no podemos resolver una Action concreta, mantenemos el
+        # comportamiento histórico: una ejecución exitosa de un plan
+        # completado puede verificarse de forma genérica. La confianza es
+        # menor cuando no existe output ni artifacts observables.
+        has_observable_evidence = bool(output) or bool(
+            getattr(result, "artifacts", None)
+        )
+        confidence = 1.0 if has_observable_evidence else 0.70
+
+        return {
+            "verified": True,
+            "confidence": confidence,
+            "reason": (
+                "La ejecución terminó correctamente y el plan fue completado. "
+                "La Action no posee una regla específica de verificación."
+                if action is None
+                else
+                "La ejecución terminó correctamente, el plan fue completado "
+                "y esta Action todavía no posee una regla específica."
+            ),
+            "evidence": [
+                {
+                    "type": "generic",
+                    "action": action,
+                    "status": (
+                        "evidence_available"
+                        if has_observable_evidence
+                        else "no_observable_evidence"
+                    ),
+                }
+            ],
+        }
+
+    @staticmethod
+    def _same_value(
+        actual: Any,
+        expected: Any,
+    ) -> bool:
+
+        if actual is None or expected is None:
+            return actual is expected
+
+        return (
+            str(actual).strip().lower()
+            == str(expected).strip().lower()
+        )
+
+    @staticmethod
+    def _same_number(
+        actual: Any,
+        expected: Any,
+    ) -> bool:
+
+        if actual is None or expected is None:
+            return actual is expected
+
+        try:
+
+            return (
+                abs(
+                    float(actual)
+                    - float(expected)
+                )
+                < 0.000001
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            return False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\tests\test_hybrid_intent_provider.py
+================================================================================
+
+from __future__ import annotations
+
+import pytest
+
+from planner.hybrid_intent_provider import HybridIntentProvider
+from planner.intent import Intent
+from planner.intent_recognizer import IntentRecognizer
+from planner.rule_intent_provider import RuleIntentProvider
+
+
+class OllamaMustNotBeCalled:
+    async def recognize(self, text, capabilities=None, context=None) -> Intent:
+        raise AssertionError("Ollama no debe invocarse si las reglas reconocen la solicitud completa")
+
+
+@pytest.mark.asyncio
+async def test_hybrid_keeps_deterministic_intent_for_date_and_time_phrase() -> None:
+    provider = HybridIntentProvider(
+        rule_provider=RuleIntentProvider(IntentRecognizer()),
+        ollama_provider=OllamaMustNotBeCalled(),  # type: ignore[arg-type]
+    )
+
+    intent = await provider.recognize("Decime la fecha y hora actual del sistema.")
+
+    assert intent.action == "system.get_time"
+    assert intent.confidence == 1.0
+
+
+@pytest.mark.asyncio
+async def test_hybrid_still_splits_recognized_compound_actions() -> None:
+    provider = HybridIntentProvider(
+        rule_provider=RuleIntentProvider(IntentRecognizer()),
+        ollama_provider=OllamaMustNotBeCalled(),  # type: ignore[arg-type]
+    )
+
+    intent = await provider.recognize("Decime qué hora es y decime qué hora tenemos")
+
+    assert intent.action == "system.get_time"
+    assert len(intent.sub_intents) == 2
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\tests\test_ollama_intent_provider.py
+================================================================================
+
+
+import asyncio
+
+from planner import ollama_intent_provider
+from planner.ollama_intent_provider import OllamaIntentProvider
+
+
+def test_recognize_returns_unknown_when_ollama_times_out(
+    monkeypatch,
+) -> None:
+    class SlowClient:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return False
+
+        async def chat(self, **kwargs):
+            await asyncio.sleep(1)
+
+    monkeypatch.setattr(
+        ollama_intent_provider,
+        "AsyncClient",
+        SlowClient,
+    )
+
+    provider = OllamaIntentProvider()
+    provider.REQUEST_TIMEOUT_SECONDS = 0.01
+
+    intent = asyncio.run(
+        provider.recognize("solicitud de prueba sin respuesta")
+    )
+
+    assert intent.action == "system.unknown"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

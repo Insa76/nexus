@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import time
-
+import threading
 import psutil
 
 
@@ -111,18 +111,21 @@ class WindowsAppLauncher:
         if os.path.isabs(executable):
             if not os.path.exists(executable):
                 return False
-
-            try:
-                subprocess.Popen([executable])
-                return True
-            except Exception:
-                return False
+            command = [executable]
+        else:
+            command = executable
 
         try:
-            subprocess.Popen(executable)
+            process = subprocess.Popen(command)
+            threading.Thread(
+                target=process.wait,
+                daemon=True,
+            ).start()
             return True
-        except Exception:
+        except OSError:
             return False
+
+
 
     def _wait_until_available(self, application: str) -> bool:
         target_names = self._PROCESS_NAMES.get(application)

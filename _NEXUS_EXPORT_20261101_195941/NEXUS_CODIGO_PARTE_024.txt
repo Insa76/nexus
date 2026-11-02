@@ -1,0 +1,680 @@
+﻿
+================================================================================
+ARCHIVO: dashboard\src\pages\Register.jsx
+================================================================================
+
+import { useState } from "react";
+
+export default function Register() {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const register = async () => {
+    setLoading(true);
+    setError("");
+
+    try {
+      const res = await fetch("http://localhost:8010/auth/register", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username,
+          password,
+          tenant_id: "default", // 🔥 importante para tu sistema multi-tenant
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.detail || "Error al registrarse");
+        return;
+      }
+
+      // ✔ opcional: autologin después de registrar
+      if (data.token) {
+        localStorage.setItem("token", data.token);
+        window.location.href = "/";
+      } else {
+        window.location.href = "/login";
+      }
+
+    } catch (err) {
+      setError("Error de conexión con el servidor");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: 40, maxWidth: 300 }}>
+
+      <h2>Crear cuenta</h2>
+
+      <input
+        placeholder="Usuario"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+      />
+
+      <input
+        placeholder="Password"
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+
+      <button onClick={register} disabled={loading}>
+        {loading ? "Creando..." : "Registrarse"}
+      </button>
+
+      {error && (
+        <div style={{ color: "red", marginTop: 10 }}>
+          {error}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\pages\Setup.jsx
+================================================================================
+
+import { useEffect, useState } from "react"
+import { motion } from "framer-motion"
+import { authFetch } from "../services/auth"
+
+const API = "http://127.0.0.1:8010"
+
+export default function Setup(){
+
+  const [packs,setPacks]=useState([])
+  const [loading,setLoading]=useState(false)
+
+  /* ======================
+     CARGAR PACKS REALES
+  ====================== */
+
+  useEffect(()=>{
+
+    authFetch(`${API}/workflows/packs`)
+      .then(res => res.json())
+      .then(setPacks)
+      .catch(()=>{
+        setPacks([
+          { slug:"hotel", name:"Hotel Edition", color:"#5b8cff" },
+          { slug:"bar", name:"Bar Edition", color:"#7c5cff" },
+          { slug:"office", name:"Office Edition", color:"#00b894" }
+        ])
+      })
+
+  },[])
+
+  /* ======================
+     INSTALAR
+  ====================== */
+
+  const choose = async (slug)=>{
+
+    try{
+      setLoading(true)
+
+      await authFetch(`${API}/setup/install`,{
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json"
+        },
+        body: JSON.stringify({ slug })
+      })
+
+      window.location.reload()
+
+    }catch(e){
+      console.error(e)
+      alert("Error instalando pack")
+    }finally{
+      setLoading(false)
+    }
+  }
+
+  /* ====================== */
+
+  return(
+    <div style={styles.page}>
+
+      {/* Glow fondo */}
+      <div style={styles.glow}/>
+
+      <motion.div
+        initial={{opacity:0, scale:.95}}
+        animate={{opacity:1, scale:1}}
+        transition={{duration:.4}}
+        style={styles.card}
+      >
+
+        <h1 style={styles.title}>Nexus</h1>
+        <p style={styles.subtitle}>
+          Elegí la edición para comenzar
+        </p>
+
+        <div style={styles.grid}>
+          {packs.map(p=>(
+            <button
+              key={p.slug}
+              disabled={loading}
+              onClick={()=>choose(p.slug)}
+              style={{
+                ...styles.packBtn,
+                background:p.color
+              }}
+            >
+              ⚡ {p.name}
+            </button>
+          ))}
+        </div>
+
+        {loading && (
+          <div style={styles.loading}>
+            Instalando pack...
+          </div>
+        )}
+
+      </motion.div>
+    </div>
+  )
+}
+
+/* ======================
+   STYLES
+====================== */
+
+const styles={
+
+  page:{
+    height:"100vh",
+    background:"#0f1115",
+    display:"flex",
+    alignItems:"center",
+    justifyContent:"center",
+    fontFamily:"sans-serif",
+    color:"white",
+    position:"relative",
+    overflow:"hidden"
+  },
+
+  glow:{
+    position:"absolute",
+    width:600,
+    height:600,
+    borderRadius:"50%",
+    background:"radial-gradient(circle, rgba(124,92,255,.35), transparent 60%)",
+    filter:"blur(80px)"
+  },
+
+  card:{
+    background:"rgba(255,255,255,.06)",
+    backdropFilter:"blur(20px)",
+    padding:"60px 70px",
+    borderRadius:26,
+    border:"1px solid rgba(255,255,255,.08)",
+    display:"flex",
+    flexDirection:"column",
+    gap:24,
+    alignItems:"center",
+    zIndex:2
+  },
+
+  title:{
+    fontSize:42,
+    fontWeight:700,
+    margin:0
+  },
+
+  subtitle:{
+    opacity:.6,
+    margin:0
+  },
+
+  grid:{
+    display:"flex",
+    gap:14,
+    flexWrap:"wrap",
+    justifyContent:"center"
+  },
+
+  packBtn:{
+    border:"none",
+    padding:"14px 22px",
+    borderRadius:14,
+    fontSize:15,
+    fontWeight:600,
+    color:"white",
+    cursor:"pointer",
+    transition:"all .2s",
+    minWidth:160
+  },
+
+  loading:{
+    fontSize:13,
+    opacity:.7
+  }
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\pages\Users.jsx
+================================================================================
+
+import { useEffect, useState } from "react";
+import { authFetch } from "../services/auth";
+
+export default function Users() {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const fetchUsers = async () => {
+    try {
+      const res = await authFetch("http://localhost:8010/auth/users");
+      const data = await res.json();
+      setUsers(data);
+    } catch (err) {
+      console.error("Error cargando usuarios:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchUsers();
+  }, []);
+
+  const deleteUser = async (username) => {
+    try {
+      await authFetch(`http://localhost:8010/auth/users/${username}`, {
+        method: "DELETE",
+      });
+
+      // refrescar lista
+      fetchUsers();
+
+    } catch (err) {
+      console.error("Error eliminando usuario:", err);
+    }
+  };
+
+  if (loading) {
+    return <div style={{ padding: 20 }}>Cargando usuarios...</div>;
+  }
+
+  return (
+    <div style={{ padding: 20 }}>
+      <h2>Usuarios</h2>
+
+      {users.length === 0 && (
+        <div>No hay usuarios</div>
+      )}
+
+      {users.map((u) => (
+        <div
+          key={u.username}
+          style={{
+            marginBottom: 10,
+            padding: 10,
+            background: "#1a1a1a",
+            borderRadius: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center"
+          }}
+        >
+          <div>
+            <b>{u.username}</b> ({u.role})
+          </div>
+
+          <button onClick={() => deleteUser(u.username)}>
+            Eliminar
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\services\ai.js
+================================================================================
+
+import { getAuthHeaders } from "./auth";
+
+export async function generateWorkflow(prompt) {
+
+  try {
+
+    const res = await fetch("http://localhost:8010/ai-builder/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({ prompt })
+    });
+
+    const text = await res.text(); // 🔥 clave
+
+    console.log("🧠 RAW RESPONSE:", text);
+
+    if (!res.ok) {
+      throw new Error(text);
+    }
+
+    const data = JSON.parse(text);
+
+    return data;
+
+  } catch (err) {
+
+    console.error("🔥 ERROR IA:", err);
+
+    alert("ERROR IA:\n" + err.message);
+
+    throw err;
+  }
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\services\auth.js
+================================================================================
+
+export function authFetch(url, options = {}) {
+
+  const token = localStorage.getItem("token");
+
+  // 🔴 No hay token → cortar todo
+  if (!token) {
+    window.location.href = "/login";
+    return Promise.reject("No token");
+  }
+
+  return fetch(url, {
+    ...options,
+    headers: {
+      ...(options.headers || {}),
+      Authorization: `Bearer ${token}`
+    }
+  })
+  .then(res => {
+
+    // 🔴 Token inválido o expirado
+    if (res.status === 401) {
+      localStorage.clear();
+      window.location.href = "/login";
+      return Promise.reject("Unauthorized");
+    }
+
+    return res;
+  });
+}
+
+export function getAuthHeaders() {
+
+  const token = localStorage.getItem("token");
+
+  if (!token) {
+    throw new Error("No token");
+  }
+
+  return {
+    Authorization: `Bearer ${token}`
+  };
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\services\jobs.js
+================================================================================
+
+import { getAuthHeaders } from "./auth";
+
+export async function runWorkflow(steps) {
+
+  const res = await fetch("http://localhost:8010/jobs/run", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaders()
+    },
+    body: JSON.stringify({
+      name: "builder-workflow",
+      steps
+    })
+  });
+
+  return res.json();
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\services\ws.js
+================================================================================
+
+let socket;
+
+export function connectWS(onMessage) {
+  socket = new WebSocket("ws://localhost:8010/ws");
+
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    onMessage(data);
+  };
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\vite.config.js
+================================================================================
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    host: '127.0.0.1',
+    port: 5174
+  }
+})
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\workflow-fail.json
+================================================================================
+
+{
+  "name": "workflow-fail",
+  "trigger": "manual",
+  "steps": [
+    {
+      "type": "action",
+      "action": "accion_inexistente",
+      "value": null
+    }
+  ]
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: desktop\main.js
+================================================================================
+
+const { app, BrowserWindow, Tray, Menu, globalShortcut } = require("electron")
+const path = require("path")
+const { spawn } = require("child_process")
+
+let win
+let tray
+
+// 🔹 rutas seguras
+const frontendPath = path.join(__dirname, "../frontend/dist/index.html")
+const splashPath = path.join(__dirname, "splash.html")
+const backendPath = path.join(__dirname, "../backend/dist/nexus-backend.exe")
+
+
+function createWindow() {
+
+  win = new BrowserWindow({
+    width: 800,
+    height: 500,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    center: true,
+    webPreferences: {
+      nodeIntegration: false
+    }
+  })
+
+  // 🔥 primero splash
+  win.loadFile(splashPath)
+
+  // 🔥 después carga app real (delay pequeño)
+  setTimeout(() => {
+    win.loadFile(frontendPath)
+  }, 1200)
+}
+
+
+function toggle() {
+  if (win.isVisible()) win.hide()
+  else {
+    win.show()
+    win.focus()
+  }
+}
+
+
+app.whenReady().then(() => {
+
+  createWindow()
+
+  // 🔥 backend exe (rutas seguras)
+  spawn(backendPath, [], {
+    detached: true,
+    stdio: "ignore"
+  })
+
+  // 🔥 autostart windows
+  app.setLoginItemSettings({
+    openAtLogin: true
+  })
+
+  // 🔥 tray
+  tray = new Tray(path.join(__dirname, "icon.ico"))
+
+  const menu = Menu.buildFromTemplate([
+    { label: "Abrir Nexus", click: toggle },
+    { type: "separator" },
+    { label: "Salir", click: () => app.quit() }
+  ])
+
+  tray.setToolTip("Nexus IA")
+  tray.setContextMenu(menu)
+
+  // 🔥 hotkey global
+  globalShortcut.register("Control+Space", toggle)
+})
+
+
+// 🔥 limpieza correcta
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll()
+})
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: desktop\package.json
+================================================================================
+
+{
+  "name": "nexus-desktop",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "concurrently \"npm run backend\" \"npm run frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "backend": "cd ../backend && venv\\Scripts\\activate && uvicorn main:app",
+    "frontend": "cd ../frontend && npm run dev",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "concurrently": "^8.0.0",
+    "electron": "^30.0.0",
+    "electron-builder": "^26.4.0",
+    "wait-on": "^7.0.0"
+  },
+  "build": {
+  "appId": "com.nexus.ia",
+  "productName": "Nexus",
+  "directories": {
+    "buildResources": "assets"
+  },
+  "files": [
+    "**/*",
+    "../frontend/dist/**/*",
+    "../backend/dist/**/*"
+  ],
+  "win": {
+    "target": [
+      "nsis"
+    ]
+  }
+}
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

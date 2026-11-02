@@ -1,0 +1,11 @@
+{
+  "name": "workflow-fail",
+  "trigger": "manual",
+  "steps": [
+    {
+      "type": "action",
+      "action": "accion_inexistente",
+      "value": null
+    }
+  ]
+}

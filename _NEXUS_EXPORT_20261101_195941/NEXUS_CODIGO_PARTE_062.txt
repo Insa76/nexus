@@ -1,0 +1,1795 @@
+﻿
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_process_cognitive_real_cycle.py
+================================================================================
+
+
+from context import AssistantContext
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from rules.capability import RuleCapability
+from rules.cognitive import RuleCognitiveAccess
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
+
+
+class User:
+    def __init__(self, user_id: str):
+        self.id = user_id
+
+
+def test_router_executes_real_rule_cognitive_cycle():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+    capability = RuleCapability(
+        store=store,
+        resolver=resolver,
+    )
+    cognitive_access = RuleCognitiveAccess(capability)
+    router = CognitiveCapabilityRouter(
+        rule_access=cognitive_access,
+    )
+
+    rule = capability.create(
+        name="Regla de prueba",
+        description="Regla relevante para el contexto actual.",
+        user_id="user-1",
+    )
+
+    context = AssistantContext(
+        user=User("user-1"),
+        organization=None,
+        projects=(),
+    )
+
+    invocation = router.select(
+        action="rules.find_relevant",
+        parameters={},
+    )
+
+    assert invocation is not None
+    assert invocation.capability == "rules"
+    assert invocation.operation == "find_relevant"
+
+    result = router.invoke(
+        invocation,
+        context=context,
+         assistant_context=context,
+    )
+
+    assert result.rules == (rule,)
+    assert result.metadata["operation"] == "rules.find_relevant"
+    assert result.metadata["count"] == 1
+
+    summary = router.summarize_operation_result(
+        result,
+        operation=invocation.operation,
+    )
+
+    assert summary["operation"] == "rules.find_relevant"
+    assert summary["result_count"] == 1
+    assert summary["has_results"] is True
+    assert summary["status"] == "found"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_process_cognitive_router_integration.py
+================================================================================
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from context import AssistantContext, UserProfile
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from engine.engine import Engine
+from planner.intent import Intent
+from processes.capability import ProcessCapability
+from processes.cognitive import ProcessCognitiveAccess
+from processes.resolver import ProcessResolver
+from processes.store import ProcessStore
+from runtime.execution_result import ExecutionResult
+
+
+
+@pytest.mark.asyncio
+async def test_engine_process_capability_uses_assistant_context():
+    store = ProcessStore()
+    resolver = ProcessResolver(store)
+    capability = ProcessCapability(
+        store=store,
+        resolver=resolver,
+    )
+    process_access = ProcessCognitiveAccess(capability)
+    router = CognitiveCapabilityRouter(
+        process_access=process_access,
+    )
+
+    process = capability.create(
+        name="Proceso de integración",
+        description="Proceso asociado al usuario de la solicitud.",
+        user_id="user-1",
+    )
+
+    assistant_context = AssistantContext(
+        user=UserProfile(
+            id="user-1",
+            name="Usuario de prueba",
+        ),
+        organization=None,
+        projects=(),
+    )
+
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+
+    runtime.execute = AsyncMock(
+        return_value=ExecutionResult(
+            success=True,
+            message="Ejecución de prueba completada.",
+            output={},
+            metadata={},
+        ),
+    )
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="processes.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="buscá los procesos relevantes",
+        ),
+    )
+
+    engine = Engine(
+        runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+        process_capability=capability,
+        process_cognitive_access=process_access,
+        assistant_context=assistant_context,
+    )
+
+
+    result = await engine.execute(
+        "buscá los procesos relevantes"
+    )
+
+    assert result is not None
+
+    memory_entries = engine._memory.recent(50)
+
+    capability_result_entries = [
+        entry
+        for entry in memory_entries
+            if entry.type == "cognitive_capability_result"
+    ]
+
+    assert capability_result_entries
+
+    cognitive_result = capability_result_entries[-1].data["result"]
+
+    assert cognitive_result.processes == (process,)
+    assert cognitive_result.metadata["count"] == 1
+
+        # La consulta debe producir una respuesta final útil.
+    assert result.success is True
+    assert result.output["operation"] == "processes.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.output["processes"] == [
+        {
+            "id": process.id,
+            "name": process.name,
+            "description": process.description,
+            "status": "pending",
+        }
+    ]
+
+    response = result.metadata["response"]
+    assert process.name in response
+    assert process.description in response
+    assert "pending" in response
+
+    # La capability ya resolvió la consulta: Runtime no debe ejecutarla.
+    runtime.execute.assert_not_awaited()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_rule_cognitive_capability_cycle.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from rules.cognitive import RuleCognitiveAccess
+
+
+def test_rule_capability_router_exposes_rule_operations():
+    rule_access = MagicMock(
+        spec=RuleCognitiveAccess,
+    )
+
+    router = CognitiveCapabilityRouter(
+        rule_access=rule_access,
+    )
+
+    operations = router.available_operations()
+
+    assert len(operations) == 3
+
+    assert {
+        (operation.capability, operation.operation, operation.action)
+        for operation in operations
+    } == {
+        (
+            "rules",
+            "find_relevant",
+            "rules.find_relevant",
+        ),
+        (
+            "rules",
+            "get",
+            "rules.get",
+        ),
+        (
+            "rules",
+            "list",
+            "rules.list",
+        ),
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_rule_cognitive_real_cycle.py
+================================================================================
+
+import pytest
+
+from context import AssistantContext
+from rules.capability import RuleCapability
+from rules.cognitive import RuleCognitiveAccess
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
+
+
+class User:
+    def __init__(self, user_id: str):
+        self.id = user_id
+
+
+@pytest.mark.asyncio
+async def test_engine_executes_real_rule_cognitive_cycle():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+    capability = RuleCapability(
+        store=store,
+        resolver=resolver,
+    )
+    cognitive_access = RuleCognitiveAccess(capability)
+
+    rule = capability.create(
+        name="Regla de prueba",
+        description="Regla relevante para el contexto actual.",
+        user_id="user-1",
+    )
+
+    context = AssistantContext(
+        user=User("user-1"),
+        organization=None,
+        projects=[],
+    )
+
+    result = cognitive_access.find_relevant(context=context)
+
+    assert result.rules == (rule,)
+    assert result.metadata["operation"] == "rules.find_relevant"
+    assert result.metadata["count"] == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_rule_cognitive_router_integration.py
+================================================================================
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from context import AssistantContext, UserProfile
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from engine.engine import Engine
+from planner.intent import Intent
+from rules.capability import RuleCapability
+from rules.cognitive import RuleCognitiveAccess
+from rules.resolver import RuleResolver
+from rules.store import RuleStore
+from runtime.execution_result import ExecutionResult
+
+
+@pytest.mark.asyncio
+async def test_engine_rule_capability_uses_assistant_context():
+    store = RuleStore()
+    resolver = RuleResolver(store)
+    capability = RuleCapability(
+        store=store,
+        resolver=resolver,
+    )
+    rule_access = RuleCognitiveAccess(capability)
+
+    router = CognitiveCapabilityRouter(
+        rule_access=rule_access,
+    )
+
+    rule = capability.create(
+        name="Regla de integración",
+        description="Regla asociada al usuario de la solicitud.",
+        user_id="user-1",
+    )
+
+    assistant_context = AssistantContext(
+        user=UserProfile(
+            id="user-1",
+            name="Usuario de prueba",
+        ),
+        organization=None,
+        projects=(),
+    )
+
+    runtime = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.execute = AsyncMock(
+        return_value=ExecutionResult(
+            success=True,
+            message="Ejecución de prueba completada.",
+            output={},
+            metadata={},
+        ),
+    )
+
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        return_value=Intent(
+            action="rules.find_relevant",
+            confidence=1.0,
+            parameters={},
+            original_text="buscá las reglas relevantes",
+        ),
+    )
+
+    engine = Engine(
+        runtime,
+        intent_provider=intent_provider,
+        cognitive_capability_router=router,
+        rule_capability=capability,
+        rule_cognitive_access=rule_access,
+        assistant_context=assistant_context,
+    )
+
+    result = await engine.execute("buscá las reglas relevantes")
+
+    assert result is not None
+
+    memory_entries = engine._memory.recent(50)
+
+    capability_result_entries = [
+        entry
+        for entry in memory_entries
+        if entry.type == "cognitive_capability_result"
+    ]
+
+    assert capability_result_entries
+
+    cognitive_result = capability_result_entries[-1].data["result"]
+
+    assert cognitive_result.rules == (rule,)
+    assert cognitive_result.metadata["count"] == 1
+
+        # La consulta debe producir una respuesta final útil.
+    assert result.success is True
+    assert result.output["operation"] == "rules.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.output["rules"] == [
+        {
+            "id": rule.id,
+            "name": rule.name,
+            "description": rule.description,
+            "status": "active",
+        }
+    ]
+
+    response = result.metadata["response"]
+    assert rule.name in response
+    assert rule.description in response
+    assert "active" in response
+
+    # La capability ya resolvió la consulta: Runtime no debe ejecutarla.
+    runtime.execute.assert_not_awaited()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_engine_semantic_memory.py
+================================================================================
+
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engine.engine import Engine
+from planner.intent_recognizer import IntentRecognizer
+from runtime.runtime import Runtime
+
+
+def build_engine() -> Engine:
+    runtime = MagicMock(spec=Runtime)
+    runtime.tool_registry = MagicMock()
+    runtime.tool_registry.describe.return_value = []
+    runtime.tool_registry.resolve = MagicMock()
+    recognizer = IntentRecognizer()
+    intent_provider = MagicMock()
+    intent_provider.recognize = AsyncMock(
+        side_effect=lambda text, _capabilities, context: recognizer.recognize(
+            text, context
+        )
+    )
+    return Engine(runtime=runtime, intent_provider=intent_provider)
+
+
+@pytest.mark.asyncio
+async def test_engine_remembers_and_recalls_a_fact() -> None:
+    engine = build_engine()
+    stored = await engine.execute(
+        "Recordá que mi proyecto actual se llama NEXUS."
+    )
+    recalled = await engine.execute(
+        "¿Cómo se llama mi proyecto actual?"
+    )
+
+    assert stored.success
+    assert "NEXUS" in stored.message
+    assert recalled.success
+    assert "NEXUS" in recalled.message
+    assert engine.semantic_memory.get_value("user", "proyecto actual") == "NEXUS"
+
+
+@pytest.mark.asyncio
+async def test_engine_executes_compound_remember_and_recall() -> None:
+    engine = build_engine()
+    result = await engine.execute(
+        "Recordá que mi proyecto actual se llama NEXUS y después "
+        "decime qué nombre te pedí recordar"
+    )
+
+    assert result.success
+    assert "NEXUS" in result.message
+    assert engine.semantic_memory.get_value("user", "proyecto actual") == "NEXUS"
+
+
+
+def test_invalid_compound_memory_intent_does_not_write_partial_fact() -> None:
+    engine = build_engine()
+
+    recognizer = IntentRecognizer()
+    intent = recognizer.recognize(
+        "Recordá que mi proyecto actual se llama NEXUS y después "
+        "decime qué nombre te pedí recordar"
+    )
+
+    assert intent.sub_intents
+    intent.sub_intents[-1].action = "system.recall_fact"
+    intent.sub_intents[-1].parameters = {
+        "subject": "user",
+        "predicate": "",
+    }
+
+    result = engine._handle_semantic_memory_intent(intent, "prueba")
+
+    assert result is None
+    assert engine.semantic_memory.get_value("user", "proyecto actual") is None
+
+
+@pytest.mark.asyncio
+async def test_engine_recalls_all_user_facts() -> None:
+    engine = build_engine()
+
+    await engine.execute(
+        "Recordá que mi proyecto actual se llama NEXUS."
+    )
+    await engine.execute(
+        "Recordá que mi prueba de persistencia es octubre 2026."
+    )
+
+    result = await engine.execute("¿Qué recordás sobre mí?")
+
+    assert result.success
+    assert "NEXUS" in result.message
+    assert "octubre 2026" in result.message
+    assert "proyecto actual" in result.message
+    assert "prueba de persistencia" in result.message
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_process_cognitive_capability.py
+================================================================================
+
+from unittest.mock import MagicMock
+
+from context import AssistantContext
+
+from processes import ProcessCognitiveAccess
+from engine.cognitive_capabilities import (
+    CognitiveCapabilityInvocation,
+    CognitiveCapabilityRouter,
+)
+
+
+def test_router_invokes_process_cognitive_capability():
+    process_access = MagicMock(
+        spec=ProcessCognitiveAccess,
+    )
+
+    process_access.find_relevant.return_value = MagicMock()
+
+    router = CognitiveCapabilityRouter(
+        process_access=process_access,
+    )
+
+    invocation = CognitiveCapabilityInvocation(
+        capability="processes",
+        operation="find_relevant",
+        parameters={},
+    )
+
+    context = AssistantContext(
+        user=None,
+        organization=None,
+        projects=[],
+    )
+
+    result = router.invoke(
+        invocation,
+        context={},
+        assistant_context=context,
+    )
+
+    assert result is process_access.find_relevant.return_value
+
+    process_access.find_relevant.assert_called_once_with(
+        context=context,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\tests\test_process_rule_contextual_reads.py
+================================================================================
+
+
+from types import SimpleNamespace
+
+from context import AssistantContext
+from processes.capability import ProcessCapability
+from processes.cognitive import ProcessCognitiveAccess
+from processes.models import Process
+from processes.resolver import ProcessResolver
+from processes.store import ProcessStore
+
+
+def build_access() -> ProcessCognitiveAccess:
+    store = ProcessStore()
+    resolver = ProcessResolver(store)
+    capability = ProcessCapability(
+        store=store,
+        resolver=resolver,
+    )
+    return ProcessCognitiveAccess(capability)
+
+
+def make_context(user_id: str) -> AssistantContext:
+    return AssistantContext(
+        user=SimpleNamespace(id=user_id),
+        organization=None,
+        projects=(),
+    )
+
+
+def test_cognitive_access_can_find_process_by_id():
+    access = build_access()
+
+    process = access._capability.create(
+        name="Proceso de prueba",
+        user_id="user-1",
+    )
+
+    result = access.get(
+        process.id,
+        context=make_context("user-1"),
+    )
+
+    assert result == process
+
+
+def test_cognitive_access_can_list_processes():
+    access = build_access()
+
+    first = access._capability.create(
+        name="Proceso 1",
+        user_id="user-1",
+    )
+    second = access._capability.create(
+        name="Proceso 2",
+        user_id="user-1",
+    )
+
+    result = access.list(
+        context=make_context("user-1"),
+    )
+
+    assert result == (first, second)
+
+
+def test_cognitive_access_cannot_get_process_from_another_user():
+    access = build_access()
+
+    process = access._capability.create(
+        name="Proceso ajeno",
+        user_id="user-2",
+    )
+
+    result = access.get(
+        process.id,
+        context=make_context("user-1"),
+    )
+
+    assert result is None
+
+
+def test_cognitive_access_lists_only_processes_from_current_context():
+    access = build_access()
+
+    own_process = access._capability.create(
+        name="Proceso propio",
+        user_id="user-1",
+    )
+    access._capability.create(
+        name="Proceso ajeno",
+        user_id="user-2",
+    )
+
+    result = access.list(
+        context=make_context("user-1"),
+    )
+
+    assert result == (own_process,)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\pyproject.toml
+================================================================================
+
+[project]
+name = "memory"
+version = "0.1.0"
+description = "NEXUS Working Memory"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\README.md
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\__init__.py
+================================================================================
+
+from memory.memory_entry import MemoryEntry
+from memory.working_memory import WorkingMemory
+
+__all__ = [
+    "MemoryEntry",
+    "WorkingMemory",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\context_builder.py
+================================================================================
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from context.models import AssistantContext
+from memory import WorkingMemory
+from memory.semantic_retriever import SemanticRetriever
+
+
+ContextProvider = Callable[
+    [str | None, AssistantContext | None],
+    Mapping[str, Any] | None,
+]
+
+
+class ContextBuilder:
+    """
+    Construye el contexto cognitivo que NEXUS entrega
+    al sistema de interpretación.
+
+    El contexto se divide en:
+
+    - recent_interactions
+    - recent_episodes
+    - last_request
+    - last_intent
+    - last_result
+    - references
+    - semantic_knowledge
+
+    Regla fundamental:
+
+    El contexto puede utilizar intenciones para comprender
+    lo que el usuario quiso hacer, pero el estado ejecutado
+    del sistema debe derivarse de resultados de ejecución
+    exitosos.
+
+    Una intención no constituye por sí misma evidencia de
+    que una acción haya ocurrido.
+
+    El conocimiento semántico es conocimiento reutilizable.
+    No constituye autoridad sobre el estado real del sistema.
+    """
+
+    _CONTEXT_ENTRY_TYPES = {
+        "user_request",
+        "intent",
+        "objective",
+        "plan",
+        "plan_final",
+        "execution_result",
+        "error",
+    }
+
+    _EPISODE_ENTRY_TYPE = "episode"
+
+    def __init__(
+        self,
+        max_entries: int = 50,
+        max_episodes: int = 10,
+        semantic_retriever: SemanticRetriever | None = None,
+        max_semantic_results: int = 10,
+        assistant_context: AssistantContext | None = None,
+        context_providers: Sequence[ContextProvider] = (),
+    ) -> None:
+        self._max_entries = max_entries
+        self._max_episodes = max_episodes
+        self._semantic_retriever = semantic_retriever
+        self._max_semantic_results = max_semantic_results
+        self._assistant_context = assistant_context
+        self._context_providers = tuple(context_providers)
+
+    def build(
+        self,
+        memory: WorkingMemory,
+        semantic_query: str | None = None,
+    ) -> dict[str, Any]:
+        entries = memory.recent(
+            self._max_entries
+        )
+
+        episode_entries = memory.find(
+            self._EPISODE_ENTRY_TYPE
+        )
+
+        episode_entries = episode_entries[
+            -self._max_episodes:
+        ]
+
+        context: dict[str, Any] = {
+            "recent_interactions": [],
+            "recent_episodes": [],
+            "last_request": None,
+            "last_intent": None,
+            "last_result": None,
+            "references": {
+                "last_action": None,
+                "last_application": None,
+                "last_executed_application": None,
+                "last_volume": None,
+                "previous_volume": None,
+                "last_capture_available": False,
+            },
+            "semantic_knowledge": [],
+        }
+
+        for entry in entries:
+            if entry.type not in self._CONTEXT_ENTRY_TYPES:
+                continue
+
+            item = {
+                "type": entry.type,
+                "data": entry.data,
+            }
+
+            context["recent_interactions"].append(
+                item
+            )
+
+            if entry.type == "user_request":
+                context["last_request"] = (
+                    entry.data
+                )
+
+            elif entry.type == "intent":
+                context["last_intent"] = (
+                    entry.data
+                )
+
+            elif entry.type == "execution_result":
+                context["last_result"] = (
+                    entry.data
+                )
+
+        for entry in episode_entries:
+            context["recent_episodes"].append(
+                entry.data
+            )
+
+        context["references"] = (
+            self._build_references(context)
+        )
+
+        context["semantic_knowledge"] = (
+            self._build_semantic_knowledge(
+                semantic_query
+            )
+        )
+
+        for provider in self._context_providers:
+            provided_context = provider(
+                semantic_query,
+                self._assistant_context,
+            )
+
+            if provided_context is None:
+                continue
+
+            for key, value in provided_context.items():
+                context[key] = value
+
+        return context
+
+    def _build_semantic_knowledge(
+        self,
+        semantic_query: str | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Recupera conocimiento semántico relevante.
+
+        Esta información es contextual y no autoritativa.
+        Nunca reemplaza el estado obtenido mediante ejecución.
+        """
+
+        if self._semantic_retriever is None:
+            return []
+
+        if not isinstance(
+            semantic_query,
+            str,
+        ):
+            return []
+
+        semantic_query = semantic_query.strip()
+
+        if not semantic_query:
+            return []
+
+        matches = self._semantic_retriever.search(
+            semantic_query,
+            limit=self._max_semantic_results,
+        )
+
+        knowledge: list[dict[str, Any]] = []
+
+        for match in matches:
+            fact = match.fact
+
+            knowledge.append(
+                {
+                    "subject": fact.subject,
+                    "predicate": fact.predicate,
+                    "value": fact.value,
+                    "confidence": fact.confidence,
+                    "source": fact.source,
+                    "score": match.score,
+                }
+            )
+
+        return knowledge
+
+    def _build_references(
+        self,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Construye referencias reutilizables a partir
+        de las interacciones recientes.
+
+        Las referencias son derivadas, no autoritativas.
+
+        Las intenciones indican intención del usuario.
+
+        Los resultados de ejecución exitosos indican
+        que una acción realmente ocurrió.
+
+        Por lo tanto:
+
+            intent != estado ejecutado
+
+        El estado ejecutado tiene prioridad.
+        """
+
+        references: dict[str, Any] = {
+            "last_action": None,
+            "last_application": None,
+            "last_executed_application": None,
+            "last_volume": None,
+            "previous_volume": None,
+            "last_capture_available": False,
+        }
+
+        recent_interactions = context.get(
+            "recent_interactions",
+            [],
+        )
+
+        if not isinstance(
+            recent_interactions,
+            list,
+        ):
+            return references
+
+        #
+        # ---------------------------------------------------------
+        # Última acción realmente ejecutada
+        # ---------------------------------------------------------
+        #
+
+        successful_execution_actions: list[str] = []
+
+        for index in range(
+            len(recent_interactions)
+        ):
+            interaction = recent_interactions[index]
+
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get("type") != "execution_result":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            if data.get("success") is not True:
+                continue
+
+            action = self._find_associated_intent(
+                recent_interactions,
+                index,
+            )
+
+            if action:
+                successful_execution_actions.append(
+                    action
+                )
+
+        if successful_execution_actions:
+            references["last_action"] = (
+                successful_execution_actions[-1]
+            )
+
+        #
+        # ---------------------------------------------------------
+        # Estado ejecutado de aplicaciones
+        # ---------------------------------------------------------
+        #
+
+        for index in range(
+            len(recent_interactions) - 1,
+            -1,
+            -1,
+        ):
+            interaction = recent_interactions[index]
+
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get("type") != "execution_result":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            if data.get("success") is not True:
+                continue
+
+            action = self._find_associated_intent(
+                recent_interactions,
+                index,
+            )
+
+            output = data.get(
+                "output",
+                {},
+            )
+
+            if not isinstance(
+                output,
+                dict,
+            ):
+                output = {}
+
+            if action == "system.open_app":
+                status = output.get(
+                    "status"
+                )
+
+                application = output.get(
+                    "application"
+                )
+
+                if (
+                    status == "opened"
+                    and isinstance(
+                        application,
+                        str,
+                    )
+                    and application.strip()
+                ):
+                    references[
+                        "last_application"
+                    ] = application.strip()
+
+                    references[
+                        "last_executed_application"
+                    ] = application.strip()
+
+                    break
+
+            if action == "system.close_app":
+                status = output.get(
+                    "status"
+                )
+
+                application = output.get(
+                    "application"
+                )
+
+                if (
+                    status == "closed"
+                    and isinstance(
+                        application,
+                        str,
+                    )
+                    and application.strip()
+                ):
+                    references[
+                        "last_application"
+                    ] = application.strip()
+
+                    references[
+                        "last_executed_application"
+                    ] = None
+
+                    break
+
+        #
+        # ---------------------------------------------------------
+        # Estado ejecutado del volumen
+        # ---------------------------------------------------------
+        #
+
+        volume_values: list[float] = []
+
+        for index in range(
+            len(recent_interactions) - 1,
+            -1,
+            -1,
+        ):
+            interaction = recent_interactions[index]
+
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get("type") != "execution_result":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            if data.get("success") is not True:
+                continue
+
+            action = self._find_associated_intent(
+                recent_interactions,
+                index,
+            )
+
+            output = data.get(
+                "output",
+                {},
+            )
+
+            if not isinstance(
+                output,
+                dict,
+            ):
+                continue
+
+            if action not in {
+                "system.set_volume",
+                "system.get_volume",
+            }:
+                continue
+
+            volume = output.get(
+                "volume"
+            )
+
+            try:
+                volume = float(volume)
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            volume_values.append(
+                volume
+            )
+
+        if volume_values:
+            references["last_volume"] = (
+                volume_values[0]
+            )
+
+        if len(volume_values) > 1:
+            references["previous_volume"] = (
+                volume_values[1]
+            )
+
+        #
+        # ---------------------------------------------------------
+        # Última captura realmente disponible
+        # ---------------------------------------------------------
+        #
+
+        for index in range(
+            len(recent_interactions) - 1,
+            -1,
+            -1,
+        ):
+            interaction = recent_interactions[index]
+
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get("type") != "execution_result":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            if data.get("success") is not True:
+                continue
+
+            action = self._find_associated_intent(
+                recent_interactions,
+                index,
+            )
+
+            if action != "system.screen_capture":
+                continue
+
+            artifacts = data.get(
+                "artifacts",
+                {},
+            )
+
+            if (
+                isinstance(
+                    artifacts,
+                    dict,
+                )
+                and "image" in artifacts
+            ):
+                references[
+                    "last_capture_available"
+                ] = True
+                break
+
+        #
+        # ---------------------------------------------------------
+        # Fallback episódico
+        # ---------------------------------------------------------
+        #
+
+        if not references[
+            "last_capture_available"
+        ]:
+            for episode in reversed(
+                context.get(
+                    "recent_episodes",
+                    [],
+                )
+            ):
+                if not isinstance(
+                    episode,
+                    dict,
+                ):
+                    continue
+
+                if (
+                    episode.get("action")
+                    == "system.screen_capture"
+                    and episode.get("success") is True
+                ):
+                    references[
+                        "last_capture_available"
+                    ] = True
+                    break
+
+        return references
+
+    def _find_associated_intent(
+        self,
+        interactions: list[dict[str, Any]],
+        execution_index: int,
+    ) -> str | None:
+        """
+        Busca hacia atrás la intención asociada al resultado
+        de ejecución.
+
+        La estructura actual de WorkingMemory registra:
+
+            user_request
+            intent
+            objective
+            plan
+            plan_final
+            execution_result
+
+        Por lo tanto, el intent más cercano anterior al
+        execution_result representa la acción que produjo
+        dicho resultado.
+        """
+
+        for index in range(
+            execution_index - 1,
+            -1,
+            -1,
+        ):
+            interaction = interactions[index]
+
+            if not isinstance(
+                interaction,
+                dict,
+            ):
+                continue
+
+            if interaction.get("type") != "intent":
+                continue
+
+            data = interaction.get(
+                "data",
+                {},
+            )
+
+            if not isinstance(
+                data,
+                dict,
+            ):
+                continue
+
+            action = data.get(
+                "action"
+            )
+
+            if isinstance(
+                action,
+                str,
+            ):
+                return action
+
+        return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\episode.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class Episode(BaseModel):
+    """
+    Representa una experiencia completa de NEXUS.
+
+    Un episodio describe qué solicitó el usuario,
+    qué acción fue ejecutada y cuál fue su resultado.
+
+    No ejecuta acciones.
+    No interpreta intenciones.
+    No consulta memoria.
+    """
+
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        )
+    )
+
+    action: str
+
+    parameters: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    original_text: str = ""
+
+    success: bool = True
+
+    output: Any = None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\episode_memory.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from memory.episode import Episode
+from memory.working_memory import WorkingMemory
+
+
+class EpisodeMemory:
+    """
+    Capa de memoria episódica de NEXUS.
+
+    Utiliza WorkingMemory como almacenamiento subyacente.
+
+    No interpreta intenciones.
+    No ejecuta acciones.
+    No genera lenguaje natural.
+    """
+
+    _ENTRY_TYPE = "episode"
+
+    def __init__(
+        self,
+        memory: WorkingMemory,
+    ) -> None:
+
+        self._memory = memory
+
+    def add(
+        self,
+        episode: Episode,
+    ) -> Episode:
+        """
+        Registra un episodio en WorkingMemory.
+        """
+
+        self._memory.add(
+            self._ENTRY_TYPE,
+            episode.model_dump(),
+        )
+
+        return episode
+
+    def recent(
+        self,
+        limit: int = 10,
+    ) -> list[Episode]:
+        """
+        Devuelve los episodios más recientes.
+        """
+
+        if limit <= 0:
+            return []
+
+        entries = self._memory.find(
+            self._ENTRY_TYPE
+        )
+
+        entries = entries[-limit:]
+
+        return [
+            Episode.model_validate(
+                entry.data
+            )
+            for entry in entries
+        ]
+
+    def last(self) -> Episode | None:
+        """
+        Devuelve el último episodio registrado.
+        """
+
+        episodes = self.recent(
+            limit=1
+        )
+
+        if not episodes:
+            return None
+
+        return episodes[0]
+
+    def previous(self) -> Episode | None:
+        """
+        Devuelve el episodio anterior al último
+        episodio registrado.
+
+        Si existe solamente un episodio, devuelve None.
+        """
+
+        entries = self._memory.find(
+            self._ENTRY_TYPE
+        )
+
+        if len(entries) < 2:
+            return None
+
+        entry = entries[-2]
+
+        return Episode.model_validate(
+            entry.data
+        )
+
+    def find_by_action(
+        self,
+        action: str,
+        limit: int = 1,
+    ) -> list[Episode]:
+        """
+        Busca episodios exitosos de una acción concreta.
+
+        Los resultados se devuelven desde el más reciente
+        hacia atrás.
+
+        Esta capa solamente consulta memoria. No interpreta
+        la consulta del usuario.
+        """
+
+        if not action or limit <= 0:
+            return []
+
+        normalized_action = action.strip()
+
+        if not normalized_action:
+            return []
+
+        entries = self._memory.find(
+            self._ENTRY_TYPE
+        )
+
+        matches: list[Episode] = []
+
+        for entry in reversed(entries):
+
+            try:
+                episode = Episode.model_validate(
+                    entry.data
+                )
+            except Exception:
+                continue
+
+            if not episode.success:
+                continue
+
+            if episode.action != normalized_action:
+                continue
+
+            matches.append(
+                episode
+            )
+
+            if len(matches) >= limit:
+                break
+
+        return matches
+
+    def find_latest_by_action(
+        self,
+        action: str,
+    ) -> Episode | None:
+        """
+        Devuelve el episodio exitoso más reciente
+        correspondiente a una acción.
+        """
+
+        matches = self.find_by_action(
+            action,
+            limit=1,
+        )
+
+        if not matches:
+            return None
+
+        return matches[0]
+
+    def find_parameter(
+        self,
+        action: str,
+        parameter: str,
+    ) -> Any | None:
+        """
+        Busca un parámetro dentro del episodio exitoso
+        más reciente de una acción.
+
+        Devuelve None si el episodio o el parámetro
+        no existen.
+        """
+
+        if not parameter:
+            return None
+
+        episode = self.find_latest_by_action(
+            action
+        )
+
+        if episode is None:
+            return None
+
+        parameters = episode.parameters
+
+        if not isinstance(
+            parameters,
+            dict,
+        ):
+            return None
+
+        return parameters.get(
+            parameter
+        )
+
+    def count(self) -> int:
+        """
+        Devuelve la cantidad de episodios registrados.
+        """
+
+        return len(
+            self._memory.find(
+                self._ENTRY_TYPE
+            )
+        )
+
+    def clear(self) -> None:
+        """
+        Elimina todos los episodios.
+
+        No limpia el resto de WorkingMemory.
+        """
+
+        entries = self._memory.find(
+            self._ENTRY_TYPE
+        )
+
+        if not entries:
+            return
+
+        episode_ids = {
+            entry.id
+            for entry in entries
+        }
+
+        self._memory._entries = [
+            entry
+            for entry in self._memory.all()
+            if entry.id not in episode_ids
+        ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\episode_query_engine.py
+================================================================================
+
+from __future__ import annotations
+
+from memory.episode import Episode
+from memory.episode_memory import EpisodeMemory
+
+
+class EpisodeQueryEngine:
+
+    def __init__(
+        self,
+        episode_memory: EpisodeMemory,
+    ) -> None:
+
+        self._episode_memory = episode_memory
+
+    def find_last_by_action(
+        self,
+        action: str,
+    ) -> Episode | None:
+
+        episodes = self._episode_memory.recent(
+            limit=100
+        )
+
+        for episode in reversed(
+            episodes
+        ):
+            if episode.action == action:
+                return episode
+
+        return None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\memory\src\memory\memory_entry.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class MemoryEntry(BaseModel):
+    """
+    Representa un evento almacenado en la
+    Working Memory de NEXUS.
+
+    Una entrada puede representar una solicitud
+    del usuario, una intención, una ejecución o
+    un resultado.
+    """
+
+    id: str
+
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(
+            timezone.utc
+        )
+    )
+
+    type: str
+
+    data: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

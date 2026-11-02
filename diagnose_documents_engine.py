@@ -1,0 +1,87 @@
+
+from types import SimpleNamespace
+
+from bootstrap.bootstrap import build_engine
+from context import AssistantContext, OrganizationProfile, UserProfile
+
+
+def main():
+    print("=== NEXUS: DIAGNOSTICO DOCUMENTS -> ENGINE ===")
+
+    organization = OrganizationProfile.create(
+        name="NEXUS Diagnostic Organization",
+    )
+    user = UserProfile.create(
+        name="NEXUS Diagnostic User",
+        organization_id=organization.id,
+    )
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    engine = build_engine(assistant_context=assistant_context)
+
+    # Acceso interno usado solo para esta prueba diagnóstica.
+    document_access = (
+        engine.document_capability
+        .context_access
+        ._resolver
+        ._access
+    )
+
+    document = document_access.create_document(
+        name="NEXUS_DIAGNOSTIC_DOCUMENT",
+        mime_type="text/plain",
+        source="diagnostic://nexus-engine",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    invocation = SimpleNamespace(
+        capability="documents",
+        operation="find_relevant",
+        parameters={"name": "NEXUS_DIAGNOSTIC_DOCUMENT"},
+    )
+
+    router = engine.cognitive_capability_router
+
+    print("\n[PRUEBA A] Contexto tipo dict, como el del Engine")
+
+    try:
+        result = router.invoke(
+            invocation,
+            context={},
+            assistant_context=assistant_context,
+        )
+        print("DICT_CONTEXT_OK:", True)
+        print("RESULT:", result)
+    except Exception as exc:
+        print("DICT_CONTEXT_OK:", False)
+        print("ERROR_TYPE:", type(exc).__name__)
+        print("ERROR:", str(exc))
+
+    print("\n[PRUEBA B] AssistantContext explícito")
+
+    try:
+        result = router.invoke(
+            invocation,
+            context=assistant_context,
+            assistant_context=assistant_context,
+        )
+        documents = getattr(result, "documents", ())
+        names = [getattr(item, "name", None) for item in documents]
+
+        print("ASSISTANT_CONTEXT_OK:", True)
+        print("DOCUMENT_FOUND:", document.name in names)
+        print("DOCUMENT_NAMES:", names)
+    except Exception as exc:
+        print("ASSISTANT_CONTEXT_OK:", False)
+        print("ERROR_TYPE:", type(exc).__name__)
+        print("ERROR:", str(exc))
+
+    print("\n=== FIN DEL DIAGNOSTICO ===")
+
+
+if __name__ == "__main__":
+    main()

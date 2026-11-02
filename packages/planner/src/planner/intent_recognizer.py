@@ -44,24 +44,31 @@ class IntentRecognizer:
         # capture toda la solicitud.
         #
 
+        # Conservamos el texto original para no perder mayúsculas
+        # en valores que el usuario pide guardar.
         compound_parts = re.split(
-            r"\s+(?:y|e|luego|después|despues|además|ademas)\s+",
-            normalized,
+            r"\s+(?:(?:y|e)\s+)?(?:luego|después|despues|además|ademas)\s+|\s+(?:y|e)\s+",
+            text.strip(),
             maxsplit=1,
+            flags=re.IGNORECASE,
         )
 
         if len(compound_parts) == 2:
-            first_text = compound_parts[0].strip()
-            second_text = compound_parts[1].strip()
+            first_original = compound_parts[0].strip()
+            second_original = compound_parts[1].strip()
+            first_text = first_original.lower()
+            second_text = second_original.lower()
 
             first_intent = self._recognize_single(
                 first_text,
                 context,
+                original_text=first_original,
             )
 
             second_intent = self._recognize_single(
                 second_text,
                 context,
+                original_text=second_original,
                 previous_intent=first_intent,
             )
 
@@ -82,13 +89,13 @@ class IntentRecognizer:
                             action=first_intent.action,
                             confidence=first_intent.confidence,
                             parameters=first_intent.parameters.copy(),
-                            original_text=first_text,
+                            original_text=first_original,
                         ),
                         Intent(
                             action=second_intent.action,
                             confidence=second_intent.confidence,
                             parameters=second_intent.parameters.copy(),
-                            original_text=second_text,
+                            original_text=second_original,
                         ),
                     ],
                 )
@@ -107,6 +114,79 @@ class IntentRecognizer:
         previous_intent: Intent | None = None,
     ) -> Intent:
         text = original_text or normalized
+
+                #
+        # Semantic memory lookup by topic
+        # Supports questions such as:
+        # "¿Qué recordás sobre mi proyecto?"
+        # "¿Qué tenés registrado sobre mi proyecto?"
+        #
+
+        
+        # Semantic memory lookup by topic.
+        # Supports both explicit memory questions and direct factual questions.
+        broad_memory_match = re.search(
+            r"^¿?\s*(?:qué|que)\s+"
+            r"(?:recordás|recordas|recuerdas|tenés registrado|"
+            r"tenes registrado|tienes registrado)\s+"
+            r"(?:sobre|acerca de)\s+"
+            r"(?:mí|mi persona|mi información|mi informacion)"
+            r"[?!.]*$",
+            normalized,
+            re.IGNORECASE,
+        )
+
+        if broad_memory_match:
+            return Intent(
+                action="system.recall_fact",
+                original_text=text,
+                parameters={
+                    "subject": "user",
+                    "predicate": "__all__",
+                },
+            )
+
+        direct_lookup_match = re.search(
+            r"^¿?\s*(?:cuál|cual)\s+es\s+"
+            r"(?:mi|mis)\s+(.+?)[?!.]*$",
+            normalized,
+            re.IGNORECASE,
+        )
+
+        if direct_lookup_match:
+            predicate = direct_lookup_match.group(1).strip()
+            if predicate:
+                return Intent(
+                    action="system.recall_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate,
+                    },
+                )
+
+        memory_lookup_match = re.search(
+            r"^¿?\s*(?:qué|que)\s+"
+            r"(?:recordás|recordas|recuerdas|tenés registrado|"
+            r"tenes registrado|tienes registrado)\s+"
+            r"(?:sobre|acerca de|de)\s+(.+?)[?!.]*$",
+            normalized,
+            re.IGNORECASE,
+        )
+
+        if memory_lookup_match:
+            predicate = memory_lookup_match.group(1).strip()
+
+            if predicate:
+                return Intent(
+                    action="system.recall_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate,
+                    },
+                )
+
 
         #
         # Semantic reference resolution
@@ -142,6 +222,67 @@ class IntentRecognizer:
                     "field": episode_query.field,
                 },
             )
+
+        #
+        # Explicit semantic memory
+        #
+        # V1: explicit requests to remember a fact and retrieve it later.
+        #
+        remember_match = re.match(
+            r"^(?:record[aá]|recordame|acordate|acord[aá]te|"
+            r"guard[aá]|guarda|aprend[eé]|memoriz[aá])\s+"
+            r"(?:que\s+)?(.+?)\s+(?:se llama|es|son|está|esta)\s+"
+            r"(.+?)[.!?]*$",
+            text.strip(),
+            re.IGNORECASE,
+        )
+
+        if remember_match:
+            predicate = re.sub(
+                r"^(?:mi|mis|el|la|los|las|un|una)\s+",
+                "",
+                remember_match.group(1).strip(),
+                flags=re.IGNORECASE,
+            )
+            value = remember_match.group(2).strip().rstrip(".!?")
+            if predicate and value:
+                return Intent(
+                    action="system.remember_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate.lower(),
+                        "value": value,
+                    },
+                )
+
+        if re.search(
+            r"\b(?:qué|que)\s+(?:nombre|dato|información|informacion|color|valor|hecho|preferencia)\s+"
+            r"(?:te\s+)?(?:ped[ií]\s+)?(?:recordar|guardar|memorizar)\b",
+            normalized,
+        ):
+            return Intent(
+                action="system.recall_last_fact",
+                original_text=text,
+                parameters={"subject": "user"},
+            )
+
+        recall_match = re.search(
+            r"\b(?:cómo|como)\s+se\s+llama\s+"
+            r"(?:(?:mi|mis|el|la|los|las|un|una)\s+)?(.+?)[?!.]*$",
+            normalized,
+        )
+        if recall_match:
+            predicate = recall_match.group(1).strip()
+            if predicate:
+                return Intent(
+                    action="system.recall_fact",
+                    original_text=text,
+                    parameters={
+                        "subject": "user",
+                        "predicate": predicate,
+                    },
+                )
 
         #
         # Anaphoric references inside compound intents
@@ -266,6 +407,35 @@ class IntentRecognizer:
                             "application": application,
                         },
                     )
+
+        # Distinguir documentos de aplicaciones antes de la regla genérica system.open_app.
+        file_match = re.match(
+            r"^(?:abr[ií]|abrir|abrime|abrirme)\s+"
+            r"(?:(pdf|docx?|xlsx?|pptx?|txt|csv|jpg|jpeg|png)\s+)?"
+            r"(.+?)"
+            r"(?:\s+en\s+(?:el\s+)?(escritorio|desktop|documentos|documents|descargas|downloads))?$",
+            normalized,
+            re.IGNORECASE,
+        )
+        if file_match:
+            extension, file_name, location_text = file_match.groups()
+            file_name = re.sub(r"^(?:el|la|un|una)\s+", "", file_name.strip())
+            location_text = location_text or "escritorio"
+            locations = {
+                "escritorio": "desktop", "desktop": "desktop",
+                "documentos": "documents", "documents": "documents",
+                "descargas": "downloads", "downloads": "downloads",
+            }
+            if file_name:
+                return Intent(
+                    action="system.open_file",
+                    original_text=text,
+                    parameters={
+                        "file_name": file_name,
+                        "location": locations[location_text],
+                        "extension": extension,
+                    },
+                )
 
         #
         # Open Application
@@ -940,6 +1110,37 @@ class IntentRecognizer:
                 original_text=text,
                 parameters={},
             )
+
+        # Time
+        time_patterns = (
+            r"\bfecha y hora actual(?: del sistema)?\b",
+            r"\bfecha actual y hora(?: del sistema)?\b",
+            r"\bdecime la fecha y hora actual(?: del sistema)?\b",
+            r"\bdecime la fecha y hora\b",
+            r"\bqué hora es\b",
+            r"\bque hora es\b",
+            r"\bdecime la hora\b",
+            r"\bdecíme la hora\b",
+            r"\bdime la hora\b",
+            r"\bdecime qué hora es\b",
+            r"\bdecime que hora es\b",
+            r"\bdecíme qué hora es\b",
+            r"\bqué hora tenemos\b",
+            r"\bque hora tenemos\b",
+            r"\bme decís la hora\b",
+            r"\bme decis la hora\b",
+        )
+
+        if any(
+            re.search(pattern, normalized)
+            for pattern in time_patterns
+        ):
+            return Intent(
+                action="system.get_time",
+                original_text=text,
+                parameters={},
+            )
+
 
         #
         # Unknown

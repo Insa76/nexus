@@ -1,0 +1,2080 @@
+﻿
+================================================================================
+ARCHIVO: apps\console\src\main.tsx
+================================================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import Assistant from "./Assistant";
+import "./index.css";
+
+const isAssistant = window.location.pathname === "/assistant";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    {isAssistant ? <Assistant /> : <App />}
+  </React.StrictMode>,
+);
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\presence\adapter.ts
+================================================================================
+
+import { mockPresence } from "./mockPresence";
+import type {
+  NexusPresenceEvent,
+  NexusPresenceState,
+  NexusPresenceStateModel,
+} from "./types";
+
+export interface PresenceAdapter {
+  getCurrentState(): NexusPresenceStateModel;
+
+  subscribe(
+    listener: (state: NexusPresenceStateModel) => void,
+  ): () => void;
+}
+
+const PRESENCE_API_URL =
+  "http://127.0.0.1:8765/api/presence";
+
+const PRESENCE_EVENTS_URL =
+  "http://127.0.0.1:8765/api/presence/events";
+
+const POLL_INTERVAL_MS = 1000;
+
+class HttpPresenceAdapter implements PresenceAdapter {
+  private state: NexusPresenceStateModel = mockPresence;
+
+  private listeners = new Set<
+    (state: NexusPresenceStateModel) => void
+  >();
+
+  private pollTimer: ReturnType<typeof setInterval> | null =
+    null;
+
+  private eventSource: EventSource | null = null;
+
+  private refreshing = false;
+
+  private sseConnected = false;
+
+  /*
+   * Timestamp of the first presence event of the current
+   * cognitive cycle.
+   */
+  private currentCycleStartedAt: string | null = null;
+
+  /*
+   * Presence events belonging exclusively to the current
+   * cognitive cycle.
+   */
+  private currentCycleEvents: NexusPresenceEvent[] = [];
+
+  getCurrentState(): NexusPresenceStateModel {
+    return this.state;
+  }
+
+  subscribe(
+    listener: (state: NexusPresenceStateModel) => void,
+  ): () => void {
+    this.listeners.add(listener);
+
+    listener(this.state);
+
+    void this.refresh();
+
+    this.startSSE();
+
+    this.startPolling();
+
+    return () => {
+      this.listeners.delete(listener);
+
+      if (this.listeners.size === 0) {
+        this.stopSSE();
+        this.stopPolling();
+      }
+    };
+  }
+
+  private startSSE(): void {
+    if (this.eventSource !== null) {
+      return;
+    }
+
+    if (typeof EventSource === "undefined") {
+      return;
+    }
+
+    try {
+      const eventSource = new EventSource(
+        PRESENCE_EVENTS_URL,
+      );
+
+      this.eventSource = eventSource;
+
+      eventSource.onopen = () => {
+        this.sseConnected = true;
+      };
+
+      eventSource.addEventListener(
+        "presence",
+        (event) => {
+          this.handlePresenceEvent(event);
+        },
+      );
+
+      eventSource.onerror = () => {
+        this.sseConnected = false;
+
+        /*
+         * EventSource automatically attempts to reconnect.
+         *
+         * HTTP snapshot polling remains available as fallback.
+         */
+      };
+    } catch {
+      this.sseConnected = false;
+      this.eventSource = null;
+    }
+  }
+
+  private stopSSE(): void {
+    if (this.eventSource === null) {
+      return;
+    }
+
+    this.eventSource.close();
+
+    this.eventSource = null;
+    this.sseConnected = false;
+  }
+
+  private handlePresenceEvent(
+    event: MessageEvent<string>,
+  ): void {
+    try {
+      const payload = JSON.parse(
+        event.data,
+      ) as {
+        state?: string;
+        timestamp?: string;
+        message?: string | null;
+        data?: unknown;
+      };
+
+      if (!payload.state) {
+        return;
+      }
+
+      const state = this.normalizeState(
+        payload.state,
+      );
+
+      if (state === null) {
+        return;
+      }
+
+      const timestamp =
+        payload.timestamp ??
+        new Date().toISOString();
+
+      /*
+       * LISTENING marks the beginning of a new cognitive
+       * cycle.
+       *
+       * Everything that was previously visible in the
+       * timeline belongs to an older cycle.
+       */
+      if (state === "listening") {
+        this.startNewCycle(timestamp);
+      }
+
+      const presenceEvent: NexusPresenceEvent = {
+        id: `sse-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`,
+        type: state,
+        timestamp,
+        message:
+          payload.message ??
+          undefined,
+        data: payload.data,
+      };
+
+      this.addCurrentCycleEvent(
+        presenceEvent,
+      );
+
+      this.state = {
+        ...this.state,
+        state,
+        events: this.currentCycleEvents,
+      };
+
+      this.emit();
+
+      /*
+       * Terminal states trigger a complete snapshot refresh.
+       *
+       * The snapshot supplies objective, plan, execution,
+       * verification, memory and learning details while the
+       * current-cycle SSE events remain the timeline source.
+       */
+      if (
+        state === "completed" ||
+        state === "failed"
+      ) {
+        void this.refresh();
+      }
+    } catch {
+      /*
+       * Invalid SSE payloads must never break the adapter.
+       */
+    }
+  }
+
+  private startNewCycle(
+    timestamp: string,
+  ): void {
+    this.currentCycleStartedAt = timestamp;
+    this.currentCycleEvents = [];
+  }
+
+  private addCurrentCycleEvent(
+    event: NexusPresenceEvent,
+  ): void {
+    const exists =
+      this.currentCycleEvents.some(
+        (existing) =>
+          existing.timestamp ===
+            event.timestamp &&
+          existing.type === event.type &&
+          existing.message ===
+            event.message,
+      );
+
+    if (exists) {
+      return;
+    }
+
+    this.currentCycleEvents = [
+      ...this.currentCycleEvents,
+      event,
+    ];
+  }
+
+  private normalizeState(
+    value: string,
+  ): NexusPresenceState | null {
+    const states: NexusPresenceState[] = [
+      "idle",
+      "listening",
+      "understanding",
+      "thinking",
+      "deciding",
+      "executing",
+      "verifying",
+      "completed",
+      "needs_confirmation",
+      "failed",
+      "recovering",
+    ];
+
+    if (
+      states.includes(
+        value as NexusPresenceState,
+      )
+    ) {
+      return value as NexusPresenceState;
+    }
+
+    return null;
+  }
+
+  private startPolling(): void {
+    if (this.pollTimer !== null) {
+      return;
+    }
+
+    this.pollTimer = setInterval(() => {
+      void this.refresh();
+    }, POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer === null) {
+      return;
+    }
+
+    clearInterval(this.pollTimer);
+
+    this.pollTimer = null;
+  }
+
+  private async refresh(): Promise<void> {
+    if (this.refreshing) {
+      return;
+    }
+
+    this.refreshing = true;
+
+    try {
+      const response = await fetch(
+        PRESENCE_API_URL,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+          },
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `Presence API returned HTTP ${response.status}`,
+        );
+      }
+
+      const nextState =
+        (await response.json()) as NexusPresenceStateModel;
+
+      if (
+        !this.shouldAcceptSnapshot(
+          nextState,
+        )
+      ) {
+        return;
+      }
+
+      /*
+       * Preserve the SSE event timeline whenever a current
+       * cycle exists.
+       *
+       * The snapshot is still responsible for all the richer
+       * cognitive data.
+       */
+      const events =
+        this.resolveSnapshotEvents(
+          nextState,
+        );
+
+      this.state = {
+        ...nextState,
+        events,
+      };
+
+      this.emit();
+    } catch {
+      /*
+       * Preserve the last known state.
+       */
+    } finally {
+      this.refreshing = false;
+    }
+  }
+
+  private resolveSnapshotEvents(
+    nextState: NexusPresenceStateModel,
+  ): NexusPresenceEvent[] {
+    /*
+     * Once an SSE cycle has started, Presence events are the
+     * authoritative source for the live/current timeline.
+     */
+    if (
+      this.currentCycleStartedAt !== null
+    ) {
+      return this.currentCycleEvents;
+    }
+
+    /*
+     * Before the first live cycle exists, use the snapshot.
+     *
+     * The snapshot may contain multiple historical cognitive
+     * cycles. Keep only the latest one so the console timeline
+     * represents the current cognitive cycle rather than
+     * historical runtime activity.
+     */
+    return this.filterToLatestSnapshotCycle(
+      nextState,
+    );
+  }
+
+  private filterToLatestSnapshotCycle(
+  presence: NexusPresenceStateModel,
+): NexusPresenceEvent[] {
+  if (presence.events.length === 0) {
+    return [];
+  }
+
+  /*
+   * Preferred boundary:
+   *
+   * The runtime stores the user request timestamp.
+   * When available, it represents the beginning of the
+   * latest request/cognitive cycle.
+   */
+  const requestTimestamp =
+    presence.request?.timestamp;
+
+  if (requestTimestamp) {
+    const requestTime =
+      Date.parse(requestTimestamp);
+
+    if (!Number.isNaN(requestTime)) {
+      return presence.events.filter(
+        (event) => {
+          const eventTime =
+            Date.parse(event.timestamp);
+
+          if (Number.isNaN(eventTime)) {
+            return true;
+          }
+
+          return eventTime >= requestTime;
+        },
+      );
+    }
+  }
+
+  /*
+   * Snapshot fallback:
+   *
+   * Historical runtime snapshots use semantic event types
+   * such as:
+   *
+   * request → context → intent → decision → objective
+   * → plan → execution → verification → memory → learning
+   *
+   * Therefore REQUEST is the cycle boundary for snapshot
+   * events.
+   *
+   * Find the LAST request event so only the newest cognitive
+   * cycle remains visible in the console.
+   */
+  let latestRequestIndex = -1;
+
+  for (
+    let index = 0;
+    index < presence.events.length;
+    index += 1
+  ) {
+    const event = presence.events[index];
+
+    if (event.type === "request") {
+      latestRequestIndex = index;
+    }
+  }
+
+  if (latestRequestIndex >= 0) {
+    return presence.events.slice(
+      latestRequestIndex,
+    );
+  }
+
+  /*
+   * If the snapshot contains no recognizable request
+   * boundary, preserve the snapshot rather than guessing.
+   */
+  return presence.events;
+}
+
+  private shouldAcceptSnapshot(
+    nextState: NexusPresenceStateModel,
+  ): boolean {
+    if (!this.sseConnected) {
+      return true;
+    }
+
+    /*
+     * Terminal snapshots are always accepted because they
+     * contain the complete final execution information.
+     */
+    if (
+      nextState.state === "completed" ||
+      nextState.state === "failed"
+    ) {
+      return true;
+    }
+
+    return this.isSnapshotNewer(
+      nextState,
+      this.state,
+    );
+  }
+
+  private isSnapshotNewer(
+    nextState: NexusPresenceStateModel,
+    currentState: NexusPresenceStateModel,
+  ): boolean {
+    const nextTimestamp =
+      this.getLatestTimestamp(nextState);
+
+    const currentTimestamp =
+      this.getLatestTimestamp(currentState);
+
+    if (
+      nextTimestamp === null ||
+      currentTimestamp === null
+    ) {
+      return true;
+    }
+
+    return (
+      nextTimestamp >= currentTimestamp
+    );
+  }
+
+  private getLatestTimestamp(
+    state: NexusPresenceStateModel,
+  ): number | null {
+    const timestamps: number[] = [];
+
+    if (state.request?.timestamp) {
+      const value = Date.parse(
+        state.request.timestamp,
+      );
+
+      if (!Number.isNaN(value)) {
+        timestamps.push(value);
+      }
+    }
+
+    for (const event of state.events) {
+      const value = Date.parse(
+        event.timestamp,
+      );
+
+      if (!Number.isNaN(value)) {
+        timestamps.push(value);
+      }
+    }
+
+    if (timestamps.length === 0) {
+      return null;
+    }
+
+    return Math.max(...timestamps);
+  }
+
+  private emit(): void {
+    for (const listener of this.listeners) {
+      listener(this.state);
+    }
+  }
+}
+
+export const presenceAdapter =
+  new HttpPresenceAdapter();
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\presence\cycles.ts
+================================================================================
+
+import type {
+  NexusPresenceStateModel,
+} from "./types";
+
+export type CognitiveCycleStatus =
+  | "active"
+  | "completed"
+  | "failed";
+
+export type CognitiveCycleEvent = {
+  id: string;
+  type: string;
+  timestamp: string;
+  message?: string;
+  data?: unknown;
+};
+
+export type CognitiveCycle = {
+  id: string;
+  startedAt: string;
+  endedAt?: string;
+  request?: CognitiveCycleEvent;
+  events: CognitiveCycleEvent[];
+  status: CognitiveCycleStatus;
+  eventCount: number;
+};
+
+function getCycleStatus(
+  events: CognitiveCycleEvent[],
+): CognitiveCycleStatus {
+  const lastEvent = events[events.length - 1];
+
+  if (!lastEvent) {
+    return "active";
+  }
+
+  if (
+    lastEvent.type === "verification_failure" ||
+    lastEvent.type === "failed"
+  ) {
+    return "failed";
+  }
+
+  if (
+    lastEvent.type === "episode" ||
+    lastEvent.type === "completed"
+  ) {
+    return "completed";
+  }
+
+  return "active";
+}
+
+function createCycle(
+  events: CognitiveCycleEvent[],
+): CognitiveCycle | null {
+  if (events.length === 0) {
+    return null;
+  }
+
+  const request = events.find(
+    (event) => event.type === "user_request",
+  );
+
+  const startedAt =
+    request?.timestamp ??
+    events[0].timestamp;
+
+  const lastEvent =
+    events[events.length - 1];
+
+  const status = getCycleStatus(events);
+
+  return {
+    id: request?.id ?? events[0].id,
+    startedAt,
+    endedAt:
+      status === "active"
+        ? undefined
+        : lastEvent.timestamp,
+    request,
+    events,
+    status,
+    eventCount: events.length,
+  };
+}
+
+export function buildCycleHistory(
+  presence: NexusPresenceStateModel,
+): CognitiveCycle[] {
+  const sourceEvents = presence.events;
+
+  if (sourceEvents.length === 0) {
+    return [];
+  }
+
+  const cycles: CognitiveCycle[] = [];
+  let currentEvents: CognitiveCycleEvent[] = [];
+
+  for (const event of sourceEvents) {
+    const normalizedEvent: CognitiveCycleEvent = {
+      id: event.id,
+      type: event.type,
+      timestamp: event.timestamp,
+      message: event.message,
+      data: event.data,
+    };
+
+    if (
+      normalizedEvent.type === "user_request" &&
+      currentEvents.length > 0
+    ) {
+      const previousCycle = createCycle(
+        currentEvents,
+      );
+
+      if (previousCycle) {
+        cycles.push(previousCycle);
+      }
+
+      currentEvents = [];
+    }
+
+    currentEvents.push(normalizedEvent);
+  }
+
+  const lastCycle = createCycle(
+    currentEvents,
+  );
+
+  if (lastCycle) {
+    cycles.push(lastCycle);
+  }
+
+  return cycles;
+}
+
+export function getCurrentCycle(
+  presence: NexusPresenceStateModel,
+): CognitiveCycle | null {
+  const cycles = buildCycleHistory(presence);
+
+  return cycles.length > 0
+    ? cycles[cycles.length - 1]
+    : null;
+}
+
+export function getHistoricalCycles(
+  presence: NexusPresenceStateModel,
+): CognitiveCycle[] {
+  const cycles = buildCycleHistory(presence);
+
+  if (cycles.length <= 1) {
+    return [];
+  }
+
+  return cycles.slice(0, -1);
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\presence\learningCandidates.ts
+================================================================================
+
+export type StoredLearningCandidate = {
+  id: string;
+  insightId: string;
+  title: string;
+  knowledge: string;
+  sourceCycleIds: string[];
+  evidenceKeys: string[];
+  createdAt: string;
+  status?: "staged" | "promoted";
+  promotedAt?: string;
+  memoryKey?: string;
+};
+
+const STORAGE_KEY = "nexus.learning-candidates.v1";
+
+function isCandidate(value: unknown): value is StoredLearningCandidate {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    (typeof candidate.id === "string" || candidate.id === undefined) &&
+    typeof candidate.insightId === "string" &&
+    typeof candidate.title === "string" &&
+    typeof candidate.knowledge === "string" &&
+    Array.isArray(candidate.sourceCycleIds) &&
+    candidate.sourceCycleIds.every((item) => typeof item === "string") &&
+    Array.isArray(candidate.evidenceKeys) &&
+    candidate.evidenceKeys.every((item) => typeof item === "string") &&
+    typeof candidate.createdAt === "string"
+  );
+}
+
+export function loadLearningCandidates(): StoredLearningCandidate[] {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+
+    if (!raw) {
+      return [];
+    }
+
+    const parsed: unknown = JSON.parse(raw);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(isCandidate).map((candidate) => ({
+      ...candidate,
+      id:
+        typeof candidate.id === "string"
+          ? candidate.id
+          : `insight-${candidate.insightId}-${candidate.sourceCycleIds.slice().sort().join("--")}`,
+      status: candidate.status ?? "staged",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function persist(candidates: StoredLearningCandidate[]): void {
+  try {
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(candidates),
+    );
+  } catch {
+    // Local storage is an optional UI persistence layer.
+  }
+}
+
+export function saveLearningCandidate(
+  candidate: StoredLearningCandidate,
+): void {
+  const current = loadLearningCandidates();
+
+  const exists = current.some(
+    (item) =>
+      item.insightId === candidate.insightId &&
+      item.sourceCycleIds.length === candidate.sourceCycleIds.length &&
+      item.sourceCycleIds.every((id) => candidate.sourceCycleIds.includes(id)),
+  );
+
+  if (exists) {
+    return;
+  }
+
+  persist([candidate, ...current]);
+}
+
+export function updateLearningCandidate(
+  candidate: StoredLearningCandidate,
+): void {
+  const current = loadLearningCandidates();
+  const index = current.findIndex((item) => item.id === candidate.id);
+
+  if (index === -1) {
+    return;
+  }
+
+  current[index] = candidate;
+  persist(current);
+}
+
+export function removeLearningCandidate(
+  candidate: StoredLearningCandidate,
+): void {
+  const current = loadLearningCandidates();
+
+  persist(
+    current.filter(
+      (item) =>
+        !(
+          item.insightId === candidate.insightId &&
+          item.createdAt === candidate.createdAt &&
+          item.sourceCycleIds.length === candidate.sourceCycleIds.length &&
+          item.sourceCycleIds.every((id) => candidate.sourceCycleIds.includes(id))
+        ),
+    ),
+  );
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\presence\mockPresence.ts
+================================================================================
+
+import type { NexusPresenceStateModel } from "./types";
+
+export const mockPresence: NexusPresenceStateModel = {
+  state: "completed",
+
+  request: {
+    text: "Cerrá Chrome",
+    timestamp: new Date().toISOString(),
+  },
+
+  context: null,
+
+  intent: {
+    name: "close_application",
+    confidence: 0.97,
+  },
+
+  decision: {
+    type: "execute",
+    reason:
+      "The requested action is clear and executable.",
+  },
+
+  objective: {
+    description: "Close Chrome",
+  },
+
+  plan: {
+    steps: [
+      {
+        id: "step-1",
+        action: "system.close_app",
+        status: "completed",
+        description:
+          "Close the requested application.",
+      },
+    ],
+  },
+
+  execution: {
+    status: "completed",
+    action: "system.close_app",
+    result: {
+      success: true,
+    },
+  },
+
+  verification: {
+    status: "verified",
+    confidence: 1,
+    message:
+      "The requested application was closed successfully.",
+  },
+
+  memory: {
+    status: "stored",
+    entries: 1,
+  },
+
+  learning: {
+    status: "learned",
+    message:
+      "Execution experience available for future reuse.",
+  },
+
+  events: [
+    {
+      id: "event-1",
+      type: "request",
+      timestamp: new Date().toISOString(),
+      message: "Request received.",
+    },
+    {
+      id: "event-2",
+      type: "intent",
+      timestamp: new Date().toISOString(),
+      message: "Intent resolved.",
+    },
+    {
+      id: "event-3",
+      type: "decision",
+      timestamp: new Date().toISOString(),
+      message: "Decision: execute.",
+    },
+    {
+      id: "event-4",
+      type: "execution",
+      timestamp: new Date().toISOString(),
+      message: "Action executed.",
+    },
+    {
+      id: "event-5",
+      type: "verification",
+      timestamp: new Date().toISOString(),
+      message: "Execution verified.",
+    },
+  ],
+};
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\presence\types.ts
+================================================================================
+
+export type NexusPresenceState =
+  | "idle"
+  | "listening"
+  | "understanding"
+  | "thinking"
+  | "deciding"
+  | "executing"
+  | "verifying"
+  | "completed"
+  | "needs_confirmation"
+  | "failed"
+  | "recovering";
+
+export type NexusDecisionType =
+  | "execute"
+  | "confirm"
+  | "reject"
+  | "recover"
+  | "none";
+
+export type NexusExecutionStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type NexusVerificationStatus =
+  | "pending"
+  | "verified"
+  | "verified_with_limited_evidence"
+  | "failed";
+
+export type NexusMemoryStatus =
+  | "pending"
+  | "not_required"
+  | "stored"
+  | "failed";
+
+export type NexusLearningStatus =
+  | "pending"
+  | "not_required"
+  | "learned"
+  | "failed";
+
+export type NexusPlanStepStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface NexusPresenceRequest {
+  text: string;
+  timestamp?: string;
+}
+
+export interface NexusPresenceContext {
+  recent_interactions?: unknown[];
+  recent_episodes?: unknown[];
+  semantic_knowledge?: unknown[];
+  last_request?: unknown;
+  last_intent?: unknown;
+  last_result?: unknown;
+  [key: string]: unknown;
+}
+
+export interface NexusPresenceIntent {
+  name: string;
+  confidence: number;
+}
+
+export interface NexusPresenceDecision {
+  type: NexusDecisionType;
+  reason?: string;
+}
+
+export interface NexusPresenceObjective {
+  description: string;
+}
+
+export interface NexusPresencePlanStep {
+  id?: string;
+  action: string;
+  status: NexusPlanStepStatus;
+  description?: string;
+}
+
+export interface NexusPresencePlan {
+  steps: NexusPresencePlanStep[];
+}
+
+export interface NexusPresenceExecution {
+  status: NexusExecutionStatus;
+  action?: string;
+  result?: unknown;
+  error?: string | null;
+}
+
+export interface NexusPresenceVerification {
+  status: NexusVerificationStatus;
+  confidence?: number;
+  message?: string;
+}
+
+export interface NexusPresenceMemory {
+  status: NexusMemoryStatus;
+  entries?: number;
+  message?: string;
+}
+
+export interface NexusPresenceLearning {
+  status: NexusLearningStatus;
+  message?: string;
+}
+
+export interface NexusPresenceEvent {
+  id: string;
+  type: string;
+  timestamp: string;
+  message?: string;
+  data?: unknown;
+}
+
+export interface NexusPresenceStateModel {
+  state: NexusPresenceState;
+
+  request: NexusPresenceRequest | null;
+
+  context: NexusPresenceContext | null;
+
+  intent: NexusPresenceIntent | null;
+
+  decision: NexusPresenceDecision | null;
+
+  objective: NexusPresenceObjective | null;
+
+  plan: NexusPresencePlan | null;
+
+  execution: NexusPresenceExecution | null;
+
+  verification: NexusPresenceVerification | null;
+
+  memory: NexusPresenceMemory | null;
+
+  learning: NexusPresenceLearning | null;
+
+  events: NexusPresenceEvent[];
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\tsconfig.app.json
+================================================================================
+
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["vite/client"],
+    "allowArbitraryExtensions": true,
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src"]
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\tsconfig.json
+================================================================================
+
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.app.json" },
+    { "path": "./tsconfig.node.json" }
+  ]
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\tsconfig.node.json
+================================================================================
+
+{
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
+    "target": "es2023",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "module": "nodenext",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["vite.config.ts"]
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\vite.config.ts
+================================================================================
+
+import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite'
+
+// https://vite.dev/config/
+export default defineConfig({
+  plugins: [react()],
+})
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\.env
+================================================================================
+
+DB_URL = "postgresql://nexus:insa2025@localhost:5432/nexus"
+OPENAI_API_KEY=tu_api_key
+
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\actions\planner.py
+================================================================================
+
+import json
+import ollama
+from actions.system_actions import execute_action
+
+
+SYSTEM = """
+Sos Nexus Planner.
+
+Convertí la orden del usuario en un PLAN JSON.
+
+Formato:
+{
+  "steps": [
+    {"action": "create_folder", "value": "PDF"},
+    {"action": "move_files", "value": {"ext": ".pdf", "to": "PDF"}}
+  ]
+}
+
+Acciones disponibles:
+- open_app
+- open_file
+- create_folder
+- move_files
+- run_cmd
+
+Solo devolver JSON.
+"""
+
+
+def run_plan(user_message: str):
+
+    res = ollama.chat(
+        model="llama3",
+        messages=[
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user_message}
+        ]
+    )
+
+    content = res["message"]["content"]
+
+    try:
+        plan = json.loads(content)
+    except:
+        return "No pude generar un plan."
+
+    outputs = []
+
+    for step in plan.get("steps", []):
+        out = execute_action(step["action"], step["value"])
+        outputs.append(out)
+
+    return "\n".join(outputs)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\actions\plugins\__init__.py
+================================================================================
+
+import importlib
+import pkgutil
+
+
+def load_plugins():
+
+    for loader, name, is_pkg in pkgutil.iter_modules(__path__):
+        importlib.import_module(f"{__name__}.{name}")
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\actions\plugins\filesystem.py
+================================================================================
+
+import os
+import shutil
+from pathlib import Path
+
+from actions.registry import register_action
+
+
+def create_folder(value):
+
+    Path(value).mkdir(parents=True, exist_ok=True)
+
+    return f"Carpeta creada: {value}"
+
+
+def list_dir(value):
+
+    files = os.listdir(value or ".")
+
+    return "\n".join(files)
+
+
+def move_files(value):
+
+    ext = value["ext"]
+    to = value["to"]
+
+    Path(to).mkdir(exist_ok=True)
+
+    moved = 0
+
+    for f in os.listdir("."):
+        if f.lower().endswith(ext):
+            shutil.move(f, os.path.join(to, f))
+            moved += 1
+
+    return f"{moved} archivos movidos a {to}"
+
+
+register_action("create_folder", create_folder)
+register_action("list_dir", list_dir)
+register_action("move_files", move_files)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\actions\registry.py
+================================================================================
+
+ACTIONS = {}
+
+
+def register_action(name, fn):
+    ACTIONS[name] = fn
+
+
+def get_action(name):
+    return ACTIONS.get(name)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\actions\system_actions.py
+================================================================================
+
+import os
+import subprocess
+import shutil
+import time
+import webbrowser
+from pathlib import Path
+import asyncio
+
+import psutil
+
+from plugins.loader import run_plugin, load_plugins
+from security.policy import requires_confirm, is_path_allowed
+from security.logger import log
+from learning.tracker import track
+
+from integrations.http_client import http_request
+from integrations.slack import send_slack
+from integrations.email import send_email
+
+from actions.registry import get_action
+
+
+# ==================================================
+# 🔥 CARGAR PLUGINS
+# ==================================================
+
+load_plugins()
+
+
+# ==================================================
+# 🔥 ALIASES
+# ==================================================
+
+ALIASES = {
+    "open_browser": "open_app",
+    "launch_app": "open_app",
+    "start_app": "open_app",
+    "delete": "delete_file",
+    "remove_file": "delete_file",
+    "copy": "copy_file",
+    "move": "move_files",
+}
+
+
+def normalize(action: str):
+    return ALIASES.get(action, action)
+
+
+# ==================================================
+# 🔐 ROLES
+# ==================================================
+
+def check_role(user, action):
+
+    role = user.get("role")
+
+    if role == "admin":
+        return True
+
+    if role == "staff" and action in [
+        "delete_file", "run_cmd", "kill_process"
+    ]:
+        return False
+
+    if role == "viewer":
+        return False
+
+    return True
+
+
+# ==================================================
+# 🔐 SEGURIDAD
+# ==================================================
+
+def confirm_if_needed(action, value, auto=True):
+
+    if auto:
+        return True
+
+    try:
+        resp = input(f"Confirmar acción {action}? (y/n): ")
+        return resp.lower() == "y"
+    except:
+        return False
+
+
+def sandbox_check(value):
+    if isinstance(value, str) and ("\\" in value or "/" in value):
+        if not is_path_allowed(value):
+            return False
+    return True
+
+
+# ==================================================
+# 🔥 MAIN EXECUTOR (ASYNC)
+# ==================================================
+
+async def execute_action(action, value, user=None):
+
+    if user is None:
+        user = {"role": "admin"}
+
+    action = normalize(action)
+
+    if not check_role(user, action):
+        return "⛔ Permiso denegado"
+
+    if not sandbox_check(value):
+        return "⛔ Ruta no permitida por seguridad"
+
+    if not confirm_if_needed(action, value):
+        return "Acción cancelada"
+
+    result = None
+
+    plugin = get_action(action)
+
+    if plugin:
+      result = plugin(value)
+      return result
+
+    # ==================================================
+    # 📦 APPS
+    # ==================================================
+
+    if action == "open_app":
+
+        shortcuts = {
+            "chrome": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            "edge": r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            "notepad": "notepad",
+            "calc": "calc",
+        }
+
+        value = shortcuts.get(str(value).lower(), value)
+        subprocess.Popen(value)
+        result = f"Abriendo {value}"
+
+    elif action == "open_url":
+
+        webbrowser.open(value)
+        result = f"Abriendo URL {value}"
+
+    # ==================================================
+    # 📁 FILESYSTEM
+    # ==================================================
+
+    elif action == "list_dir":
+        files = os.listdir(value or ".")
+        result = "\n".join(files)
+
+    elif action == "read_file":
+        result = Path(value).read_text(encoding="utf-8")
+
+    elif action == "write_file":
+        Path(value["path"]).write_text(value["content"], encoding="utf-8")
+        result = f"Archivo guardado: {value['path']}"
+
+    elif action == "delete_file":
+        os.remove(value)
+        result = f"Archivo eliminado: {value}"
+
+    elif action == "copy_file":
+        shutil.copy(value["src"], value["dst"])
+        result = "Archivo copiado"
+
+    elif action == "rename_file":
+        os.rename(value["src"], value["dst"])
+        result = "Archivo renombrado"
+
+    elif action == "create_folder":
+        Path(value).mkdir(parents=True, exist_ok=True)
+        result = f"Carpeta creada: {value}"
+
+    elif action == "move_files":
+
+        ext = value["ext"]
+        to = value["to"]
+
+        Path(to).mkdir(exist_ok=True)
+
+        moved = 0
+
+        for f in os.listdir("."):
+            if f.lower().endswith(ext):
+                shutil.move(f, os.path.join(to, f))
+                moved += 1
+
+        result = f"{moved} archivos movidos a {to}"
+
+    # ==================================================
+    # 🌐 INTEGRACIONES EXTERNAS
+    # ==================================================
+
+    elif action == "http_request":
+
+        result = await http_request(
+            value["method"],
+            value["url"],
+            value.get("headers"),
+            value.get("body"),
+            value.get("timeout", 10)
+        )
+
+    elif action == "send_slack":
+
+        result = await send_slack(
+            value["webhook_url"],
+            value["message"]
+        )
+
+    elif action == "send_email":
+
+        result = await send_email(
+            value["smtp_host"],
+            value["smtp_port"],
+            value["username"],
+            value["password"],
+            value["to"],
+            value["subject"],
+            value["body"]
+        )
+
+    # ==================================================
+    # 🖥 SISTEMA
+    # ==================================================
+
+    elif action == "list_processes":
+        names = [p.info['name'] for p in psutil.process_iter(['name'])]
+        result = "\n".join(names)
+
+    elif action == "kill_process":
+
+        for p in psutil.process_iter(['name']):
+            if p.info['name'].lower() == value.lower():
+                p.kill()
+                result = f"{value} finalizado"
+                break
+        else:
+            result = "Proceso no encontrado"
+
+    elif action == "get_time":
+        from datetime import datetime
+        result = datetime.now().strftime("%H:%M:%S")
+
+    elif action == "system_info":
+
+        result = f"""
+        OS: {os.name}
+        CPU: {psutil.cpu_percent()}%
+        RAM: {psutil.virtual_memory().percent}%
+        """
+
+    elif action == "sleep":
+        await asyncio.sleep(float(value))
+        result = f"Esperado {value}s"
+
+    # ==================================================
+    # 💻 SHELL
+    # ==================================================
+
+    elif action == "run_cmd":
+        result = subprocess.getoutput(value)
+
+    # ==================================================
+    # 🔌 PLUGINS
+    # ==================================================
+
+    else:
+
+        plugin_result = run_plugin(action, value)
+
+        if plugin_result is not None:
+            result = plugin_result
+        else:
+            result = f"Acción no reconocida: {action}"
+
+    # ==================================================
+    # 🔥 LOG + TRACK
+    # ==================================================
+
+    log(action, result)
+    track(action, value)
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\ai\ollama_client.py
+================================================================================
+
+import requests
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+
+def ask_ollama(prompt):
+
+    payload = {
+        "model": "phi3",
+        "prompt": prompt,
+        "stream": False
+    }
+
+    r = requests.post(OLLAMA_URL, json=payload)
+
+    data = r.json()
+
+    return data["response"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\ai\planner.py
+================================================================================
+
+import json
+from ai.ollama_client import ask_ollama
+from memory.nexus_memory import load_memory
+
+
+PLANNER_PROMPT = """
+You are an AI system planner.
+
+Your task is to create a plan to automate a user request.
+
+Return JSON only.
+
+Schema:
+
+{
+ "goal": "user goal",
+ "plan": [
+   "step 1",
+   "step 2"
+ ]
+}
+"""
+
+
+def create_plan(user_prompt):
+
+    memory = load_memory()
+
+    memory_context = json.dumps(memory)
+
+    full_prompt = (
+        PLANNER_PROMPT
+        + "\n\nSystem memory:\n"
+        + memory_context
+        + "\n\nUser request:\n"
+        + user_prompt
+    )
+
+    response = ask_ollama(full_prompt)
+
+    try:
+        plan = json.loads(response)
+    except:
+        raise Exception("Planner devolvió JSON inválido")
+
+    return plan
+
+
+def plan_to_workflow(plan):
+
+    steps = []
+
+    for p in plan["plan"]:
+
+        text = p.lower()
+
+        if "carpeta" in text:
+
+            steps.append({
+                "type": "action",
+                "action": "create_folder",
+                "value": "data"
+            })
+
+        elif "mover" in text:
+
+            steps.append({
+                "type": "action",
+                "action": "move_files",
+                "value": {
+                    "ext": ".pdf",
+                    "to": "PDF"
+                }
+            })
+
+        elif "listar" in text:
+
+            steps.append({
+                "type": "action",
+                "action": "list_dir",
+                "value": "."
+            })
+
+    return {
+        "name": "ai_generated_workflow",
+        "trigger": "manual",
+        "steps": steps
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\ai\workflow_generator.py
+================================================================================
+
+import json
+from ai.ollama_client import ask_ollama
+
+
+SYSTEM_PROMPT = """
+You are an automation engine.
+
+Return ONLY valid JSON.
+
+Schema:
+
+{
+ "name": "workflow_name",
+ "trigger": "manual",
+ "steps":[
+   {
+     "type":"action",
+     "action":"create_folder",
+     "value":"folder"
+   }
+ ]
+}
+
+Allowed actions:
+
+create_folder
+move_files
+list_dir
+read_file
+write_file
+delete_file
+run_cmd
+open_url
+"""
+
+
+def generate_workflow(prompt):
+
+    full_prompt = SYSTEM_PROMPT + "\n\nUser request:\n" + prompt
+
+    response = ask_ollama(full_prompt)
+
+    try:
+        workflow = json.loads(response)
+    except:
+        raise Exception("LLM devolvió JSON inválido")
+
+    return workflow
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\ai.py
+================================================================================
+
+from fastapi import APIRouter, HTTPException
+
+from brain.ai_planner import generate_workflow
+from workflows.validator import validate_workflow
+from workflows.repository import save_workflow_version
+
+router = APIRouter(prefix="/ai", tags=["AI"])
+
+
+@router.post("/workflow")
+async def ai_workflow(data: dict):
+
+    task = data.get("task")
+
+    if not task:
+        raise HTTPException(
+            status_code=400,
+            detail="task requerido"
+        )
+
+    try:
+
+        # 1️⃣ generar workflow con IA
+        wf = generate_workflow(task)
+
+        # 2️⃣ validar estructura
+        wf = validate_workflow(wf)
+
+        # 3️⃣ guardar en DB
+        save_workflow_version(
+            wf["name"],
+            wf.get("trigger", "manual"),
+            wf["steps"]
+        )
+
+        return {
+            "ok": True,
+            "workflow": wf
+        }
+
+    except Exception as e:
+
+        return {
+            "ok": False,
+            "error": str(e)
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\ai_builder.py
+================================================================================
+
+import json
+import re
+from core.llm import generate_steps
+from fastapi import APIRouter, Depends
+from auth.deps import get_current_user
+
+router = APIRouter(prefix="/ai-builder")
+
+
+@router.post("/generate")
+async def generate(data: dict, user=Depends(get_current_user)):
+
+    prompt = data.get("prompt")
+
+    raw = generate_steps(prompt)
+
+    print("🧠 RAW LLM:", raw)
+
+    try:
+        # =========================
+        # 🔥 EXTRAER SOLO JSON
+        # =========================
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+
+        if not match:
+            raise Exception("No se encontró JSON")
+
+        clean_json = match.group(0)
+
+        parsed = json.loads(clean_json)
+
+        steps = validate_steps(parsed.get("steps", []))
+
+        return {"steps": steps}
+
+    except Exception as e:
+
+        print("❌ AI BUILDER ERROR:", str(e))
+
+        return {
+            "error": "LLM devolvió JSON inválido",
+            "raw": raw
+        }
+
+
+
+# =========================
+# FIX JSON (🔥 CLAVE)
+# =========================
+
+def fix_json(text: str):
+
+    # cerrar llaves faltantes
+    open_braces = text.count("{")
+    close_braces = text.count("}")
+
+    if open_braces > close_braces:
+        text += "}" * (open_braces - close_braces)
+
+    # cerrar corchetes faltantes
+    open_brackets = text.count("[")
+    close_brackets = text.count("]")
+
+    if open_brackets > close_brackets:
+        text += "]" * (open_brackets - close_brackets)
+
+    return text
+
+
+# =========================
+# EXTRACT JSON
+# =========================
+
+def extract_json(text):
+
+    match = re.search(r"\{.*", text, re.DOTALL)
+
+    if match:
+        return match.group(0)
+
+    return text
+
+
+# =========================
+# VALIDATE
+# =========================
+
+VALID_ACTIONS = {
+    "create_folder",
+    "move_files",
+    "open_url"
+}
+
+
+def validate_steps(steps):
+
+    safe = []
+
+    for s in steps:
+
+        if s.get("action") not in VALID_ACTIONS:
+            continue
+
+        safe.append(s)
+
+    return safe
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\api\approvals.py
+================================================================================
+
+from fastapi import APIRouter
+
+import jobs.manager as manager_module
+
+router = APIRouter(prefix="/approvals")
+
+
+@router.post("/{job_id}")
+async def approve(job_id: str):
+
+    await manager_module.manager.resume_job(
+        job_id
+    )
+
+    return {
+        "success": True
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

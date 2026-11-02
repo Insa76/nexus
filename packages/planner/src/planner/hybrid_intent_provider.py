@@ -87,6 +87,19 @@ class HybridIntentProvider(IntentProvider):
             text
         )
 
+        # Antes de separar por la conjunción "y", damos prioridad a una
+        # intención determinista reconocida sobre la solicitud completa.
+        # Así, expresiones como "fecha y hora actual" no se dividen en dos
+        # fragmentos incompletos y no terminan innecesariamente en Ollama.
+        if len(parts) > 1:
+            whole_intent = await self._rule_provider.recognize(
+                text,
+                capabilities,
+                context,
+            )
+            if whole_intent.action != "system.unknown":
+                return whole_intent
+
         #
         # Solicitud simple.
         #

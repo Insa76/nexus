@@ -1,0 +1,2224 @@
+﻿
+================================================================================
+ARCHIVO: tests\test_engine_evidence_integration.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+
+from engine.engine import Engine
+from memory import WorkingMemory
+from planner.intent import Intent
+from planner.intent_provider import IntentProvider
+from runtime.execution_result import ExecutionResult
+from planner.plan import StepStatus
+
+
+class FakeToolRegistry:
+
+    def describe(self):
+        return [
+            {
+                "name": "windows.open_app",
+                "action": "system.open_app",
+                "description": "Open application",
+                "provider": "windows",
+                "parameters": {
+                    "application": {
+                        "type": "string",
+                        "required": True,
+                    }
+                },
+            },
+            {
+                "name": "windows.set_volume",
+                "action": "system.set_volume",
+                "description": "Set volume",
+                "provider": "windows",
+                "parameters": {
+                    "level": {
+                        "type": "number",
+                        "required": True,
+                    }
+                },
+            },
+        ]
+
+    def resolve(self, action):
+        return object()
+
+
+class FakeAction:
+
+    def __init__(self, name):
+        self.name = name
+        self.internal = False
+
+
+class FakeActionRegistry:
+
+    def get(self, action):
+        return FakeAction(action)
+
+
+class FakeRuntime:
+
+    def __init__(self, result):
+        self.tool_registry = FakeToolRegistry()
+        self.action_registry = FakeActionRegistry()
+        self.result = result
+
+    async def execute(self, context):
+        """
+        Simula el resultado final del runtime real.
+
+        Como este FakeRuntime no atraviesa ActionManager,
+        reproduce explícitamente la evidencia estructural
+        que ActionManager registra durante una ejecución real.
+        """
+
+        result_output = (
+            self.result.output
+            if isinstance(self.result.output, dict)
+            else {}
+        )
+
+        result_artifacts = (
+            self.result.artifacts
+            if isinstance(self.result.artifacts, dict)
+            else {}
+        )
+
+        result_keys = list(result_output.keys())
+        artifact_keys = list(result_artifacts.keys())
+
+        for step in context.plan.steps:
+
+            step.status = StepStatus.COMPLETED
+
+            step.metadata["execution"] = {
+                "status": "completed",
+                "result_keys": result_keys,
+                "artifact_keys": artifact_keys,
+            }
+
+        context.plan.completed = True
+
+        return self.result
+
+
+class FakeIntentProvider(IntentProvider):
+
+    def __init__(self, intent):
+        self.intent = intent
+
+    async def recognize(
+        self,
+        text,
+        capabilities=None,
+        context=None,
+    ):
+        return self.intent
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def check(condition, message):
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_engine_open_app_evidence_verified():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Chrome",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    check(
+        result.success,
+        "Execution should succeed.",
+    )
+
+    check(
+        result.metadata["verification"]["verified"],
+        "Engine should mark matching evidence as verified.",
+    )
+
+    check(
+        result.metadata["verification"]["confidence"] == 1.0,
+        "Verified evidence should have confidence 1.0.",
+    )
+
+
+def test_engine_open_app_evidence_mismatch():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Spotify",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    check(
+        result.success,
+        "Execution itself should succeed.",
+    )
+
+    check(
+        not result.metadata["verification"]["verified"],
+        "Mismatching evidence must not be verified.",
+    )
+
+    verification_entries = engine.memory.find(
+        "verification_failure"
+    )
+
+    check(
+        len(verification_entries) == 1,
+        "Verification failure should be stored in memory.",
+    )
+
+
+def test_engine_volume_evidence_verified():
+
+    intent = Intent(
+        action="system.set_volume",
+        confidence=1.0,
+        parameters={
+            "level": 50,
+        },
+        original_text="Poné el volumen al 50%",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "volume": 50,
+                "status": "set",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute(
+            "Poné el volumen al 50%"
+        )
+    )
+
+    check(
+        result.metadata["verification"]["verified"],
+        "Matching volume evidence should be verified.",
+    )
+
+
+def test_engine_volume_evidence_mismatch():
+
+    intent = Intent(
+        action="system.set_volume",
+        confidence=1.0,
+        parameters={
+            "level": 50,
+        },
+        original_text="Poné el volumen al 50%",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "volume": 30,
+                "status": "set",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute(
+            "Poné el volumen al 50%"
+        )
+    )
+
+    check(
+        not result.metadata["verification"]["verified"],
+        "Wrong volume evidence must not be verified.",
+    )
+
+    verification_entries = engine.memory.find(
+        "verification_failure"
+    )
+
+    check(
+        len(verification_entries) == 1,
+        "Volume verification failure should be stored.",
+    )
+
+
+def test_engine_verification_is_stored_in_memory():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Chrome",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    run(
+        engine.execute("Abrí Chrome")
+    )
+
+    entries = engine.memory.find(
+        "verification"
+    )
+
+    check(
+        len(entries) == 1,
+        "Verification must be stored in WorkingMemory.",
+    )
+
+    verification = entries[0].data
+
+    check(
+        verification["verified"] is True,
+        "Stored verification must be true.",
+    )
+
+    check(
+        verification["confidence"] == 1.0,
+        "Stored verification confidence must be 1.0.",
+    )
+
+
+def test_engine_verification_metadata_contains_evidence():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Chrome",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    verification = result.metadata[
+        "verification"
+    ]
+
+    check(
+        verification["verified"] is True,
+        "Verification must be true.",
+    )
+
+    check(
+        len(verification["evidence"]) >= 1,
+        "Verification must expose evidence.",
+    )
+
+    check(
+        any(
+            item.get("type") == "state"
+            for item in verification["evidence"]
+        ),
+        "State evidence must be present.",
+    )
+
+
+def test_engine_failed_execution_never_reaches_verified():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=False,
+            message="No se pudo abrir Chrome.",
+            output={},
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    check(
+        not result.success,
+        "Execution should fail.",
+    )
+
+    #
+    # En una ejecución fallida el Engine debe conservar
+    # la frontera de verificación.
+    #
+
+    verification_entries = engine.memory.find(
+        "verification"
+    )
+
+    check(
+        len(verification_entries) == 1,
+        "Verification should still be recorded.",
+    )
+
+    check(
+        verification_entries[0].data["verified"] is False,
+        "Failed execution must not be verified.",
+    )
+
+
+def test_engine_only_verified_execution_can_be_learned():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Chrome",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    check(
+        result.metadata["verification"]["verified"],
+        "Execution must be verified.",
+    )
+
+    semantic_fact = engine.semantic_memory.get(
+        "chrome",
+        "es una aplicación",
+    )
+
+    check(
+        semantic_fact is not None,
+        "Verified execution must create semantic knowledge.",
+    )
+
+    check(
+        semantic_fact.value is True,
+        "Learned application fact must be true.",
+    )
+
+    check(
+        semantic_fact.source == "episode",
+        "Learned knowledge must preserve episode provenance.",
+    )
+
+
+def test_engine_unverified_execution_is_not_learned():
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    runtime = FakeRuntime(
+        ExecutionResult(
+            success=True,
+            message="",
+            output={
+                "application": "Spotify",
+                "status": "opened",
+            },
+            artifacts={},
+            metadata={},
+        )
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=FakeIntentProvider(intent),
+        memory=WorkingMemory(),
+    )
+
+    result = run(
+        engine.execute("Abrí Chrome")
+    )
+
+    check(
+        not result.metadata["verification"]["verified"],
+        "Mismatching evidence must not be verified.",
+    )
+
+    semantic_fact = engine.semantic_memory.get(
+        "chrome",
+        "es una aplicación",
+    )
+
+    check(
+        semantic_fact is None,
+        "Unverified execution must not create semantic knowledge.",
+    )
+
+    check(
+        engine.semantic_memory.count() == 0,
+        "Semantic memory must remain empty after failed verification.",
+    )
+
+
+if __name__ == "__main__":
+
+    tests = [
+        test_engine_open_app_evidence_verified,
+        test_engine_open_app_evidence_mismatch,
+        test_engine_volume_evidence_verified,
+        test_engine_volume_evidence_mismatch,
+        test_engine_verification_is_stored_in_memory,
+        test_engine_verification_metadata_contains_evidence,
+        test_engine_failed_execution_never_reaches_verified,
+        test_engine_only_verified_execution_can_be_learned,
+        test_engine_unverified_execution_is_not_learned,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("ENGINE EVIDENCE + LEARNING INTEGRATION")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_engine_semantic_integration.py
+================================================================================
+
+from __future__ import annotations
+
+from memory.semantic_memory import SemanticMemory
+from memory.semantic_knowledge_extractor import (
+    SemanticKnowledgeExtractor,
+)
+from memory.semantic_retriever import SemanticRetriever
+
+
+def test_semantic_components_work_together() -> None:
+    semantic_memory = SemanticMemory()
+
+    extractor = SemanticKnowledgeExtractor(
+        semantic_memory
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    from memory.episode import Episode
+
+    episode = Episode(
+        action="system.open_app",
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="abrí chrome",
+        success=True,
+        output={
+            "status": "opened",
+            "application": "Chrome",
+        },
+    )
+
+    facts = extractor.extract(
+        episode
+    )
+
+    assert len(facts) == 1
+
+    results = retriever.search(
+        "chrome"
+    )
+
+    assert len(results) == 1
+
+    match = results[0]
+
+    assert match.fact.subject == "chrome"
+    assert (
+        match.fact.predicate
+        == "es una aplicación"
+    )
+    assert match.fact.value is True
+
+
+def test_failed_episode_does_not_create_knowledge() -> None:
+    semantic_memory = SemanticMemory()
+
+    extractor = SemanticKnowledgeExtractor(
+        semantic_memory
+    )
+
+    from memory.episode import Episode
+
+    episode = Episode(
+        action="system.open_app",
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="abrí chrome",
+        success=False,
+        output={},
+    )
+
+    facts = extractor.extract(
+        episode
+    )
+
+    assert facts == []
+    assert semantic_memory.count() == 0
+
+
+def test_semantic_memory_is_reusable() -> None:
+    semantic_memory = SemanticMemory()
+
+    extractor = SemanticKnowledgeExtractor(
+        semantic_memory
+    )
+
+    retriever = SemanticRetriever(
+        semantic_memory
+    )
+
+    from memory.episode import Episode
+
+    extractor.extract(
+        Episode(
+            action="system.open_app",
+            parameters={
+                "application": "Chrome",
+            },
+            original_text="abrí chrome",
+            success=True,
+            output={
+                "status": "opened",
+                "application": "Chrome",
+            },
+        )
+    )
+
+    first = retriever.search(
+        "chrome"
+    )
+
+    second = retriever.search_by_subject(
+        "chrome"
+    )
+
+    assert len(first) == 1
+    assert len(second) == 1
+
+    assert (
+        first[0].fact
+        is second[0].fact
+    )
+
+
+if __name__ == "__main__":
+    tests = [
+        test_semantic_components_work_together,
+        test_failed_episode_does_not_create_knowledge,
+        test_semantic_memory_is_reusable,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("ENGINE + SEMANTIC MEMORY INTEGRATION")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_engine_verification_integration.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+
+from planner.decision import DecisionEngine
+from planner.intent import Intent
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+from planner.verification import Verifier
+from runtime.execution_result import ExecutionResult
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_verifier_success() -> None:
+
+    verifier = Verifier()
+
+    class Objective:
+        id = "objective-1"
+
+    plan = ExecutionPlan(
+        objective_id="objective-1",
+        steps=[
+            PlanStep(
+                id="step-1",
+                name="test",
+                description="test",
+                action="system.test",
+                status=StepStatus.COMPLETED,
+            )
+        ],
+        completed=True,
+    )
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "ok",
+        },
+    )
+
+    verification = verifier.verify(
+        objective=Objective(),
+        plan=plan,
+        result=result,
+    )
+
+    check(
+        verification.verified,
+        "Successful completed execution must verify.",
+    )
+
+    check(
+        verification.confidence == 1.0,
+        "Expected full verification confidence.",
+    )
+
+
+def test_verifier_failed_execution() -> None:
+
+    verifier = Verifier()
+
+    class Objective:
+        id = "objective-2"
+
+    plan = ExecutionPlan(
+        objective_id="objective-2",
+        completed=True,
+    )
+
+    result = ExecutionResult(
+        success=False,
+        message="execution failed",
+        output={},
+    )
+
+    verification = verifier.verify(
+        objective=Objective(),
+        plan=plan,
+        result=result,
+    )
+
+    check(
+        not verification.verified,
+        "Failed execution must not verify.",
+    )
+
+
+def test_verifier_incomplete_plan() -> None:
+
+    verifier = Verifier()
+
+    class Objective:
+        id = "objective-3"
+
+    plan = ExecutionPlan(
+        objective_id="objective-3",
+        completed=False,
+    )
+
+    result = ExecutionResult(
+        success=True,
+        message="",
+        output={
+            "status": "ok",
+        },
+    )
+
+    verification = verifier.verify(
+        objective=Objective(),
+        plan=plan,
+        result=result,
+    )
+
+    check(
+        not verification.verified,
+        "Incomplete plan must not verify.",
+    )
+
+
+def test_decision_known_action() -> None:
+
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    decision = engine.decide(
+        intent=intent,
+        capabilities=[],
+    )
+
+    check(
+        decision.is_executable,
+        "Known action should be executable.",
+    )
+
+    check(
+        decision.selected_action
+        == "system.open_app",
+        "Decision selected wrong action.",
+    )
+
+
+async def main() -> None:
+
+    test_verifier_success()
+    test_verifier_failed_execution()
+    test_verifier_incomplete_plan()
+    test_decision_known_action()
+
+    print(
+        "ENGINE VERIFICATION INTEGRATION PASSED : 4 FAILED : 0"
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_episode_memory.py
+================================================================================
+
+from planner.episode_query_resolver import EpisodeQueryResolver
+from memory.episode import Episode
+from memory.episode_memory import EpisodeMemory
+from memory.working_memory import WorkingMemory
+
+
+def check(
+    condition: bool,
+    message: str,
+) -> None:
+
+    if not condition:
+        raise AssertionError(message)
+
+
+def main() -> None:
+
+    memory = WorkingMemory()
+    episodes = EpisodeMemory(memory)
+    resolver = EpisodeQueryResolver()
+
+    #
+    # Episodios de prueba
+    #
+
+    episodes.add(
+        Episode(
+            action="system.open_app",
+            parameters={
+                "application": "chrome",
+            },
+            original_text="abrí Chrome",
+            success=True,
+            output={
+                "status": "opened",
+                "application": "chrome",
+            },
+        )
+    )
+
+    episodes.add(
+        Episode(
+            action="system.set_volume",
+            parameters={
+                "level": 30,
+            },
+            original_text="poné el volumen al 30%",
+            success=True,
+            output={
+                "status": "set",
+                "volume": 30,
+            },
+        )
+    )
+
+    episodes.add(
+        Episode(
+            action="system.close_app",
+            parameters={
+                "application": "chrome",
+            },
+            original_text="cerrá Chrome",
+            success=True,
+            output={
+                "status": "closed",
+                "application": "chrome",
+            },
+        )
+    )
+
+    #
+    # Consulta semántica
+    #
+
+    query = resolver.resolve(
+        "qué aplicación cerré"
+    )
+
+    check(
+        query is not None,
+        "La consulta debería resolverse.",
+    )
+
+    episode = episodes.find_latest_by_action(
+        query.action
+    )
+
+    check(
+        episode is not None,
+        "No se encontró el episodio de cierre.",
+    )
+
+    application = episodes.find_parameter(
+        query.action,
+        query.field,
+    )
+
+    check(
+        application == "chrome",
+        "La aplicación recuperada debería ser chrome.",
+    )
+
+    #
+    # Apertura
+    #
+
+    query = resolver.resolve(
+        "qué aplicación abrí"
+    )
+
+    check(
+        query is not None,
+        "La consulta de apertura debería resolverse.",
+    )
+
+    application = episodes.find_parameter(
+        query.action,
+        query.field,
+    )
+
+    check(
+        application == "chrome",
+        "La aplicación abierta debería ser chrome.",
+    )
+
+    #
+    # Volumen
+    #
+
+    query = resolver.resolve(
+        "qué volumen puse"
+    )
+
+    check(
+        query is not None,
+        "La consulta de volumen debería resolverse.",
+    )
+
+    volume = episodes.find_parameter(
+        query.action,
+        query.field,
+    )
+
+    check(
+        volume == 30,
+        "El volumen recuperado debería ser 30.",
+    )
+
+    #
+    # Acción inexistente
+    #
+
+    result = episodes.find_latest_by_action(
+        "system.mute"
+    )
+
+    check(
+        result is None,
+        "No debería encontrar una acción inexistente.",
+    )
+
+    #
+    # Solo episodios exitosos
+    #
+
+    episodes.add(
+        Episode(
+            action="system.close_app",
+            parameters={
+                "application": "notepad",
+            },
+            original_text="cerrá Notepad",
+            success=False,
+            output={},
+        )
+    )
+
+    application = episodes.find_parameter(
+        "system.close_app",
+        "application",
+    )
+
+    check(
+        application == "chrome",
+        "Los episodios fallidos no deben reemplazar "
+        "al último episodio exitoso.",
+    )
+
+    print("=" * 72)
+    print("EPISODE MEMORY")
+    print("=" * 72)
+    print("PASSED : 6")
+    print("FAILED : 0")
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_episode_query_engine.py
+================================================================================
+
+from memory.working_memory import WorkingMemory
+from memory.episode import Episode
+from memory.episode_memory import EpisodeMemory
+from memory.episode_query_engine import (
+    EpisodeQueryEngine,
+)
+
+
+def test_find_last_by_action():
+
+    memory = WorkingMemory()
+
+    episodes = EpisodeMemory(
+        memory
+    )
+
+    episodes.add(
+        Episode(
+            action="system.open_app",
+            original_text="abrí chrome",
+            parameters={
+                "application": "chrome"
+            },
+            output={},
+            success=True,
+        )
+    )
+
+    episodes.add(
+        Episode(
+            action="system.close_app",
+            original_text="cerré chrome",
+            parameters={
+                "application": "chrome"
+            },
+            output={},
+            success=True,
+        )
+    )
+
+    query = EpisodeQueryEngine(
+        episodes
+    )
+
+    result = query.find_last_by_action(
+        "system.close_app"
+    )
+
+    assert result is not None
+    assert result.action == "system.close_app"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_episode_query_resolver.py
+================================================================================
+
+from planner.episode_query_resolver import (
+    EpisodeQueryResolver,
+)
+
+
+def check(
+    condition: bool,
+    message: str,
+) -> None:
+
+    if not condition:
+        raise AssertionError(message)
+
+
+def main() -> None:
+
+    resolver = EpisodeQueryResolver()
+
+    #
+    # CLOSE APP
+    #
+
+    query = resolver.resolve(
+        "qué aplicación cerré"
+    )
+
+    check(
+        query is not None,
+        "No resolvió la consulta de cierre.",
+    )
+
+    check(
+        query.action == "system.close_app",
+        "La acción debería ser system.close_app.",
+    )
+
+    check(
+        query.field == "application",
+        "El campo debería ser application.",
+    )
+
+    #
+    # OPEN APP
+    #
+
+    query = resolver.resolve(
+        "qué aplicación abrí"
+    )
+
+    check(
+        query is not None,
+        "No resolvió la consulta de apertura.",
+    )
+
+    check(
+        query.action == "system.open_app",
+        "La acción debería ser system.open_app.",
+    )
+
+    check(
+        query.field == "application",
+        "El campo debería ser application.",
+    )
+
+    #
+    # VOLUME
+    #
+
+    query = resolver.resolve(
+        "qué volumen puse"
+    )
+
+    check(
+        query is not None,
+        "No resolvió la consulta de volumen.",
+    )
+
+    check(
+        query.action == "system.set_volume",
+        "La acción debería ser system.set_volume.",
+    )
+
+    check(
+        query.field == "level",
+        "El campo debería ser level.",
+    )
+
+    #
+    # CAPTURE
+    #
+
+    query = resolver.resolve(
+        "qué capturé"
+    )
+
+    check(
+        query is not None,
+        "No resolvió la consulta de captura.",
+    )
+
+    check(
+        query.action == "system.screen_capture",
+        "La acción debería ser system.screen_capture.",
+    )
+
+    check(
+        query.field == "status",
+        "El campo debería ser status.",
+    )
+
+    #
+    # UNKNOWN
+    #
+
+    query = resolver.resolve(
+        "qué desayuné"
+    )
+
+    check(
+        query is None,
+        "Una consulta desconocida no debería resolverse.",
+    )
+
+    print("=" * 72)
+    print("EPISODE QUERY RESOLVER")
+    print("=" * 72)
+    print("PASSED : 5")
+    print("FAILED : 0")
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_http_origin_policy.py
+================================================================================
+
+from nexus_http_security import (
+    cors_origin_for,
+    is_allowed_browser_origin,
+    is_allowed_content_length,
+    is_allowed_host,
+)
+
+
+def test_allows_non_browser_clients_without_origin() -> None:
+    assert is_allowed_browser_origin(None) is True
+    assert cors_origin_for(None) is None
+
+
+def test_allows_known_local_console_origins() -> None:
+    for origin in (
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ):
+        assert is_allowed_browser_origin(origin) is True
+        assert cors_origin_for(origin) == origin
+
+def test_rejects_untrusted_browser_origins_and_null_origin() -> None:
+    for origin in ("https://attacker.example", "null", "http://localhost:9000"):
+        assert is_allowed_browser_origin(origin) is False
+        assert cors_origin_for(origin) is None
+
+def test_allows_only_loopback_hostnames_on_api_port() -> None:
+    assert is_allowed_host("127.0.0.1:8765") is True
+    assert is_allowed_host("localhost:8765") is True
+    assert is_allowed_host("localhost") is True
+    assert is_allowed_host("attacker.example:8765") is False
+    assert is_allowed_host("localhost:9999") is False
+    assert is_allowed_host("localhost:invalid") is False
+
+
+def test_request_body_size_limit() -> None:
+    assert is_allowed_content_length(1) is True
+    assert is_allowed_content_length(1_048_576) is True
+    assert is_allowed_content_length(0) is False
+    assert is_allowed_content_length(-1) is False
+    assert is_allowed_content_length(1_048_577) is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_learning_boundary.py
+================================================================================
+
+import asyncio
+from types import SimpleNamespace
+
+from planner.intent import Intent
+from runtime.execution_result import ExecutionResult
+from engine.engine import Engine
+from planner.objective import Objective
+from planner.plan import ExecutionPlan
+
+
+class FakeToolRegistry:
+    def describe(self):
+        return {}
+
+    def resolve(self, action_name):
+        return SimpleNamespace(
+            name=action_name
+        )
+
+
+class FakeActionRegistry:
+    def __init__(self, action=None):
+        self.action = action
+
+    def get(self, action_name):
+        return self.action
+
+
+class FakeEpisodeMemory:
+    def __init__(self):
+        self.episodes = []
+
+    def add(self, episode):
+        self.episodes.append(episode)
+
+
+class FakeSemanticKnowledgeExtractor:
+    def __init__(self):
+        self.extracted = []
+
+    def extract(self, episode):
+        self.extracted.append(episode)
+
+
+class FakeRuntime:
+    def __init__(
+        self,
+        result,
+        action=None,
+    ):
+        self.tool_registry = FakeToolRegistry()
+        self.action_registry = FakeActionRegistry(
+            action=action
+        )
+        self.action_manager = SimpleNamespace()
+        self.result = result
+
+    async def execute(self, context):
+        return self.result
+
+
+class FakeIntentProvider:
+    def __init__(self, intent):
+        self.intent = intent
+
+    async def recognize(
+        self,
+        text,
+        capabilities,
+        memory_context,
+    ):
+        return self.intent
+
+
+class FakeDecisionEngine:
+    def decide(
+        self,
+        intent,
+        context,
+        capabilities,
+    ):
+        return SimpleNamespace(
+            decision_id="decision-test",
+            selected_action=intent.action,
+            confidence=1.0,
+            reason="test",
+            requires_execution=True,
+            alternatives=[],
+            metadata={},
+            is_executable=True,
+        )
+
+
+class FakeObjectiveFactory:
+    def create(self, intent):
+        return Objective(
+            id="objective-test",
+            title="Learning Boundary Test",
+            description="Learning Boundary Test",
+            metadata={
+                "original_text": intent.original_text,
+            },
+        )
+
+
+class FakePlanner:
+    def create_plan(
+        self,
+        objective,
+        intent,
+    ):
+        return ExecutionPlan(
+            objective_id=objective.id,
+            steps=[],
+            current_step=0,
+            completed=True,
+            metadata={},
+        )
+
+
+class FakeVerifier:
+    def __init__(
+        self,
+        verified=True,
+        confidence=1.0,
+        reason="verified",
+    ):
+        self.verified = verified
+        self.confidence = confidence
+        self.reason = reason
+
+    def verify(
+        self,
+        objective,
+        plan,
+        result,
+    ):
+        return SimpleNamespace(
+            verified=self.verified,
+            confidence=self.confidence,
+            reason=self.reason,
+            evidence=["test_evidence"],
+            metadata={},
+        )
+
+
+def make_intent(
+    action="test.action",
+):
+    return Intent(
+        action=action,
+        confidence=1.0,
+        parameters={},
+        original_text="test request",
+    )
+
+
+def make_result(
+    success=True,
+):
+    return ExecutionResult(
+        success=success,
+        message=(
+            "success"
+            if success
+            else "failure"
+        ),
+        output={
+            "status": (
+                "completed"
+                if success
+                else "failed"
+            )
+        },
+        artifacts={},
+        metadata={},
+    )
+
+
+def build_engine(
+    result,
+    action,
+    verification=True,
+):
+    intent = make_intent()
+
+    runtime = FakeRuntime(
+        result=result,
+        action=action,
+    )
+
+    provider = FakeIntentProvider(
+        intent
+    )
+
+    engine = Engine(
+        runtime=runtime,
+        intent_provider=provider,
+    )
+
+    engine._decision_engine = (
+        FakeDecisionEngine()
+    )
+
+    engine._objective_factory = (
+        FakeObjectiveFactory()
+    )
+
+    engine._planner = (
+        FakePlanner()
+    )
+
+    engine._verifier = FakeVerifier(
+        verified=verification,
+        confidence=(
+            1.0
+            if verification
+            else 0.4
+        ),
+        reason=(
+            "verified"
+            if verification
+            else "verification failed"
+        ),
+    )
+
+    engine._episode_memory = (
+        FakeEpisodeMemory()
+    )
+
+    engine._semantic_knowledge_extractor = (
+        FakeSemanticKnowledgeExtractor()
+    )
+
+    return engine
+
+
+def test_verified_external_success_is_learned():
+    action = SimpleNamespace(
+        internal=False
+    )
+
+    engine = build_engine(
+        result=make_result(True),
+        action=action,
+        verification=True,
+    )
+
+    result = asyncio.run(
+        engine.execute("test request")
+    )
+
+    assert result.success is True
+
+    assert (
+        len(
+            engine._episode_memory.episodes
+        )
+        == 1
+    )
+
+    assert (
+        len(
+            engine
+            ._semantic_knowledge_extractor
+            .extracted
+        )
+        == 1
+    )
+
+
+def test_internal_action_is_not_learned():
+    action = SimpleNamespace(
+        internal=True
+    )
+
+    engine = build_engine(
+        result=make_result(True),
+        action=action,
+        verification=True,
+    )
+
+    result = asyncio.run(
+        engine.execute("test request")
+    )
+
+    assert result.success is True
+
+    assert (
+        len(
+            engine._episode_memory.episodes
+        )
+        == 0
+    )
+
+    assert (
+        len(
+            engine
+            ._semantic_knowledge_extractor
+            .extracted
+        )
+        == 0
+    )
+
+
+def test_failed_execution_is_not_learned():
+    action = SimpleNamespace(
+        internal=False
+    )
+
+    engine = build_engine(
+        result=make_result(False),
+        action=action,
+        verification=True,
+    )
+
+    result = asyncio.run(
+        engine.execute("test request")
+    )
+
+    assert result.success is False
+
+    assert (
+        len(
+            engine._episode_memory.episodes
+        )
+        == 0
+    )
+
+    assert (
+        len(
+            engine
+            ._semantic_knowledge_extractor
+            .extracted
+        )
+        == 0
+    )
+
+
+def test_unverified_success_is_not_learned():
+    action = SimpleNamespace(
+        internal=False
+    )
+
+    engine = build_engine(
+        result=make_result(True),
+        action=action,
+        verification=False,
+    )
+
+    result = asyncio.run(
+        engine.execute("test request")
+    )
+
+    assert result.success is True
+
+    assert (
+        len(
+            engine._episode_memory.episodes
+        )
+        == 0
+    )
+
+    assert (
+        len(
+            engine
+            ._semantic_knowledge_extractor
+            .extracted
+        )
+        == 0
+    )
+
+
+def test_failed_execution_is_recorded_as_error():
+    action = SimpleNamespace(
+        internal=False
+    )
+
+    engine = build_engine(
+        result=make_result(False),
+        action=action,
+        verification=True,
+    )
+
+    asyncio.run(
+        engine.execute("test request")
+    )
+
+    error_entries = [
+        item
+        for item in engine.memory.all()
+        if item.type == "error"
+    ]
+
+    assert len(error_entries) == 1
+
+
+def test_verification_failure_is_recorded_without_learning():
+    action = SimpleNamespace(
+        internal=False
+    )
+
+    engine = build_engine(
+        result=make_result(True),
+        action=action,
+        verification=False,
+    )
+
+    asyncio.run(
+        engine.execute("test request")
+    )
+
+    verification_failures = [
+        item
+        for item in engine.memory.all()
+        if item.type == "verification_failure"
+    ]
+
+    assert len(
+        verification_failures
+    ) == 1
+
+    assert (
+        len(
+            engine
+            ._semantic_knowledge_extractor
+            .extracted
+        )
+        == 0
+    )
+
+
+def main():
+    tests = [
+        (
+            "test_verified_external_success_is_learned",
+            test_verified_external_success_is_learned,
+        ),
+        (
+            "test_internal_action_is_not_learned",
+            test_internal_action_is_not_learned,
+        ),
+        (
+            "test_failed_execution_is_not_learned",
+            test_failed_execution_is_not_learned,
+        ),
+        (
+            "test_unverified_success_is_not_learned",
+            test_unverified_success_is_not_learned,
+        ),
+        (
+            "test_failed_execution_is_recorded_as_error",
+            test_failed_execution_is_recorded_as_error,
+        ),
+        (
+            "test_verification_failure_is_recorded_without_learning",
+            test_verification_failure_is_recorded_without_learning,
+        ),
+    ]
+
+    passed = 0
+
+    for name, test in tests:
+        try:
+            test()
+            print(f"PASS: {name}")
+            passed += 1
+        except Exception as exc:
+            print(f"FAIL: {name}")
+            print(
+                f"      {type(exc).__name__}: {exc}"
+            )
+
+    print()
+    print(
+        f"LEARNING 7.1: "
+        f"{passed}/{len(tests)} PASSED"
+    )
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_live_episode_query.py
+================================================================================
+
+import asyncio
+from bootstrap.bootstrap import build_engine
+
+async def main():
+    engine = build_engine()
+
+    first = await engine.execute("abrí Chrome")
+    print("1:", first.success, first.metadata.get("response"))
+
+    second = await engine.execute("¿qué aplicación abrí?")
+    print("2:", second.success, second.metadata.get("response"))
+
+asyncio.run(main())
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_query_episode_action.py
+================================================================================
+
+from memory.episode import Episode
+from memory.episode_memory import EpisodeMemory
+from memory.working_memory import WorkingMemory
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective
+from planner.plan import ExecutionPlan, PlanStep
+from actions.query_episode import QueryEpisodeAction
+
+
+def check(
+    condition: bool,
+    message: str,
+) -> None:
+
+    if not condition:
+        raise AssertionError(message)
+
+
+def create_context(
+    plan: ExecutionPlan,
+) -> ExecutionContext:
+
+    objective = Objective(
+        id="test-objective",
+        title="Consultar memoria episódica",
+    )
+
+    return ExecutionContext(
+        objective=objective,
+        plan=plan,
+    )
+
+
+async def run() -> None:
+
+    memory = WorkingMemory()
+    episode_memory = EpisodeMemory(memory)
+
+    episode_memory.add(
+        Episode(
+            action="system.close_app",
+            parameters={
+                "application": "chrome",
+            },
+            original_text="cerrá Chrome",
+            success=True,
+            output={
+                "status": "closed",
+                "application": "chrome",
+            },
+        )
+    )
+
+    action = QueryEpisodeAction(
+        episode_memory
+    )
+
+    #
+    # Consulta válida
+    #
+
+    plan = ExecutionPlan(
+        objective_id="test-objective",
+        steps=[
+            PlanStep(
+                id="query",
+                name="Query episode",
+                description="Consulta un episodio anterior.",
+                action="system.query_episode",
+                metadata={
+                    "action": "system.close_app",
+                    "field": "application",
+                },
+            )
+        ],
+    )
+
+    context = create_context(plan)
+
+    await action.execute(
+        context,
+        plan.steps[0],
+    )
+
+    result = context.results.get(
+        "episode_query_result"
+    )
+
+    check(
+        isinstance(result, dict),
+        "La acción debería producir un resultado estructurado.",
+    )
+
+    check(
+        result.get("status") == "found",
+        "El estado debería ser found.",
+    )
+
+    check(
+        result.get("action") == "system.close_app",
+        "La acción consultada debería ser system.close_app.",
+    )
+
+    check(
+        result.get("field") == "application",
+        "El campo consultado debería ser application.",
+    )
+
+    check(
+        result.get("value") == "chrome",
+        "El valor recuperado debería ser chrome.",
+    )
+
+    check(
+        result.get("original_text") == "cerrá Chrome",
+        "Debería conservarse el texto original del episodio.",
+    )
+
+    #
+    # Consulta sin episodio
+    #
+
+    missing_plan = ExecutionPlan(
+        objective_id="missing-objective",
+        steps=[
+            PlanStep(
+                id="query",
+                name="Query missing episode",
+                description="Consulta un episodio inexistente.",
+                action="system.query_episode",
+                metadata={
+                    "action": "system.mute",
+                    "field": "status",
+                },
+            )
+        ],
+    )
+
+    missing_context = create_context(
+        missing_plan
+    )
+
+    await action.execute(
+        missing_context,
+        missing_plan.steps[0],
+    )
+
+    check(
+        bool(missing_context.errors),
+        "Una consulta sin episodio debería producir un error.",
+    )
+
+    #
+    # Campo inexistente
+    #
+
+    invalid_field_plan = ExecutionPlan(
+        objective_id="invalid-field-objective",
+        steps=[
+            PlanStep(
+                id="query",
+                name="Query invalid field",
+                description="Consulta un campo inexistente.",
+                action="system.query_episode",
+                metadata={
+                    "action": "system.close_app",
+                    "field": "unknown_field",
+                },
+            )
+        ],
+    )
+
+    invalid_field_context = create_context(
+        invalid_field_plan
+    )
+
+    await action.execute(
+        invalid_field_context,
+        invalid_field_plan.steps[0],
+    )
+
+    check(
+        bool(invalid_field_context.errors),
+        "Un campo inexistente debería producir un error.",
+    )
+
+    #
+    # Parámetros inválidos
+    #
+
+    invalid_parameters_plan = ExecutionPlan(
+        objective_id="invalid-parameters-objective",
+        steps=[
+            PlanStep(
+                id="query",
+                name="Query invalid parameters",
+                description="Consulta con parámetros inválidos.",
+                action="system.query_episode",
+                metadata={},
+            )
+        ],
+    )
+
+    invalid_parameters_context = create_context(
+        invalid_parameters_plan
+    )
+
+    await action.execute(
+        invalid_parameters_context,
+        invalid_parameters_plan.steps[0],
+    )
+
+    check(
+        bool(invalid_parameters_context.errors),
+        "Parámetros inválidos deberían producir un error.",
+    )
+
+    #
+    # Resultado estructurado completo
+    #
+
+    check(
+        context.results.get("status") == "found",
+        "El resultado general debería conservar status=found.",
+    )
+
+    check(
+        context.results.get("action") == "system.close_app",
+        "El resultado debería conservar la acción.",
+    )
+
+    check(
+        context.results.get("field") == "application",
+        "El resultado debería conservar el campo.",
+    )
+
+    check(
+        context.results.get("value") == "chrome",
+        "El resultado debería conservar el valor.",
+    )
+
+    print("=" * 72)
+    print("QUERY EPISODE ACTION")
+    print("=" * 72)
+    print("PASSED : 10")
+    print("FAILED : 0")
+    print("=" * 72)
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(run())
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

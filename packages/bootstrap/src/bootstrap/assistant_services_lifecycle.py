@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import asyncio
@@ -7,38 +8,34 @@ from bootstrap.assistant_services import AssistantServices
 
 class AssistantServicesLifecycle:
     """
-    Controla el ciclo de vida de los servicios del Assistant Layer.
-
-    El Scheduler se ejecuta como una tarea asyncio en background
-    para no bloquear el proceso principal.
+    Controls the lifecycle of Assistant Layer services.
     """
 
-    def __init__(
-        self,
-        services: AssistantServices,
-    ) -> None:
+    def __init__(self, services: AssistantServices) -> None:
         self.services = services
         self.running = False
         self._scheduler_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
-        """
-        Inicia los servicios del Assistant Layer.
-        """
+        """Restore pending reminder schedules and start the scheduler."""
 
         if self.running:
             return
 
+        self.services.reminder_scheduler.reconcile()
+
         self.running = True
 
-        self._scheduler_task = asyncio.create_task(
-            self.services.scheduler.start()
-        )
+        try:
+            self._scheduler_task = asyncio.create_task(
+                self.services.scheduler.start()
+            )
+        except Exception:
+            self.running = False
+            raise
 
     async def stop(self) -> None:
-        """
-        Detiene los servicios del Assistant Layer.
-        """
+        """Stop the background scheduler."""
 
         if not self.running:
             return
@@ -56,9 +53,7 @@ class AssistantServicesLifecycle:
                 self._scheduler_task = None
 
     async def restart(self) -> None:
-        """
-        Reinicia los servicios del Assistant Layer.
-        """
+        """Restart the services."""
 
         await self.stop()
         await self.start()

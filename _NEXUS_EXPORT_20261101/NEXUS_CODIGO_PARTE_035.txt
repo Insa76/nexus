@@ -1,0 +1,1736 @@
+﻿
+================================================================================
+ARCHIVO: exportar_apps.py
+================================================================================
+
+from pathlib import Path
+import zipfile
+
+ROOT = Path(__file__).resolve().parent
+OUTPUT = ROOT.parent / "NEXUS_APPS_PARTES"
+OUTPUT.mkdir(exist_ok=True)
+
+EXCLUDED = {
+    "node_modules", "dist", "build", ".git",
+    ".next", ".venv", "venv", "__pycache__",
+    ".pytest_cache", "coverage", ".turbo"
+}
+
+EXCLUDED_EXT = {
+    ".pyc", ".zip", ".7z", ".rar", ".gz"
+}
+
+MAX_BYTES = 35 * 1024 * 1024
+
+APP_DIRS = [
+    "apps", "backend", "dashboard", "desktop",
+    "electron", "landing", "nexus-mobile"
+]
+
+files = []
+
+for folder in APP_DIRS:
+    base = ROOT / folder
+    if not base.exists():
+        continue
+
+    for p in base.rglob("*"):
+        if not p.is_file():
+            continue
+
+        rel = p.relative_to(ROOT)
+
+        if any(part in EXCLUDED for part in rel.parts):
+            continue
+
+        if p.suffix.lower() in EXCLUDED_EXT:
+            continue
+
+        if p.name == ".env":
+            continue
+
+        if p.name.startswith(".env.") and p.name != ".env.example":
+            continue
+
+        files.append((p, rel, p.stat().st_size))
+
+parts = []
+current = []
+current_size = 0
+
+for item in files:
+    path, rel, size = item
+
+    if current and current_size + size > MAX_BYTES:
+        parts.append(current)
+        current = []
+        current_size = 0
+
+    current.append(item)
+    current_size += size
+
+if current:
+    parts.append(current)
+
+for index, group in enumerate(parts, 1):
+    destination = OUTPUT / f"NEXUS_APPS_PARTE_{index:02}.zip"
+
+    with zipfile.ZipFile(
+        destination, "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6
+    ) as z:
+        for path, rel, size in group:
+            z.write(path, rel)
+
+    print(
+        f"{destination.name} | "
+        f"{destination.stat().st_size / 1024 / 1024:.1f} MB | "
+        f"{len(group)} archivos"
+    )
+
+print(f"\nTotal de partes: {len(parts)}")
+print(f"Carpeta: {OUTPUT}")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: exportar_apps_texto.py
+================================================================================
+
+
+from pathlib import Path
+import os
+
+ROOT = Path(__file__).resolve().parent
+OUTPUT = ROOT / "NEXUS_APPS_TEXTO"
+
+FOLDERS = [
+    "apps",
+    "backend",
+    "dashboard",
+    "desktop",
+    "electron",
+    "landing",
+    "nexus-mobile",
+]
+
+EXCLUDED_DIRS = {
+    ".git", "node_modules", "dist", "build", ".next",
+    ".venv", "venv", "__pycache__", ".pytest_cache",
+    "coverage", ".turbo", ".cache", "vendor",
+}
+
+EXCLUDED_FILES = {
+    ".env", ".env.local", ".env.production",
+    ".env.development", ".env.test",
+}
+
+EXTENSIONS = {
+    ".py", ".js", ".jsx", ".ts", ".tsx",
+    ".html", ".css", ".scss", ".sass",
+    ".json", ".jsonc", ".md", ".txt",
+    ".yml", ".yaml", ".toml", ".ini",
+    ".cfg", ".conf", ".sql", ".sh",
+    ".bat", ".ps1", ".xml", ".svg",
+    ".prisma", ".graphql", ".gql",
+    ".vue", ".svelte", ".mjs", ".cjs",
+    ".properties", ".gitignore", ".editorconfig",
+    ".dockerignore", ".example",
+}
+
+SPECIAL_FILES = {
+    "Dockerfile", "Makefile", "Procfile",
+    "LICENSE", "README", "CHANGELOG",
+    "requirements", "Pipfile", "Justfile",
+}
+
+MAX_CHARS = 350_000
+PART = 0
+CURRENT = []
+CURRENT_SIZE = 0
+TOTAL_FILES = 0
+SKIPPED = 0
+
+
+def write_part():
+    global PART, CURRENT, CURRENT_SIZE
+
+    if not CURRENT:
+        return
+
+    PART += 1
+    path = OUTPUT / f"NEXUS_APPS_TEXTO_{PART:03}.txt"
+
+    content = "\n".join(CURRENT)
+    path.write_text(content, encoding="utf-8")
+
+    print(f"Creado: {path.name} ({len(content):,} caracteres)")
+
+    CURRENT = []
+    CURRENT_SIZE = 0
+
+
+def add_text(text):
+    global CURRENT_SIZE
+
+    while text:
+        available = MAX_CHARS - CURRENT_SIZE
+
+        if available <= 0:
+            write_part()
+            available = MAX_CHARS
+
+        piece = text[:available]
+        CURRENT.append(piece)
+        CURRENT_SIZE += len(piece)
+        text = text[available:]
+
+        if CURRENT_SIZE >= MAX_CHARS:
+            write_part()
+
+
+def read_file(path):
+    data = path.read_bytes()
+
+    if b"\x00" in data:
+        return None
+
+    for encoding in ("utf-8-sig", "utf-8", "cp1252"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+
+    return None
+
+
+def main():
+    global TOTAL_FILES, SKIPPED
+
+    OUTPUT.mkdir(exist_ok=True)
+
+    add_text(
+        "NEXUS - EXPORTACION DE CODIGO FUENTE\n"
+        "Formato: texto UTF-8\n"
+        "Cada archivo conserva su ruta original.\n\n"
+    )
+
+    for folder in FOLDERS:
+        base = ROOT / folder
+
+        if not base.exists():
+            print(f"No encontrada: {folder}")
+            continue
+
+        print(f"Procesando: {folder}")
+
+        for current_root, dirs, files in os.walk(base):
+            dirs[:] = sorted(
+                d for d in dirs
+                if d not in EXCLUDED_DIRS
+            )
+
+            for filename in sorted(files):
+                path = Path(current_root) / filename
+
+                if filename in EXCLUDED_FILES:
+                    SKIPPED += 1
+                    continue
+
+                if filename.startswith(".env."):
+                    SKIPPED += 1
+                    continue
+
+                if (
+                    path.suffix.lower() not in EXTENSIONS
+                    and filename not in SPECIAL_FILES
+                ):
+                    SKIPPED += 1
+                    continue
+
+                try:
+                    content = read_file(path)
+
+                    if content is None:
+                        SKIPPED += 1
+                        continue
+
+                    relative = path.relative_to(ROOT).as_posix()
+
+                    header = (
+                        "\n\n"
+                        + "=" * 75 + "\n"
+                        + f"ARCHIVO: {relative}\n"
+                        + "=" * 75 + "\n\n"
+                    )
+
+                    add_text(header)
+                    add_text(content)
+                    add_text(
+                        f"\n\n"
+                        f"--- FIN DEL ARCHIVO: {relative} ---\n"
+                    )
+
+                    TOTAL_FILES += 1
+
+                except Exception as error:
+                    print(f"Error leyendo {path}: {error}")
+                    SKIPPED += 1
+
+    write_part()
+
+    summary = (
+        f"Archivos exportados: {TOTAL_FILES}\n"
+        f"Archivos excluidos o no legibles: {SKIPPED}\n"
+        f"Partes generadas: {PART}\n"
+    )
+
+    (OUTPUT / "RESUMEN.txt").write_text(
+        summary, encoding="utf-8"
+    )
+
+    print("\nEXPORTACION FINALIZADA")
+    print(summary)
+    print(f"Resultado: {OUTPUT}")
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: exportar_nexus.py
+================================================================================
+
+from pathlib import Path
+import zipfile
+import subprocess
+
+ROOT = Path(__file__).resolve().parent
+OUTPUT = ROOT.parent / "NEXUS_ENTREGA"
+
+OUTPUT.mkdir(exist_ok=True)
+
+EXCLUDED_DIRS = {
+    ".git", ".venv", "venv", "node_modules",
+    "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", ".next", ".turbo", ".cache",
+    "coverage", "htmlcov"
+}
+
+EXCLUDED_SUFFIXES = {
+    ".pyc", ".pyo", ".zip", ".7z", ".rar",
+    ".tar", ".gz"
+}
+
+GROUPS = {
+    "01_CORE": ["packages", "tests", "docs"],
+    "02_APPS": [
+        "apps", "backend", "dashboard",
+        "desktop", "electron", "landing", "nexus-mobile"
+    ],
+}
+
+def include_file(path):
+    if any(part in EXCLUDED_DIRS for part in path.parts):
+        return False
+
+    if path.suffix.lower() in EXCLUDED_SUFFIXES:
+        return False
+
+    if path.name == ".env":
+        return False
+
+    if path.name.startswith(".env.") and path.name != ".env.example":
+        return False
+
+    return True
+
+def add_path(archive, path):
+    if not path.exists():
+        return
+
+    if path.is_file():
+        if include_file(path.relative_to(ROOT)):
+            archive.write(path, path.relative_to(ROOT))
+        return
+
+    for item in path.rglob("*"):
+        if item.is_file() and include_file(item.relative_to(ROOT)):
+            archive.write(item, item.relative_to(ROOT))
+
+def create_archive(name, paths):
+    destination = OUTPUT / f"NEXUS_{name}.zip"
+
+    with zipfile.ZipFile(
+        destination, "w", compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6
+    ) as archive:
+        for relative in paths:
+            add_path(archive, ROOT / relative)
+
+    print(f"CREADO: {destination} ({destination.stat().st_size / 1024 / 1024:.1f} MB)")
+
+# Paquete 1: motor, arquitectura y pruebas
+create_archive("01_CORE", GROUPS["01_CORE"])
+
+# Paquete 2: aplicaciones e interfaces
+create_archive("02_APPS", GROUPS["02_APPS"])
+
+# Paquete 3: todo el resto del proyecto y estado Git
+excluded = set(GROUPS["01_CORE"] + GROUPS["02_APPS"])
+
+remaining = [
+    item.name for item in ROOT.iterdir()
+    if item.name not in excluded
+    and item.name != "exportar_nexus.py"
+]
+
+create_archive("03_RESTO", remaining)
+
+# Estado Git para preservar los cambios locales
+try:
+    commands = [
+        ["git", "status", "--short", "--branch"],
+        ["git", "log", "-5", "--oneline"],
+        ["git", "diff", "--stat"]
+    ]
+
+    report = []
+
+    for command in commands:
+        result = subprocess.run(
+            command, cwd=ROOT, capture_output=True,
+            text=True, encoding="utf-8", errors="replace"
+        )
+        report.append("$ " + " ".join(command))
+        report.append(result.stdout)
+        report.append(result.stderr)
+
+    (OUTPUT / "NEXUS_GIT_STATE.txt").write_text(
+        "\n".join(report), encoding="utf-8"
+    )
+
+except Exception as error:
+    print("No se pudo obtener el estado Git:", error)
+
+print("\nEXPORTACIÓN TERMINADA.")
+print("Carpeta:", OUTPUT)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: Exportar-NEXUS.ps1
+================================================================================
+
+$ErrorActionPreference = "Stop"
+
+$Root = (Get-Location).Path
+$Out = Join-Path $Root "_NEXUS_EXPORT_20261101"
+$MaxChars = 50000
+
+$ExcludeDirs = @(
+    ".git", ".venv", "venv", "node_modules",
+    "__pycache__", ".pytest_cache", ".mypy_cache",
+    ".ruff_cache", "dist", "build", ".next",
+    ".vite", "coverage", ".turbo", "_NEXUS_EXPORT"
+)
+
+$ExcludeExtensions = @(
+    ".pyc", ".pyo", ".exe", ".dll", ".so", ".bin",
+    ".db", ".sqlite", ".sqlite3", ".zip", ".7z",
+    ".rar", ".png", ".jpg", ".jpeg", ".gif",
+    ".webp", ".ico", ".pdf", ".mp4", ".mp3",
+    ".wav", ".woff", ".woff2", ".ttf", ".otf"
+)
+
+New-Item -ItemType Directory -Force -Path $Out | Out-Null
+
+$Files = Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
+    Where-Object {
+        $relative = $_.FullName.Substring($Root.Length).TrimStart('\')
+        $parts = $relative -split '[\\/]'
+
+        -not ($parts | Where-Object { $ExcludeDirs -contains $_ }) -and
+        $ExcludeExtensions -notcontains $_.Extension.ToLower()
+    } |
+    Sort-Object FullName
+
+$Manifest = Join-Path $Out "00_INVENTARIO.txt"
+
+$Files | ForEach-Object {
+    $_.FullName.Substring($Root.Length).TrimStart('\')
+} | Set-Content -LiteralPath $Manifest -Encoding UTF8
+
+$Part = 1
+$Buffer = ""
+$Count = 0
+
+foreach ($File in $Files) {
+    try {
+        $Relative = $File.FullName.Substring($Root.Length).TrimStart('\')
+        $Content = [System.IO.File]::ReadAllText($File.FullName)
+
+        $Block = @"
+
+================================================================================
+ARCHIVO: $Relative
+================================================================================
+
+$Content
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+"@
+
+        if (($Buffer.Length + $Block.Length) -gt $MaxChars -and $Buffer.Length -gt 0) {
+            $Name = "NEXUS_CODIGO_PARTE_{0:D3}.txt" -f $Part
+            Set-Content -LiteralPath (Join-Path $Out $Name) -Value $Buffer -Encoding UTF8
+            $Part++
+            $Buffer = ""
+        }
+
+        $Buffer += $Block
+        $Count++
+    }
+    catch {
+        Add-Content -LiteralPath (Join-Path $Out "ERRORES_EXPORTACION.txt") `
+            -Value "$($File.FullName): $($_.Exception.Message)" -Encoding UTF8
+    }
+}
+
+if ($Buffer.Length -gt 0) {
+    $Name = "NEXUS_CODIGO_PARTE_{0:D3}.txt" -f $Part
+    Set-Content -LiteralPath (Join-Path $Out $Name) -Value $Buffer -Encoding UTF8
+}
+
+# Estado Git y cambios locales
+Push-Location $Root
+try {
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+
+    $GitCommands = @(
+        @{ Name = "GIT_ESTADO.txt"; Args = @("status", "--short", "--branch") },
+        @{ Name = "GIT_CAMBIOS_TRACKED.txt"; Args = @("diff", "--no-ext-diff", "--no-color") },
+        @{ Name = "GIT_CAMBIOS_STAGED.txt"; Args = @("diff", "--no-ext-diff", "--no-color", "--cached") }
+    )
+
+    foreach ($Command in $GitCommands) {
+        $GitOutput = & git @($Command.Args) 2>&1
+        $GitOutput |
+            ForEach-Object { "$_" } |
+            Set-Content -LiteralPath (Join-Path $Out $Command.Name) -Encoding UTF8
+    }
+
+    $ErrorActionPreference = $PreviousErrorActionPreference
+}
+finally {
+    $ErrorActionPreference = $PreviousErrorActionPreference
+    Pop-Location
+}
+
+Write-Host ""
+Write-Host "EXPORTACION TERMINADA"
+Write-Host "Archivos fuente exportados: $Count"
+Write-Host "Partes generadas: $($Part)"
+Write-Host "Ubicacion: $Out"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: index.html
+================================================================================
+
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>NEXUS Dev Console</title>
+
+    <style>
+        :root {
+            --bg: #0b0f14;
+            --panel: #111820;
+            --panel-2: #151e28;
+            --border: #263341;
+            --text: #e7edf3;
+            --muted: #8493a3;
+            --accent: #55d6be;
+            --danger: #ff6b6b;
+            --warning: #f2c94c;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+
+            background:
+                radial-gradient(
+                    circle at top,
+                    #172330 0%,
+                    var(--bg) 45%
+                );
+
+            color: var(--text);
+
+            font-family:
+                Inter,
+                system-ui,
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                sans-serif;
+        }
+
+        .app {
+            width: min(1400px, 94vw);
+            margin: 0 auto;
+            padding: 32px 0 60px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+
+            margin-bottom: 28px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo {
+            width: 42px;
+            height: 42px;
+
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            border: 1px solid var(--border);
+            border-radius: 12px;
+
+            background: var(--panel);
+
+            font-weight: 800;
+            letter-spacing: 1px;
+        }
+
+        h1 {
+            margin: 0;
+
+            font-size: 22px;
+            letter-spacing: 0.04em;
+        }
+
+        .subtitle {
+            margin-top: 4px;
+
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+
+            padding: 8px 12px;
+
+            border: 1px solid var(--border);
+            border-radius: 999px;
+
+            background: var(--panel);
+
+            font-size: 13px;
+            color: var(--muted);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+
+            border-radius: 50%;
+            background: var(--accent);
+
+            box-shadow:
+                0 0 12px rgba(85, 214, 190, 0.7);
+        }
+
+        .workspace {
+            display: grid;
+
+            grid-template-columns:
+                minmax(320px, 0.75fr)
+                minmax(500px, 1.25fr);
+
+            gap: 20px;
+        }
+
+        .panel {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+
+            background:
+                linear-gradient(
+                    180deg,
+                    rgba(21, 30, 40, 0.96),
+                    rgba(11, 15, 20, 0.96)
+                );
+
+            overflow: hidden;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+
+            padding: 16px 18px;
+
+            border-bottom: 1px solid var(--border);
+        }
+
+        .panel-title {
+            font-size: 13px;
+            font-weight: 700;
+
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .panel-meta {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .panel-body {
+            padding: 18px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 130px;
+
+            resize: vertical;
+
+            padding: 15px;
+
+            border: 1px solid var(--border);
+            border-radius: 12px;
+
+            outline: none;
+
+            background: #0b1016;
+            color: var(--text);
+
+            font-family: inherit;
+            font-size: 15px;
+            line-height: 1.5;
+        }
+
+        textarea:focus {
+            border-color: var(--accent);
+        }
+
+        .actions {
+            display: flex;
+            gap: 10px;
+
+            margin-top: 12px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 10px;
+
+            padding: 11px 18px;
+
+            cursor: pointer;
+
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .primary {
+            background: var(--accent);
+            color: #07110f;
+        }
+
+        .secondary {
+            background: var(--panel-2);
+            color: var(--text);
+
+            border: 1px solid var(--border);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .conversation {
+            margin-top: 18px;
+
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+
+            max-height: 430px;
+            overflow-y: auto;
+        }
+
+        .message {
+            padding: 12px 14px;
+
+            border-radius: 12px;
+
+            border: 1px solid var(--border);
+
+            white-space: pre-wrap;
+        }
+
+        .message.user {
+            background: #111a23;
+        }
+
+        .message.nexus {
+            background: #0c1517;
+        }
+
+        .message-label {
+            margin-bottom: 5px;
+
+            color: var(--muted);
+
+            font-size: 11px;
+            font-weight: 700;
+
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .message-content {
+            font-family:
+                "Cascadia Code",
+                "Consolas",
+                monospace;
+
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
+        .trace {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .trace-step {
+            padding: 14px;
+
+            border: 1px solid var(--border);
+            border-radius: 12px;
+
+            background: rgba(11, 16, 22, 0.8);
+        }
+
+        .trace-step.success {
+            border-left: 3px solid var(--accent);
+        }
+
+        .trace-step.error {
+            border-left: 3px solid var(--danger);
+        }
+
+        .trace-step-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+
+            margin-bottom: 8px;
+        }
+
+        .trace-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+
+            font-size: 12px;
+            font-weight: 800;
+
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+        }
+
+        .trace-icon {
+            color: var(--accent);
+        }
+
+        .trace-error {
+            color: var(--danger);
+        }
+
+        .trace-data {
+            margin: 0;
+
+            max-height: 220px;
+            overflow: auto;
+
+            color: #b9c6d2;
+
+            font-family:
+                "Cascadia Code",
+                "Consolas",
+                monospace;
+
+            font-size: 12px;
+            line-height: 1.5;
+
+            white-space: pre-wrap;
+        }
+
+        .empty {
+            padding: 30px 10px;
+
+            text-align: center;
+
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .memory-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+
+            margin-top: 14px;
+            padding: 12px 14px;
+
+            border: 1px solid var(--border);
+            border-radius: 10px;
+
+            background: #0c1218;
+        }
+
+        .memory-label {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .memory-value {
+            font-family:
+                "Cascadia Code",
+                "Consolas",
+                monospace;
+
+            color: var(--accent);
+            font-size: 13px;
+        }
+
+        .footer {
+            margin-top: 18px;
+
+            color: var(--muted);
+
+            text-align: center;
+
+            font-size: 11px;
+        }
+
+        @media (max-width: 900px) {
+
+            .workspace {
+                grid-template-columns: 1fr;
+            }
+
+            header {
+                align-items: flex-start;
+                gap: 15px;
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="app">
+
+    <header>
+
+        <div class="brand">
+
+            <div class="logo">
+                NX
+            </div>
+
+            <div>
+                <h1>NEXUS Dev Console</h1>
+
+                <div class="subtitle">
+                    Cognitive OS · Development Environment
+                </div>
+            </div>
+
+        </div>
+
+        <div class="status">
+
+            <span class="status-dot"></span>
+
+            <span id="statusText">
+                NEXUS online
+            </span>
+
+        </div>
+
+    </header>
+
+
+    <main class="workspace">
+
+        <!-- LEFT -->
+
+        <section class="panel">
+
+            <div class="panel-header">
+
+                <div class="panel-title">
+                    Console
+                </div>
+
+                <div
+                    class="panel-meta"
+                    id="memoryHeader"
+                >
+                    Memory: 0
+                </div>
+
+            </div>
+
+
+            <div class="panel-body">
+
+                <textarea
+                    id="command"
+                    placeholder="Escribí una instrucción para NEXUS..."
+                ></textarea>
+
+
+                <div class="actions">
+
+                    <button
+                        id="executeButton"
+                        class="primary"
+                    >
+                        Ejecutar
+                    </button>
+
+                    <button
+                        id="clearButton"
+                        class="secondary"
+                    >
+                        Limpiar
+                    </button>
+
+                </div>
+
+
+                <div
+                    id="conversation"
+                    class="conversation"
+                >
+
+                    <div class="empty">
+                        Todavía no hay ejecuciones.
+                    </div>
+
+                </div>
+
+
+                <div class="memory-bar">
+
+                    <span class="memory-label">
+                        WorkingMemory
+                    </span>
+
+                    <span
+                        id="memoryValue"
+                        class="memory-value"
+                    >
+                        0 entries
+                    </span>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- RIGHT -->
+
+        <section class="panel">
+
+            <div class="panel-header">
+
+                <div class="panel-title">
+                    Execution Trace
+                </div>
+
+                <div
+                    class="panel-meta"
+                    id="traceStatus"
+                >
+                    Esperando ejecución
+                </div>
+
+            </div>
+
+
+            <div class="panel-body">
+
+                <div
+                    id="trace"
+                    class="trace"
+                >
+
+                    <div class="empty">
+                        Ejecutá una instrucción para
+                        visualizar el recorrido interno
+                        de NEXUS.
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+    </main>
+
+
+    <div class="footer">
+        NEXUS Development Environment
+    </div>
+
+</div>
+
+
+<script>
+
+const commandInput =
+    document.getElementById("command");
+
+const executeButton =
+    document.getElementById("executeButton");
+
+const clearButton =
+    document.getElementById("clearButton");
+
+const conversation =
+    document.getElementById("conversation");
+
+const traceContainer =
+    document.getElementById("trace");
+
+const traceStatus =
+    document.getElementById("traceStatus");
+
+const memoryHeader =
+    document.getElementById("memoryHeader");
+
+const memoryValue =
+    document.getElementById("memoryValue");
+
+const statusText =
+    document.getElementById("statusText");
+
+
+function escapeHtml(value) {
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+
+function pretty(value) {
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return "null";
+    }
+
+    if (
+        typeof value === "string"
+    ) {
+        return value;
+    }
+
+    return JSON.stringify(
+        value,
+        null,
+        2
+    );
+}
+
+
+function addMessage(
+    type,
+    content
+) {
+
+    const empty =
+        conversation.querySelector(
+            ".empty"
+        );
+
+    if (empty) {
+        empty.remove();
+    }
+
+    const message =
+        document.createElement("div");
+
+    message.className =
+        `message ${type}`;
+
+    const label =
+        type === "user"
+            ? "Usuario"
+            : "NEXUS";
+
+    message.innerHTML = `
+        <div class="message-label">
+            ${label}
+        </div>
+
+        <div class="message-content">
+            ${escapeHtml(content)}
+        </div>
+    `;
+
+    conversation.appendChild(
+        message
+    );
+
+    conversation.scrollTop =
+        conversation.scrollHeight;
+}
+
+
+function renderTrace(trace) {
+
+    traceContainer.innerHTML = "";
+
+    const steps = [
+        {
+            key: "request",
+            label: "Request",
+        },
+        {
+        key: "context",
+        label: "Cognitive Context",
+        },
+        {
+            key: "intent",
+            label: "Intent",
+        },
+        {
+            key: "objective",
+            label: "Objective",
+        },
+        {
+            key: "plan",
+            label: "Plan",
+        },
+        {
+            key: "plan_final",
+            label: "Final Plan",
+        },
+        {
+            key: "result",
+            label: "Runtime / Result",
+        },
+        {
+            key: "error",
+            label: "Error",
+        },
+    ];
+
+
+    let rendered = 0;
+
+
+    for (const step of steps) {
+
+        const data =
+            trace?.[step.key];
+
+        if (
+            data === null ||
+            data === undefined
+        ) {
+            continue;
+        }
+
+        rendered++;
+
+        const isError =
+            step.key === "error";
+
+        const element =
+            document.createElement("div");
+
+        element.className =
+            `trace-step ${
+                isError
+                    ? "error"
+                    : "success"
+            }`;
+
+        element.innerHTML = `
+            <div class="trace-step-header">
+
+                <div class="trace-name">
+
+                    <span
+                        class="${
+                            isError
+                                ? "trace-error"
+                                : "trace-icon"
+                        }"
+                    >
+                        ${
+                            isError
+                                ? "✕"
+                                : "✓"
+                        }
+                    </span>
+
+                    ${step.label}
+
+                </div>
+
+            </div>
+
+            <pre class="trace-data">${escapeHtml(
+                pretty(data)
+            )}</pre>
+        `;
+
+        traceContainer.appendChild(
+            element
+        );
+    }
+
+
+    if (!rendered) {
+
+        traceContainer.innerHTML = `
+            <div class="empty">
+                No hay datos de ejecución.
+            </div>
+        `;
+
+        traceStatus.textContent =
+            "Sin datos";
+
+        return;
+    }
+
+
+    traceStatus.textContent =
+        `${rendered} etapas`;
+}
+
+
+async function execute() {
+
+    const text =
+        commandInput.value.trim();
+
+    if (!text) {
+        return;
+    }
+
+
+    addMessage(
+        "user",
+        text
+    );
+
+
+    commandInput.value = "";
+
+    executeButton.disabled = true;
+
+    executeButton.textContent =
+        "Ejecutando...";
+
+    traceStatus.textContent =
+        "Ejecutando";
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/execute",
+                {
+                    method: "POST",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json",
+                    },
+
+                    body: JSON.stringify({
+                        text,
+                    }),
+                }
+            );
+
+
+        const data =
+            await response.json();
+
+
+        if (
+            data.success
+        ) {
+
+            addMessage(
+                "nexus",
+                pretty(data.output)
+            );
+
+        } else {
+
+            addMessage(
+                "nexus",
+                data.message ||
+                    "NEXUS devolvió un error."
+            );
+        }
+
+
+        if (data.trace) {
+
+            renderTrace(
+                data.trace
+            );
+        }
+
+
+        const memory =
+            data.memory_count ?? 0;
+
+        memoryHeader.textContent =
+            `Memory: ${memory}`;
+
+        memoryValue.textContent =
+            `${memory} entries`;
+
+
+    } catch (error) {
+
+        addMessage(
+            "nexus",
+            `Error de conexión: ${error.message}`
+        );
+
+        traceStatus.textContent =
+            "Error";
+
+
+    } finally {
+
+        executeButton.disabled = false;
+
+        executeButton.textContent =
+            "Ejecutar";
+    }
+}
+
+
+async function loadStatus() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/status"
+            );
+
+        const data =
+            await response.json();
+
+
+        if (
+            data.status === "online"
+        ) {
+
+            statusText.textContent =
+                "NEXUS online";
+
+        }
+
+        const memory =
+            data.memory ?? 0;
+
+        memoryHeader.textContent =
+            `Memory: ${memory}`;
+
+        memoryValue.textContent =
+            `${memory} entries`;
+
+
+    } catch {
+
+        statusText.textContent =
+            "NEXUS offline";
+    }
+}
+
+
+executeButton.addEventListener(
+    "click",
+    execute
+);
+
+
+clearButton.addEventListener(
+    "click",
+    () => {
+
+        conversation.innerHTML = `
+            <div class="empty">
+                Todavía no hay ejecuciones.
+            </div>
+        `;
+
+        traceContainer.innerHTML = `
+            <div class="empty">
+                Ejecutá una instrucción para
+                visualizar el recorrido interno
+                de NEXUS.
+            </div>
+        `;
+
+        traceStatus.textContent =
+            "Esperando ejecución";
+    }
+);
+
+
+commandInput.addEventListener(
+    "keydown",
+    (event) => {
+
+        if (
+            event.key === "Enter" &&
+            (event.ctrlKey || event.metaKey)
+        ) {
+
+            execute();
+        }
+    }
+);
+
+
+loadStatus();
+
+</script>
+
+</body>
+</html>
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: landing\package-lock.json
+================================================================================
+
+{
+  "name": "landing",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {}
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: landing\vite-project\.gitignore
+================================================================================
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: landing\vite-project\eslint.config.js
+================================================================================
+
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{js,jsx}'],
+    extends: [
+      js.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true },
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+])
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: landing\vite-project\index.html
+================================================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>vite-project</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: landing\vite-project\package.json
+================================================================================
+
+{
+  "name": "vite-project",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "vite": "^7.2.4"
+  }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

@@ -1,0 +1,2043 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\tests\test_context_resolver.py
+================================================================================
+
+from documents import build_document_services
+from documents.context_resolver import (
+    DocumentContext,
+    DocumentContextSelection,
+    DocumentContextResolver,
+)
+
+from context.models import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+from documents.context_relevance import (
+    DocumentContextRelevance,
+)
+
+
+def test_document_context_is_empty_for_selection():
+    selection = DocumentContextSelection(
+        user_id="user-a",
+    )
+
+    context = DocumentContext.empty(
+        selection,
+    )
+
+    assert context.selection == selection
+    assert context.documents == ()
+
+
+def test_document_context_resolver_returns_documents_for_context():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    assert result.documents == (document,)
+    assert result.selection == DocumentContextSelection(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+
+def test_document_context_resolver_returns_empty_context_when_no_documents_match():
+    services = build_document_services()
+
+    services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-b",
+    )
+
+    assert result.documents == ()
+    assert result.selection == DocumentContextSelection(
+        user_id="user-b",
+    )
+
+
+def test_document_context_resolver_resolves_multiple_projects():
+    services = build_document_services()
+
+    project_a_document = services.access.create_document(
+        name="Proyecto A",
+        mime_type="text/plain",
+        source="a.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    project_b_document = services.access.create_document(
+        name="Proyecto B",
+        mime_type="text/plain",
+        source="b.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-b",
+    )
+
+    other_user_document = services.access.create_document(
+        name="Otro usuario",
+        mime_type="text/plain",
+        source="other.txt",
+        user_id="user-b",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a", "project-b"),
+    )
+
+    assert result.documents == (
+        project_a_document,
+        project_b_document,
+    )
+
+    assert other_user_document not in result.documents
+
+    assert result.selection == DocumentContextSelection(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a", "project-b"),
+    )
+
+
+def test_document_context_is_immutable():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert isinstance(result.documents, tuple)
+    assert result.documents == (document,)
+    assert isinstance(result.selection, DocumentContextSelection)
+
+def test_document_context_resolver_resolves_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    project_a = ProjectContext.create(
+        name="Project A",
+        organization_id="organization-a",
+    )
+
+    project_b = ProjectContext.create(
+        name="Project B",
+        organization_id="organization-a",
+    )
+
+    document_a = services.access.create_document(
+        name="Documento A",
+        mime_type="text/plain",
+        source="a.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+        project_id=project_a.id,
+    )
+
+    document_b = services.access.create_document(
+        name="Documento B",
+        mime_type="text/plain",
+        source="b.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+        project_id=project_b.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=(project_a, project_b),
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve_from_context(
+        context,
+    )
+
+    assert result.documents == (
+        document_a,
+        document_b,
+    )
+
+    assert result.selection.user_id == user.id
+    assert result.selection.organization_id == organization.id
+    assert result.selection.project_ids == (
+        project_a.id,
+        project_b.id,
+    )
+
+def test_document_context_contains_relevance_matches():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    assert result.documents == (document,)
+    assert len(result.matches) == 1
+    assert result.matches[0].document == document
+    assert (
+        result.matches[0].relevance
+        == DocumentContextRelevance.PROJECT
+    )
+
+
+def test_empty_document_context_contains_no_matches():
+    selection = DocumentContextSelection(
+        user_id="user-a",
+    )
+
+    context = DocumentContext.empty(
+        selection,
+    )
+
+    assert context.documents == ()
+    assert context.matches == ()
+
+def test_ordered_matches_returns_most_specific_context_first():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id="user-a",
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    ordered = result.ordered_matches()
+
+    assert [match.document for match in ordered] == [
+        project_document,
+        organization_document,
+        user_document,
+    ]
+
+
+def test_ordered_matches_does_not_change_original_document_order():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="First",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Second",
+        mime_type="text/plain",
+        source="second.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    assert result.documents == (
+        first,
+        second,
+    )
+
+    assert result.ordered_matches() == (
+        result.matches[1],
+        result.matches[0],
+    )
+
+    assert result.documents == (
+        first,
+        second,
+    )
+
+def test_ordered_documents_returns_documents_by_context_relevance():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id="user-a",
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    assert result.ordered_documents() == (
+        project_document,
+        organization_document,
+        user_document,
+    )
+
+
+def test_ordered_documents_does_not_change_documents():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="First",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Second",
+        mime_type="text/plain",
+        source="second.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    assert result.documents == (
+        first,
+        second,
+    )
+
+    assert result.ordered_documents() == (
+        second,
+        first,
+    )
+
+def test_documents_by_mime_type_filters_resolved_documents():
+    services = build_document_services()
+
+    text_document = services.access.create_document(
+        name="Texto",
+        mime_type="text/plain",
+        source="texto.txt",
+        user_id="user-a",
+    )
+
+    json_document = services.access.create_document(
+        name="Datos",
+        mime_type="application/json",
+        source="datos.json",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert result.documents_by_mime_type(
+        "text/plain",
+    ) == (
+        text_document,
+    )
+
+    assert result.documents_by_mime_type(
+        "application/json",
+    ) == (
+        json_document,
+    )
+
+
+def test_documents_by_name_filters_case_insensitively():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Manual de Operaciones",
+        mime_type="text/plain",
+        source="manual.txt",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="text/plain",
+        source="contrato.txt",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert result.documents_by_name(
+        "OPERACIONES",
+    ) == (
+        first,
+    )
+
+def test_empty_context_filters_return_empty_tuples():
+    selection = DocumentContextSelection(
+        user_id="user-a",
+    )
+
+    context = DocumentContext.empty(
+        selection,
+    )
+
+    assert context.documents_by_mime_type(
+        "text/plain",
+    ) == ()
+
+    assert context.documents_by_name(
+        "contrato",
+    ) == ()
+
+    assert context.ordered_matches() == ()
+
+    assert context.ordered_documents() == ()
+
+def test_context_filter_applies_name_and_mime_type_filters():
+    services = build_document_services()
+
+    matching = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="text/plain",
+        source="contrato.txt",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Informe Comercial",
+        mime_type="application/pdf",
+        source="informe.pdf",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert result.filter(
+        name="CONTRATO",
+        mime_type="application/pdf",
+    ) == (
+        matching,
+    )
+
+
+def test_context_filter_without_filters_returns_original_documents():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Segundo",
+        mime_type="application/json",
+        source="second.json",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert result.filter() == (
+        first,
+        second,
+    )
+
+
+def test_context_filter_preserves_document_order():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Contrato A",
+        mime_type="application/pdf",
+        source="a.pdf",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Contrato B",
+        mime_type="application/pdf",
+        source="b.pdf",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    result = resolver.resolve(
+        user_id="user-a",
+    )
+
+    assert result.filter(
+        name="contrato",
+        mime_type="application/pdf",
+    ) == (
+        first,
+        second,
+    )
+
+def test_context_query_returns_structured_result():
+    services = build_document_services()
+
+    matching = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="text/plain",
+        source="contrato.txt",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    context = resolver.resolve(
+        user_id="user-a",
+    )
+
+    result = context.query(
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        matching,
+    )
+
+    assert result.total == 1
+
+    assert result.query == {
+        "name": "contrato",
+        "mime_type": "application/pdf",
+    }
+
+
+def test_context_query_without_filters_returns_all_context_documents():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Segundo",
+        mime_type="application/pdf",
+        source="second.pdf",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    context = resolver.resolve(
+        user_id="user-a",
+    )
+
+    result = context.query()
+
+    assert result.documents == (
+        first,
+        second,
+    )
+
+    assert result.total == 2
+
+    assert result.query == {}
+
+def test_context_access_query_returns_structured_document_result():
+    services = build_document_services()
+
+    matching = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="text/plain",
+        source="contrato.txt",
+        user_id="user-a",
+    )
+
+    result = services.context_access.query(
+        user_id="user-a",
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        matching,
+    )
+
+    assert result.total == 1
+    assert result.has_results is True
+    assert result.query == {
+        "name": "contrato",
+        "mime_type": "application/pdf",
+    }
+
+
+def test_context_access_query_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    document = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    result = services.context_access.query_from_context(
+        context,
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        document,
+    )
+
+    assert result.total == 1
+    assert result.has_results is True
+
+def test_context_query_preserves_relevance_matches():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Contrato Usuario",
+        mime_type="application/pdf",
+        source="user.pdf",
+        user_id="user-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Contrato Proyecto",
+        mime_type="application/pdf",
+        source="project.pdf",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    context = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+
+    result = context.query(
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        user_document,
+        project_document,
+    )
+
+    assert result.ordered_documents() == (
+        project_document,
+        user_document,
+    )
+
+def test_context_query_supports_offset_and_limit():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Documento Primero",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Documento Segundo",
+        mime_type="text/plain",
+        source="second.txt",
+        user_id="user-a",
+    )
+
+    third = services.access.create_document(
+        name="Documento Tercero",
+        mime_type="text/plain",
+        source="third.txt",
+        user_id="user-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    context = resolver.resolve(
+        user_id="user-a",
+    )
+
+    result = context.query(
+        offset=1,
+        limit=1,
+    )
+
+    assert result.documents == (
+        second,
+    )
+
+    assert result.total == 3
+    assert result.offset == 1
+    assert result.limit == 1
+    assert result.has_more is True
+
+
+def test_context_query_pagination_preserves_relevance_matches():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Contrato Usuario",
+        mime_type="application/pdf",
+        source="user.pdf",
+        user_id="user-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Contrato Proyecto",
+        mime_type="application/pdf",
+        source="project.pdf",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    context = resolver.resolve(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    result = context.query(
+        name="contrato",
+        offset=1,
+        limit=1,
+    )
+
+    assert result.documents == (
+        project_document,
+    )
+
+    assert result.total == 2
+    assert result.matches == (
+        next(
+            match
+            for match in context.matches
+            if match.document == project_document
+        ),
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_declared_type_detection.py
+================================================================================
+
+from documents import (
+    DeclaredTypeDetectionStrategy,
+    DocumentArtifact,
+)
+
+
+def test_declared_type_strategy_resolves_declared_type():
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    strategy = DeclaredTypeDetectionStrategy()
+
+    strategy.declare(
+        artifact,
+        "application/pdf",
+    )
+
+    result = strategy.resolve(
+        artifact
+    )
+
+    assert result is not None
+    assert result.mime_type == "application/pdf"
+
+
+def test_declared_type_strategy_returns_none_when_not_declared():
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    strategy = DeclaredTypeDetectionStrategy()
+
+    result = strategy.resolve(
+        artifact
+    )
+
+    assert result is None
+
+
+def test_declared_type_strategy_normalizes_mime_type():
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    strategy = DeclaredTypeDetectionStrategy()
+
+    strategy.declare(
+        artifact,
+        " APPLICATION/PDF ",
+    )
+
+    result = strategy.resolve(
+        artifact
+    )
+
+    assert result is not None
+    assert result.mime_type == "application/pdf"
+
+
+def test_declared_type_strategy_can_remove_declaration():
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    strategy = DeclaredTypeDetectionStrategy()
+
+    strategy.declare(
+        artifact,
+        "application/pdf",
+    )
+
+    removed = strategy.remove(
+        artifact
+    )
+
+    assert removed == "application/pdf"
+    assert strategy.resolve(
+        artifact
+    ) is None
+
+
+def test_declared_type_strategy_remove_unknown_returns_none():
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    strategy = DeclaredTypeDetectionStrategy()
+
+    assert strategy.remove(
+        artifact
+    ) is None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_artifact.py
+================================================================================
+
+from datetime import timezone
+
+from documents import DocumentArtifact
+
+
+def test_artifact_create():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+
+    assert artifact.id
+    assert artifact.location == "local:/documents/contrato.pdf"
+    assert artifact.size is None
+    assert artifact.checksum is None
+    assert artifact.checksum_algorithm is None
+    assert artifact.created_at.tzinfo == timezone.utc
+
+
+def test_artifact_create_with_physical_metadata():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+        size=2048,
+        checksum="abc123",
+        checksum_algorithm="sha256",
+    )
+
+    assert artifact.location == "local:/documents/contrato.pdf"
+    assert artifact.size == 2048
+    assert artifact.checksum == "abc123"
+    assert artifact.checksum_algorithm == "sha256"
+
+
+def test_artifact_is_immutable():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+
+    try:
+        artifact.location = "local:/documents/otro.pdf"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("DocumentArtifact should be immutable")
+
+
+def test_artifact_metadata_is_optional():
+    artifact = DocumentArtifact.create(
+        location="https://example.com/document.pdf",
+    )
+
+    assert artifact.size is None
+    assert artifact.checksum is None
+    assert artifact.checksum_algorithm is None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_artifact_link.py
+================================================================================
+
+from documents import Document, DocumentArtifact
+
+
+def test_document_can_reference_artifact():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    assert document.artifact_id == artifact.id
+
+
+def test_document_artifact_reference_is_optional():
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+    )
+
+    assert document.artifact_id is None
+
+
+def test_document_keeps_artifact_reference_immutable():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+        artifact_id=artifact.id,
+    )
+
+    try:
+        document.artifact_id = "another-artifact"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("Document should be immutable")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_cognitive.py
+================================================================================
+
+
+from unittest.mock import MagicMock
+
+from documents.capability import DocumentCapability
+from documents.cognitive import DocumentCognitiveAccess
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+def test_document_cognitive_access_finds_relevant_documents():
+    capability = MagicMock(spec=DocumentCapability)
+
+    document = MagicMock(spec=Document)
+    query = DocumentQueryResult.from_documents(
+        (document,),
+        total=3,
+        offset=1,
+        limit=1,
+    )
+    capability.query.return_value = query
+
+    access = DocumentCognitiveAccess(capability)
+
+    result = access.find_relevant(
+        context=MagicMock(),
+        name="manual.pdf",
+        mime_type="application/pdf",
+        offset=1,
+        limit=1,
+    )
+
+    capability.query.assert_called_once_with(
+        context=capability.query.call_args.kwargs["context"],
+        name="manual.pdf",
+        mime_type="application/pdf",
+        offset=1,
+        limit=1,
+    )
+
+    capability.relevant_documents.assert_not_called()
+
+    assert result.query is query
+    assert result.documents == query.documents
+    assert result.metadata["operation"] == "find_relevant"
+    assert result.metadata["name"] == "manual.pdf"
+    assert result.metadata["mime_type"] == "application/pdf"
+    assert result.metadata["count"] == 1
+    assert result.metadata["total"] == 3
+    assert result.metadata["has_more"] is True
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_content.py
+================================================================================
+
+from datetime import timezone
+
+from documents import Document, DocumentContent
+
+
+def test_content_create():
+    content = DocumentContent.create(
+        text="Contenido del documento.",
+    )
+
+    assert content.id
+    assert content.text == "Contenido del documento."
+    assert content.content_type == "text/plain"
+    assert content.language is None
+    assert content.created_at.tzinfo == timezone.utc
+
+
+def test_content_create_with_metadata():
+    content = DocumentContent.create(
+        text="Contenido en español.",
+        content_type="text/markdown",
+        language="es",
+    )
+
+    assert content.text == "Contenido en español."
+    assert content.content_type == "text/markdown"
+    assert content.language == "es"
+
+
+def test_content_is_immutable():
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+
+    try:
+        content.text = "Otro contenido."
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("DocumentContent should be immutable")
+
+
+def test_document_can_reference_content():
+    content = DocumentContent.create(
+        text="Contenido del contrato.",
+    )
+
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+        content_id=content.id,
+    )
+
+    assert document.content_id == content.id
+
+
+def test_document_content_reference_is_optional():
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+    )
+
+    assert document.content_id is None
+
+
+def test_document_content_reference_is_immutable():
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local",
+        content_id=content.id,
+    )
+
+    try:
+        document.content_id = "another-content"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("Document should be immutable")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_ingestion.py
+================================================================================
+
+from documents import (
+    DocumentArtifact,
+    DocumentContent,
+    DocumentIngestor,
+    IngestionResult,
+)
+
+
+class FakeIngestor:
+    def ingest(self, artifact: DocumentArtifact) -> IngestionResult:
+        content = DocumentContent.create(
+            text="Contenido extraído.",
+            content_type="text/plain",
+            language="es",
+        )
+
+        return IngestionResult(
+            artifact=artifact,
+            content=content,
+        )
+
+
+def test_ingestion_result_contains_artifact_and_content():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.txt",
+    )
+
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+
+    result = IngestionResult(
+        artifact=artifact,
+        content=content,
+    )
+
+    assert result.artifact is artifact
+    assert result.content is content
+
+
+def test_ingestor_protocol_can_be_implemented():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.txt",
+    )
+
+    ingestor = FakeIngestor()
+
+    result = ingestor.ingest(artifact)
+
+    assert isinstance(result, IngestionResult)
+    assert result.artifact is artifact
+    assert result.content.text == "Contenido extraído."
+
+
+def test_ingestion_result_is_immutable():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.txt",
+    )
+
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+
+    result = IngestionResult(
+        artifact=artifact,
+        content=content,
+    )
+
+    try:
+        result.content = content
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("IngestionResult should be immutable")
+
+
+def test_document_ingestor_protocol_is_runtime_importable():
+    assert DocumentIngestor is not None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_ingestion_evidence_persistence.py
+================================================================================
+
+from pathlib import Path
+
+from documents import (
+    DocumentArtifact,
+    DocumentIngestionEvidence,
+    build_document_services,
+)
+
+
+def test_document_persists_ingestion_evidence(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "persistent evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="text/plain",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    persisted_document = (
+        services.document_store.get(document.id)
+    )
+
+    assert persisted_document is not None
+
+    assert isinstance(
+        persisted_document.ingestion_evidence,
+        DocumentIngestionEvidence,
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .declared_type.mime_type
+        == "text/plain"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence
+        .detection_strategy
+        == "ExtensionTypeDetectionStrategy"
+    )
+
+    assert (
+        persisted_document.ingestion_evidence.matches
+    )
+
+    assert result.document.id == document.id
+
+
+def test_document_persists_type_mismatch_evidence(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "manual.txt"
+
+    file_path.write_text(
+        "mismatch evidence",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path),
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="manual.txt",
+        mime_type="application/pdf",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    services.document_service.ingest_with_validation(
+        document
+    )
+
+    persisted_document = (
+        services.document_store.get(document.id)
+    )
+
+    assert persisted_document is not None
+    assert persisted_document.ingestion_evidence is not None
+
+    evidence = (
+        persisted_document.ingestion_evidence
+    )
+
+    assert (
+        evidence.declared_type.mime_type
+        == "application/pdf"
+    )
+
+    assert (
+        evidence.detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert evidence.mismatch
+    assert not evidence.matches
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_ingestion_flow.py
+================================================================================
+
+from pathlib import Path
+
+from documents import (
+    DocumentArtifact,
+    IngestionRegistry,
+    LocalArtifactReader,
+    TextIngestor,
+)
+
+
+def test_local_text_ingestion_flow(tmp_path: Path):
+    file_path = tmp_path / "contract.txt"
+    file_path.write_text(
+        "Este es el contenido del contrato.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    reader = LocalArtifactReader()
+    ingestor = TextIngestor(reader)
+
+    registry = IngestionRegistry()
+    registry.register("text/plain", ingestor)
+
+    selected_ingestor = registry.get("text/plain")
+
+    assert selected_ingestor is ingestor
+
+    result = selected_ingestor.ingest(artifact)
+
+    assert result.artifact is artifact
+    assert result.content.text == "Este es el contenido del contrato."
+    assert result.content.content_type == "text/plain"
+
+
+def test_registry_selects_text_ingestor_for_local_artifact(tmp_path: Path):
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text(
+        "Notas de NEXUS.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    registry = IngestionRegistry()
+
+    registry.register(
+        "text/plain",
+        TextIngestor(LocalArtifactReader()),
+    )
+
+    ingestor = registry.get("text/plain")
+
+    assert ingestor is not None
+
+    result = ingestor.ingest(artifact)
+
+    assert result.artifact is artifact
+    assert result.content.text == "Notas de NEXUS."
+
+
+def test_unsupported_content_type_is_not_selected(tmp_path: Path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    registry = IngestionRegistry()
+    registry.register(
+        "text/plain",
+        TextIngestor(LocalArtifactReader()),
+    )
+
+    assert registry.get("application/pdf") is None
+    assert not registry.supports("application/pdf")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_ingestion_result.py
+================================================================================
+
+from pathlib import Path
+
+from documents import (
+    DocumentIngestionResult,
+    DocumentTypeValidation,
+    build_document_services,
+)
+
+
+def test_document_service_ingest_with_validation_reports_match(
+    tmp_path: Path,
+):
+    from documents import DocumentArtifact
+
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "hello nexus",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path)
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="document.txt",
+        mime_type="text/plain",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    assert isinstance(
+        result,
+        DocumentIngestionResult,
+    )
+
+    assert isinstance(
+        result.type_validation,
+        DocumentTypeValidation,
+    )
+
+    assert result.type_matches
+    assert not result.type_mismatch
+    assert result.content is not None
+    assert result.content.text == "hello nexus"
+
+
+def test_document_service_ingest_with_validation_reports_mismatch(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "hello nexus",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    from documents import DocumentArtifact
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path)
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="document.txt",
+        mime_type="application/pdf",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    result = (
+        services.document_service
+        .ingest_with_validation(document)
+    )
+
+    assert isinstance(
+        result,
+        DocumentIngestionResult,
+    )
+
+    assert result.type_validation is not None
+    assert result.type_mismatch
+    assert not result.type_matches
+
+    assert (
+        result.type_validation.declared_type.mime_type
+        == "application/pdf"
+    )
+
+    assert (
+        result.type_validation.detected_type.mime_type
+        == "text/plain"
+    )
+
+    assert result.content is not None
+    assert result.content.text == "hello nexus"
+
+
+def test_document_service_ingest_preserves_legacy_contract(
+    tmp_path: Path,
+):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "legacy contract",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    from documents import DocumentArtifact
+
+    artifact = services.document_service.add_artifact(
+        DocumentArtifact.create(
+            location=str(file_path)
+        )
+    )
+
+    document = services.document_service.create_document(
+        name="document.txt",
+        mime_type="text/plain",
+        source=str(file_path),
+        artifact_id=artifact.id,
+    )
+
+    resolution = services.document_service.ingest(
+        document
+    )
+
+    assert resolution.document.id == document.id
+    assert resolution.artifact is not None
+    assert resolution.content is not None
+    assert resolution.content.text == "legacy contract"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_ingestion_service.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentArtifact,
+    DocumentIngestionService,
+    DocumentType,
+    IngestionRegistry,
+)
+
+
+class FakeIngestor:
+    def __init__(self):
+        self.artifacts = []
+
+    def ingest(self, artifact):
+        self.artifacts.append(artifact)
+        return artifact
+
+
+def test_ingestion_service_normalizes_mime_type():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor()
+
+    registry.register(
+        "text/plain",
+        ingestor,
+    )
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:test.txt",
+    )
+
+    result = service.ingest(
+        artifact,
+        " TEXT/PLAIN ",
+    )
+
+    assert result == artifact
+    assert ingestor.artifacts == [artifact]
+
+
+def test_ingestion_service_accepts_document_type():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor()
+
+    registry.register(
+        "application/pdf",
+        ingestor,
+    )
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:test.pdf",
+    )
+
+    document_type = DocumentType.from_mime_type(
+        "APPLICATION/PDF"
+    )
+
+    result = service.ingest(
+        artifact,
+        document_type,
+    )
+
+    assert result == artifact
+    assert ingestor.artifacts == [artifact]
+
+
+def test_ingestion_service_uses_normalized_type_for_lookup():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor()
+
+    registry.register(
+        "text/plain",
+        ingestor,
+    )
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:test.txt",
+    )
+
+    service.ingest(
+        artifact,
+        "Text/Plain",
+    )
+
+    assert len(ingestor.artifacts) == 1
+
+
+def test_ingestion_service_rejects_invalid_mime_type():
+    registry = IngestionRegistry()
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:test.txt",
+    )
+
+    with pytest.raises(ValueError):
+        service.ingest(
+            artifact,
+            "invalid",
+        )
+
+
+def test_ingestion_service_reports_normalized_missing_type():
+    registry = IngestionRegistry()
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    artifact = DocumentArtifact.create(
+        location="local:test.pdf",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="application/pdf",
+    ):
+        service.ingest(
+            artifact,
+            "APPLICATION/PDF",
+        )
+
+def test_ingestion_service_reports_supported_content_types():
+    registry = IngestionRegistry()
+
+    registry.register(
+        "text/plain",
+        FakeIngestor(),
+    )
+
+    registry.register(
+        "application/pdf",
+        FakeIngestor(),
+    )
+
+    service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    assert service.supported_content_types() == [
+        "text/plain",
+        "application/pdf",
+    ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_metadata.py
+================================================================================
+
+from documents import DocumentMetadata
+
+
+def test_metadata_defaults_are_empty():
+    metadata = DocumentMetadata()
+
+    assert metadata.filename is None
+    assert metadata.title is None
+    assert metadata.author is None
+    assert metadata.language is None
+    assert metadata.document_type is None
+    assert metadata.tags == ()
+    assert metadata.extra == {}
+
+
+def test_metadata_to_dict():
+    metadata = DocumentMetadata(
+        filename="manual.pdf",
+        title="Manual",
+        author="NEXUS",
+        language="es",
+        document_type="pdf",
+        tags=("manual", "technical"),
+        extra={"department": "operations"},
+    )
+
+    data = metadata.to_dict()
+
+    assert data["filename"] == "manual.pdf"
+    assert data["title"] == "Manual"
+    assert data["author"] == "NEXUS"
+    assert data["language"] == "es"
+    assert data["document_type"] == "pdf"
+    assert data["tags"] == ("manual", "technical")
+    assert data["extra"] == {"department": "operations"}
+
+
+def test_metadata_from_dict():
+    metadata = DocumentMetadata.from_dict(
+        {
+            "filename": "manual.pdf",
+            "title": "Manual",
+            "language": "es",
+            "tags": ["manual", "technical"],
+            "department": "operations",
+        }
+    )
+
+    assert metadata.filename == "manual.pdf"
+    assert metadata.title == "Manual"
+    assert metadata.language == "es"
+    assert metadata.tags == ("manual", "technical")
+    assert metadata.extra == {"department": "operations"}
+
+
+def test_metadata_from_dict_preserves_unknown_fields_as_extra():
+    metadata = DocumentMetadata.from_dict(
+        {
+            "filename": "guide.pdf",
+            "custom_field": "value",
+        }
+    )
+
+    assert metadata.filename == "guide.pdf"
+    assert metadata.extra == {
+        "custom_field": "value",
+    }
+
+
+def test_metadata_is_immutable():
+    metadata = DocumentMetadata(
+        filename="guide.pdf",
+        language="es",
+    )
+
+    try:
+        metadata.filename = "other.pdf"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("DocumentMetadata should be immutable")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

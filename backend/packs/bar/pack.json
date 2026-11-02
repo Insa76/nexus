@@ -1,0 +1,8 @@
+{
+  "name": "Bar Edition",
+  "slug": "bar",
+  "color": "#7c5cff",
+  "logo": "bar",
+  "workflows": "workflows.json",
+  "plugins": []
+}

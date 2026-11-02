@@ -1,0 +1,1614 @@
+﻿
+================================================================================
+ARCHIVO: server.py.bak-before-reminders
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+import json
+import queue
+import threading
+from datetime import date, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from bootstrap.bootstrap import build_assistant_runtime
+from presence.presence_service import PresenceService
+from presence.presence_event import PresenceEvent
+
+
+HOST = "127.0.0.1"
+PORT = 8765
+
+BASE_DIR = Path(__file__).resolve().parent
+
+# El Engine mantiene WorkingMemory en memoria.
+# Serializamos las ejecuciones para evitar que
+# dos solicitudes modifiquen la memoria simultáneamente.
+engine_lock = threading.Lock()
+
+
+print()
+print("=" * 60)
+print("                 NEXUS DEV CONSOLE")
+print("=" * 60)
+
+engine, assistant_services, assistant_lifecycle = (
+    build_assistant_runtime()
+)
+presence = PresenceService(engine.memory)
+
+print("✓ NEXUS Engine iniciado")
+print("✓ WorkingMemory activa")
+print("✓ PresenceService activo")
+print(f"✓ Servidor: http://{HOST}:{PORT}")
+print("=" * 60)
+print()
+
+
+class NexusHandler(BaseHTTPRequestHandler):
+
+    # =========================================================
+    # JSON SAFE
+    # =========================================================
+
+    def _json_safe(
+        self,
+        value: Any,
+    ) -> Any:
+        """
+        Convierte estructuras internas de NEXUS
+        en valores compatibles con JSON.
+
+        Esta conversión ocurre únicamente
+        en la frontera HTTP.
+        """
+
+        if value is None:
+            return None
+
+        if isinstance(
+            value,
+            (
+                str,
+                int,
+                float,
+                bool,
+            ),
+        ):
+            return value
+
+        if isinstance(
+            value,
+            (datetime, date),
+        ):
+            return value.isoformat()
+
+        if isinstance(value, bytes):
+            return {
+                "type": "bytes",
+                "size": len(value),
+            }
+
+        # PIL.Image.Image
+        if (
+            hasattr(value, "size")
+            and hasattr(value, "mode")
+            and value.__class__.__module__.startswith(
+                "PIL"
+            )
+        ):
+            width, height = value.size
+
+            return {
+                "type": "image",
+                "width": width,
+                "height": height,
+                "mode": value.mode,
+            }
+
+        if isinstance(value, dict):
+            return {
+                str(key): self._json_safe(item)
+                for key, item in value.items()
+            }
+
+        if isinstance(
+            value,
+            (list, tuple, set),
+        ):
+            return [
+                self._json_safe(item)
+                for item in value
+            ]
+
+        # Objetos Pydantic u otros objetos
+        # con model_dump().
+        model_dump = getattr(
+            value,
+            "model_dump",
+            None,
+        )
+
+        if callable(model_dump):
+            try:
+                return self._json_safe(
+                    model_dump()
+                )
+            except Exception:
+                pass
+
+        # Último recurso.
+        return {
+            "type": "object",
+            "class": value.__class__.__name__,
+            "repr": repr(value),
+        }
+
+    # =========================================================
+    # HTTP HELPERS
+    # =========================================================
+
+    def _send_json(
+        self,
+        data: dict,
+        status: int = 200,
+    ) -> None:
+
+        safe_data = self._json_safe(data)
+
+        payload = json.dumps(
+            safe_data,
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        self.send_response(status)
+
+        self.send_header(
+            "Content-Type",
+            "application/json; charset=utf-8",
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(payload)),
+        )
+
+        # Permitimos que la Console Vite
+        # consuma el Runtime local.
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS",
+        )
+
+        self.end_headers()
+
+        self.wfile.write(payload)
+
+    def _send_html(
+        self,
+        content: bytes,
+    ) -> None:
+
+        self.send_response(200)
+
+        self.send_header(
+            "Content-Type",
+            "text/html; charset=utf-8",
+        )
+
+        self.send_header(
+            "Content-Length",
+            str(len(content)),
+        )
+
+        self.end_headers()
+
+        self.wfile.write(content)
+
+    # =========================================================
+    # MEMORY / TRACE HELPERS
+    # =========================================================
+
+    def _entry_to_dict(
+        self,
+        entry,
+    ) -> dict:
+
+        return {
+            "id": entry.id,
+            "timestamp": entry.timestamp.isoformat(),
+            "type": entry.type,
+            "data": entry.data,
+        }
+
+    def _build_trace(
+        self,
+        entries: list,
+    ) -> dict:
+        """
+        Construye un Execution Trace a partir
+        de las entradas generadas por una ejecución.
+        """
+
+        trace = {
+            "request": None,
+            "intent": None,
+            "objective": None,
+            "plan": None,
+            "result": None,
+            "error": None,
+        }
+
+        for entry in entries:
+
+            if entry.type == "user_request":
+                trace["request"] = entry.data
+
+            elif entry.type == "intent":
+                trace["intent"] = entry.data
+
+            elif entry.type == "objective":
+                trace["objective"] = entry.data
+
+            elif entry.type == "plan":
+                trace["plan"] = entry.data
+
+            elif entry.type == "execution_result":
+                trace["result"] = entry.data
+
+            elif entry.type == "error":
+                trace["error"] = entry.data
+
+        return trace
+
+    # =========================================================
+    # PRESENCE EVENT STREAM (SSE)
+    # =========================================================
+
+    def _send_sse_headers(self) -> None:
+        self.send_response(200)
+
+        self.send_header(
+            "Content-Type",
+            "text/event-stream; charset=utf-8",
+        )
+
+        self.send_header(
+            "Cache-Control",
+            "no-cache",
+        )
+
+        self.send_header(
+            "Connection",
+            "keep-alive",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS",
+        )
+
+        self.end_headers()
+
+    def _write_sse(
+        self,
+        event: str,
+        data: Any,
+    ) -> None:
+        payload = json.dumps(
+            self._json_safe(data),
+            ensure_ascii=False,
+        )
+
+        message = (
+            f"event: {event}\\n"
+            f"data: {payload}\\n\\n"
+        ).encode("utf-8")
+
+        self.wfile.write(message)
+        self.wfile.flush()
+
+    def _handle_presence_events(self) -> None:
+        event_queue: queue.Queue[PresenceEvent] = queue.Queue()
+        closed = threading.Event()
+
+        def listener(event: PresenceEvent) -> None:
+            if not closed.is_set():
+                event_queue.put(event)
+
+        unsubscribe = engine.presence_events.subscribe(listener)
+
+        try:
+            self._send_sse_headers()
+
+            # Confirma que el canal está conectado.
+            self._write_sse(
+                "connected",
+                {
+                    "state": "connected",
+                    "message": "Presence Event Stream conectado.",
+                },
+            )
+
+            while True:
+                try:
+                    event = event_queue.get(
+                        timeout=15.0,
+                    )
+
+                    self._write_sse(
+                        "presence",
+                        event.to_dict(),
+                    )
+
+                except queue.Empty:
+                    # Keep-alive para mantener abierta
+                    # la conexión SSE.
+                    self.wfile.write(
+                        b": keep-alive\\n\\n"
+                    )
+                    self.wfile.flush()
+
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            closed.set()
+            unsubscribe()
+
+    # =========================================================
+    # OPTIONS
+    # =========================================================
+
+    def do_OPTIONS(self) -> None:
+
+        self.send_response(204)
+
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            "*",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type",
+        )
+
+        self.send_header(
+            "Access-Control-Allow-Methods",
+            "GET, POST, OPTIONS",
+        )
+
+        self.end_headers()
+
+    # =========================================================
+    # GET
+    # =========================================================
+
+    def do_GET(self) -> None:
+
+        # -----------------------------------------------------
+        # PRESENCE EVENT STREAM
+        # -----------------------------------------------------
+
+        if self.path == "/api/presence/events":
+            self._handle_presence_events()
+            return
+
+        # -----------------------------------------------------
+        # Console HTML legacy
+        # -----------------------------------------------------
+
+        if self.path in (
+            "/",
+            "/index.html",
+        ):
+
+            index_file = (
+                BASE_DIR / "index.html"
+            )
+
+            content = index_file.read_bytes()
+
+            self._send_html(content)
+
+            return
+
+        # -----------------------------------------------------
+        # STATUS
+        # -----------------------------------------------------
+
+        if self.path == "/api/status":
+
+            self._send_json(
+                {
+                    "status": "online",
+                    "memory": engine.memory.count(),
+                }
+            )
+
+            return
+
+        # -----------------------------------------------------
+        # PRESENCE
+        # -----------------------------------------------------
+
+        if self.path == "/api/presence":
+
+            snapshot = presence.snapshot()
+
+            self._send_json(
+                snapshot
+            )
+
+            return
+
+        # -----------------------------------------------------
+        # MEMORY
+        # -----------------------------------------------------
+
+        if self.path == "/api/memory":
+
+            entries = [
+                self._entry_to_dict(entry)
+                for entry in engine.memory.all()
+            ]
+
+            self._send_json(
+                {
+                    "entries": entries,
+                    "count": len(entries),
+                }
+            )
+
+            return
+
+        self.send_error(404)
+
+    # =========================================================
+    # LEARNING CANDIDATE PROMOTION
+    # =========================================================
+
+    def _handle_learning_candidate_promote(self) -> None:
+        try:
+            content_length = int(
+                self.headers.get("Content-Length", "0")
+            )
+
+            body = self.rfile.read(content_length)
+            candidate = json.loads(body.decode("utf-8"))
+
+            if not isinstance(candidate, dict):
+                self._send_json(
+                    {"success": False, "message": "Learning candidate must be an object."},
+                    status=400,
+                )
+                return
+
+            candidate_id = candidate.get("id")
+            knowledge = candidate.get("knowledge")
+            insight_id = candidate.get("insightId")
+            source_cycle_ids = candidate.get("sourceCycleIds")
+            evidence_keys = candidate.get("evidenceKeys")
+
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                self._send_json(
+                    {"success": False, "message": "Candidate id is required."},
+                    status=400,
+                )
+                return
+
+            if not isinstance(knowledge, str) or not knowledge.strip():
+                self._send_json(
+                    {"success": False, "message": "Candidate knowledge is required."},
+                    status=400,
+                )
+                return
+
+            if not isinstance(insight_id, str) or not insight_id.strip():
+                self._send_json(
+                    {"success": False, "message": "Insight id is required."},
+                    status=400,
+                )
+                return
+
+            if not isinstance(source_cycle_ids, list):
+                source_cycle_ids = []
+
+            if not isinstance(evidence_keys, list):
+                evidence_keys = []
+
+            memory_key = f"insight:{candidate_id}"
+
+            with engine_lock:
+                fact = engine.semantic_memory.learn(
+                    memory_key,
+                    "cognitive_pattern",
+                    knowledge.strip(),
+                    confidence=0.85,
+                    source="cognitive_insight",
+                    metadata={
+                        "candidate_id": candidate_id,
+                        "insight_id": insight_id,
+                        "source_cycle_ids": [str(item) for item in source_cycle_ids],
+                        "evidence_keys": [str(item) for item in evidence_keys],
+                        "promoted_from": "console_learning_candidate",
+                    },
+                )
+
+            self._send_json(
+                {
+                    "success": True,
+                    "memory_key": memory_key,
+                    "promoted_at": datetime.now().astimezone().isoformat(),
+                    "fact": fact,
+                }
+            )
+
+        except json.JSONDecodeError:
+            self._send_json(
+                {"success": False, "message": "Invalid JSON."},
+                status=400,
+            )
+        except Exception as exc:
+            self._send_json(
+                {"success": False, "message": str(exc)},
+                status=500,
+            )
+
+    # =========================================================
+    # POST
+    # =========================================================
+
+    def do_POST(self) -> None:
+
+        if self.path == "/api/learning/candidates/promote":
+            self._handle_learning_candidate_promote()
+            return
+
+        if self.path != "/api/execute":
+
+            self.send_error(404)
+
+            return
+
+        try:
+
+            # -------------------------------------------------
+            # BODY
+            # -------------------------------------------------
+
+            content_length = int(
+                self.headers.get(
+                    "Content-Length",
+                    "0",
+                )
+            )
+
+            body = self.rfile.read(
+                content_length
+            )
+
+            payload = json.loads(
+                body.decode("utf-8")
+            )
+
+            text = payload.get("text")
+
+            # -------------------------------------------------
+            # VALIDATION
+            # -------------------------------------------------
+
+            if not isinstance(
+                text,
+                str,
+            ):
+
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": (
+                            "El campo 'text' "
+                            "es obligatorio."
+                        ),
+                    },
+                    400,
+                )
+
+                return
+
+            text = text.strip()
+
+            if not text:
+
+                self._send_json(
+                    {
+                        "success": False,
+                        "message": (
+                            "La instrucción "
+                            "no puede estar vacía."
+                        ),
+                    },
+                    400,
+                )
+
+                return
+
+            # -------------------------------------------------
+            # EXECUTION
+            # -------------------------------------------------
+
+            with engine_lock:
+
+                # Memoria antes
+                memory_before = (
+                    engine.memory.count()
+                )
+
+                # Ejecutar NEXUS
+                result = asyncio.run(
+                    engine.execute(text)
+                )
+
+                # Memoria después
+                memory_after = (
+                    engine.memory.count()
+                )
+
+                # Entradas generadas
+                all_entries = (
+                    engine.memory.all()
+                )
+
+                execution_entries = (
+                    all_entries[
+                        memory_before:
+                        memory_after
+                    ]
+                )
+
+                # Trace
+                trace = self._build_trace(
+                    execution_entries
+                )
+
+            # -------------------------------------------------
+            # PUBLIC RESPONSE
+            # -------------------------------------------------
+
+            response_text = (
+                result.metadata.get(
+                    "response"
+                )
+                if isinstance(
+                    result.metadata,
+                    dict,
+                )
+                else None
+            )
+
+            if not isinstance(
+                response_text,
+                str,
+            ) or not response_text.strip():
+
+                response_text = result.message
+
+            self._send_json(
+                {
+                    "success": result.success,
+                    "message": response_text,
+                    "output": result.output,
+                    "artifacts": result.artifacts,
+                    "metadata": result.metadata,
+                    "execution_time": result.execution_time,
+                    "memory_count": (
+                        engine.memory.count()
+                    ),
+                    "trace": trace,
+                }
+            )
+
+        except Exception as exc:
+
+            self._send_json(
+                {
+                    "success": False,
+                    "message": (
+                        f"Error interno: {exc}"
+                    ),
+                },
+                500,
+            )
+
+    # =========================================================
+    # LOG
+    # =========================================================
+
+    def log_message(
+        self,
+        format,
+        *args,
+    ) -> None:
+
+        print(
+            f"[NEXUS] {format % args}"
+        )
+
+
+# =============================================================
+# SERVER
+# =============================================================
+
+
+
+def main() -> None:
+    server = ThreadingHTTPServer(
+        (HOST, PORT),
+        NexusHandler,
+    )
+
+    async def start_assistant_services() -> None:
+        await assistant_lifecycle.start()
+
+    async def stop_assistant_services() -> None:
+        await assistant_lifecycle.stop()
+
+    try:
+        asyncio.run(start_assistant_services())
+        print("✓ Reminder Store")
+        print("✓ Reminder Scheduler")
+
+        server.serve_forever()
+
+    except KeyboardInterrupt:
+        print()
+        print("NEXUS detenido.")
+
+    finally:
+        server.server_close()
+
+        try:
+            asyncio.run(stop_assistant_services())
+        finally:
+            engine.semantic_memory.close()
+
+
+if __name__ == "__main__":
+    main()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: start-nexus.bat
+================================================================================
+
+@echo off
+setlocal
+cd /d "%~dp0"
+
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: No se encontro uv en PATH.
+    echo Instala uv o activa el entorno de desarrollo de NEXUS.
+    pause
+    exit /b 1
+)
+
+echo Iniciando runtime modular de NEXUS V1...
+echo Servidor local: http://127.0.0.1:8765
+echo Para detenerlo, presiona Ctrl+C.
+uv run python -u server.py
+set "NEXUS_EXIT=%ERRORLEVEL%"
+
+if not "%NEXUS_EXIT%"=="0" (
+    echo.
+    echo NEXUS termino con codigo %NEXUS_EXIT%.
+    pause
+)
+exit /b %NEXUS_EXIT%
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: start-nexus-desktop-dev.ps1
+================================================================================
+
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$consoleDir = Join-Path $root "apps\console"
+$electronDir = Join-Path $root "electron"
+$logsDir = Join-Path $env:TEMP "NEXUS_V1_DESKTOP_LOGS"
+New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+$apiOut = Join-Path $logsDir "runtime.stdout.log"
+$apiErr = Join-Path $logsDir "runtime.stderr.log"
+$uiOut = Join-Path $logsDir "console.stdout.log"
+$uiErr = Join-Path $logsDir "console.stderr.log"
+$electronOut = Join-Path $logsDir "electron.stdout.log"
+$electronErr = Join-Path $logsDir "electron.stderr.log"
+
+function Test-HttpEndpoint([string]$Url) {
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2
+        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500)
+    } catch { return $false }
+}
+function Wait-HttpEndpoint([string]$Url, [int]$Seconds, [string]$Name) {
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-HttpEndpoint $Url) { return }
+        Start-Sleep -Milliseconds 750
+    }
+    throw "No se pudo validar $Name en $Url dentro de $Seconds segundos. Logs: $logsDir"
+}
+
+foreach ($required in @(
+    (Join-Path $root "server.py"),
+    (Join-Path $consoleDir "package.json"),
+    (Join-Path $consoleDir "package-lock.json"),
+    (Join-Path $electronDir "package.json"),
+    (Join-Path $electronDir "package-lock.json"),
+    (Join-Path $electronDir "main.js")
+)) { if (!(Test-Path $required)) { throw "Falta un archivo necesario: $required" } }
+
+$npm = Get-Command npm -ErrorAction Stop
+$npmCmd = Join-Path (Split-Path $npm.Source -Parent) "npm.cmd"
+if (!(Test-Path $npmCmd)) { $npmCmd = "npm.cmd" }
+
+if (!(Test-Path (Join-Path $consoleDir "node_modules\vite\bin\vite.js"))) {
+    Write-Host "Instalando dependencias de la consola..." -ForegroundColor Cyan
+    Push-Location $consoleDir
+    try { & $npmCmd ci; if ($LASTEXITCODE -ne 0) { throw "npm ci falló en apps/console." } }
+    finally { Pop-Location }
+}
+if (!(Test-Path (Join-Path $electronDir "node_modules\electron\dist\electron.exe"))) {
+    Write-Host "Instalando dependencias de Electron..." -ForegroundColor Cyan
+    Push-Location $electronDir
+    try { & $npmCmd ci; if ($LASTEXITCODE -ne 0) { throw "npm ci falló en electron." } }
+    finally { Pop-Location }
+}
+
+if (!(Test-HttpEndpoint "http://127.0.0.1:8765/api/status")) {
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if (!$uv) { throw "No se encontró uv en PATH. Activá el entorno de NEXUS o instalá uv." }
+    Write-Host "Iniciando runtime modular (8765)..." -ForegroundColor Cyan
+    Start-Process -FilePath $uv.Source -ArgumentList @("run", "python", "-u", "server.py") -WorkingDirectory $root -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr | Out-Null
+}
+Wait-HttpEndpoint "http://127.0.0.1:8765/api/status" 60 "runtime NEXUS"
+
+if (!(Test-HttpEndpoint "http://127.0.0.1:5173/")) {
+    Write-Host "Iniciando consola React (5173)..." -ForegroundColor Cyan
+    Start-Process -FilePath $env:ComSpec -ArgumentList @("/c", "`"$npmCmd`" run dev -- --host 127.0.0.1 --port 5173 --strictPort") -WorkingDirectory $consoleDir -RedirectStandardOutput $uiOut -RedirectStandardError $uiErr | Out-Null
+}
+Wait-HttpEndpoint "http://127.0.0.1:5173/" 60 "consola React"
+$status = Invoke-RestMethod -Uri "http://127.0.0.1:8765/api/status" -TimeoutSec 5
+if ($status.status -ne "online") { throw "El runtime no informa estado online: $($status.status)" }
+
+Write-Host "Iniciando Electron..." -ForegroundColor Green
+Start-Process -FilePath $env:ComSpec -ArgumentList @("/c", "`"$npmCmd`" start") -WorkingDirectory $electronDir -RedirectStandardOutput $electronOut -RedirectStandardError $electronErr | Out-Null
+Write-Host "NEXUS Desktop iniciado." -ForegroundColor Green
+Write-Host "Runtime: http://127.0.0.1:8765/api/status"
+Write-Host "Consola: http://127.0.0.1:5173/assistant"
+Write-Host "Logs: $logsDir"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_context.py
+================================================================================
+
+from context import (
+    ContextStore,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+
+def test_user_organization_and_project_context() -> None:
+    store = ContextStore()
+
+    organization = OrganizationProfile.create(
+        "Estudio Jurídico Demo",
+        industry="legal",
+        areas=("Civil", "Comercial"),
+        rules=("Los contratos requieren revisión antes de firma.",),
+        priorities=("Vencimientos", "Clientes"),
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Abogado",
+        organization_id=organization.id,
+        responsibilities=("Revisión contractual",),
+        priorities=("Vencimientos",),
+    )
+
+    project = ProjectContext.create(
+        "Cliente Demo",
+        organization.id,
+        description="Proyecto de prueba.",
+        responsible_user_ids=(user.id,),
+    )
+
+    store.add_organization(organization)
+    store.add_user(user)
+    store.add_project(project)
+
+    context = store.build_context(user_id=user.id)
+
+    assert context.user is user
+    assert context.organization is organization
+    assert len(context.projects) == 1
+    assert context.projects[0] is project
+    assert context.projects[0].name == "Cliente Demo"
+
+
+def test_context_can_be_built_from_organization() -> None:
+    store = ContextStore()
+
+    organization = OrganizationProfile.create(
+        "Constructora Demo",
+        industry="construction",
+    )
+
+    project = ProjectContext.create(
+        "Obra Norte",
+        organization.id,
+    )
+
+    store.add_organization(organization)
+    store.add_project(project)
+
+    context = store.build_context(
+        organization_id=organization.id,
+    )
+
+    assert context.user is None
+    assert context.organization is organization
+    assert context.projects == (project,)
+
+
+def test_project_lookup() -> None:
+    store = ContextStore()
+
+    organization = OrganizationProfile.create(
+        "Agencia Demo",
+        industry="marketing",
+    )
+
+    project = ProjectContext.create(
+        "Campaña 2026",
+        organization.id,
+    )
+
+    store.add_project(project)
+
+    assert store.get_project(project.id) is project
+    assert store.get_project("missing") is None
+
+
+def test_explicit_organization_selection_has_priority() -> None:
+    store = ContextStore()
+
+    organization_a = OrganizationProfile.create(
+        "Organización A",
+        industry="legal",
+    )
+
+    organization_b = OrganizationProfile.create(
+        "Organización B",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        organization_id=organization_a.id,
+    )
+
+    project_a = ProjectContext.create(
+        "Proyecto A",
+        organization_a.id,
+    )
+
+    project_b = ProjectContext.create(
+        "Proyecto B",
+        organization_b.id,
+    )
+
+    store.add_organization(organization_a)
+    store.add_organization(organization_b)
+    store.add_user(user)
+    store.add_project(project_a)
+    store.add_project(project_b)
+
+    context = store.build_context(
+        user_id=user.id,
+        organization_id=organization_b.id,
+    )
+
+    assert context.user is user
+    assert context.organization is organization_b
+    assert context.projects == (project_b,)
+
+
+def test_projects_are_isolated_by_organization() -> None:
+    store = ContextStore()
+
+    organization_a = OrganizationProfile.create(
+        "Organización A",
+    )
+
+    organization_b = OrganizationProfile.create(
+        "Organización B",
+    )
+
+    project_a = ProjectContext.create(
+        "Proyecto A",
+        organization_a.id,
+    )
+
+    project_b = ProjectContext.create(
+        "Proyecto B",
+        organization_b.id,
+    )
+
+    store.add_organization(organization_a)
+    store.add_organization(organization_b)
+    store.add_project(project_a)
+    store.add_project(project_b)
+
+    context = store.build_context(
+        organization_id=organization_a.id,
+    )
+
+    assert context.projects == (project_a,)
+    assert project_b not in context.projects
+
+
+def test_missing_identifiers_produce_partial_or_empty_context() -> None:
+    store = ContextStore()
+
+    context = store.build_context(
+        user_id="missing-user",
+        organization_id="missing-organization",
+    )
+
+    assert context.user is None
+    assert context.organization is None
+    assert context.projects == ()
+
+
+def test_empty_selection_returns_empty_context() -> None:
+    store = ContextStore()
+
+    context = store.build_context()
+
+    assert context.user is None
+    assert context.organization is None
+    assert context.projects == ()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_runtime.py
+================================================================================
+
+from bootstrap.assistant_services import AssistantServices
+from bootstrap.assistant_services_lifecycle import (
+    AssistantServicesLifecycle,
+)
+from bootstrap.bootstrap import build_assistant_runtime
+from engine.engine import Engine
+from tasks import Reminder, ReminderStatus
+
+
+def test_build_assistant_runtime() -> None:
+    engine, services, lifecycle = build_assistant_runtime()
+
+    assert isinstance(engine, Engine)
+    assert isinstance(services, AssistantServices)
+    assert isinstance(
+        lifecycle,
+        AssistantServicesLifecycle,
+    )
+
+
+def test_build_assistant_runtime_keeps_engine_and_services_separate() -> None:
+    engine, services, lifecycle = build_assistant_runtime()
+
+    assert engine is not services
+    assert engine is not lifecycle
+    assert services is not lifecycle
+
+    assert services.reminder_scheduler is not None
+    assert services.scheduler is not None
+
+
+def test_lifecycle_controls_assistant_services() -> None:
+    engine, services, lifecycle = build_assistant_runtime()
+
+    assert lifecycle.services is services
+    assert lifecycle.running is False
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from tasks import ReminderStatus
+
+
+def test_assistant_runtime_executes_reminder_end_to_end() -> None:
+    engine, services, lifecycle = build_assistant_runtime()
+
+    reminder = services.reminder_store.add(
+        Reminder.create(
+            message="Reminder end-to-end",
+            trigger_at=datetime.now(timezone.utc) + timedelta(
+                seconds=0.05
+            ),
+        )
+    )
+
+    services.reminder_scheduler.schedule(reminder)
+
+    async def run() -> None:
+        await lifecycle.start()
+
+        await asyncio.sleep(0.15)
+
+        await lifecycle.stop()
+
+    asyncio.run(run())
+
+    stored = services.reminder_store.get(reminder.id)
+
+    assert stored is not None
+    assert stored.status is ReminderStatus.TRIGGERED
+    assert lifecycle.running is False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_services.py
+================================================================================
+
+from bootstrap.assistant_services import (
+    AssistantServices,
+    build_assistant_services,
+)
+
+
+def test_build_assistant_services() -> None:
+    services = build_assistant_services()
+
+    assert isinstance(services, AssistantServices)
+
+    assert services.scheduler is not None
+    assert services.reminder_store is not None
+    assert services.temporal_scheduler is not None
+    assert services.reminder_scheduler is not None
+
+
+def test_reminder_scheduler_uses_shared_services() -> None:
+    services = build_assistant_services()
+
+    assert (
+        services.reminder_scheduler._reminder_store
+        is services.reminder_store
+    )
+
+    assert (
+        services.reminder_scheduler._scheduler_adapter
+        is services.temporal_scheduler
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_services_lifecycle.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from bootstrap.assistant_services import (
+    AssistantServices,
+    build_assistant_services,
+)
+from bootstrap.assistant_services_lifecycle import (
+    AssistantServicesLifecycle,
+)
+from tasks import Reminder
+
+
+def test_start_runs_scheduler_in_background() -> None:
+    services = build_assistant_services()
+    lifecycle = AssistantServicesLifecycle(services)
+
+    async def run() -> None:
+        await lifecycle.start()
+
+        assert lifecycle.running is True
+        assert lifecycle._scheduler_task is not None
+        assert not lifecycle._scheduler_task.done()
+
+        await lifecycle.stop()
+
+    asyncio.run(run())
+
+
+def test_stop_stops_background_scheduler() -> None:
+    services = build_assistant_services()
+    lifecycle = AssistantServicesLifecycle(services)
+
+    async def run() -> None:
+        await lifecycle.start()
+        await lifecycle.stop()
+
+        assert lifecycle.running is False
+        assert lifecycle._scheduler_task is None
+
+    asyncio.run(run())
+
+
+def test_scheduler_executes_pending_reminder_in_background() -> None:
+    services = build_assistant_services()
+
+    reminder = Reminder.create(
+        message="Reminder de prueba",
+        trigger_at=datetime.now(timezone.utc) + timedelta(
+            seconds=0.05
+        ),
+    )
+
+    services.reminder_store.add(reminder)
+    services.reminder_scheduler.schedule(reminder)
+
+    lifecycle = AssistantServicesLifecycle(services)
+
+    async def run() -> None:
+        await lifecycle.start()
+
+        await asyncio.sleep(0.15)
+
+        await lifecycle.stop()
+
+    asyncio.run(run())
+
+    triggered = services.reminder_store.get(reminder.id)
+
+    assert triggered is not None
+    assert triggered.status.value == "triggered"
+
+
+def test_start_is_idempotent() -> None:
+    services = build_assistant_services()
+    lifecycle = AssistantServicesLifecycle(services)
+
+    async def run() -> None:
+        await lifecycle.start()
+
+        first_task = lifecycle._scheduler_task
+
+        await lifecycle.start()
+
+        assert lifecycle._scheduler_task is first_task
+
+        await lifecycle.stop()
+
+    asyncio.run(run())
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_session.py
+================================================================================
+
+from context import (
+    AssistantContext,
+    AssistantSession,
+    OrganizationProfile,
+    UserProfile,
+)
+
+
+def test_assistant_session_contains_active_context() -> None:
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    session = AssistantSession.create(context)
+
+    assert session.context is context
+    assert session.session_id
+    assert session.created_at.tzinfo is not None
+
+
+def test_assistant_sessions_have_unique_ids() -> None:
+    context = AssistantContext()
+
+    session_a = AssistantSession.create(context)
+    session_b = AssistantSession.create(context)
+
+    assert session_a.session_id != session_b.session_id
+
+
+def test_assistant_session_is_immutable() -> None:
+    context = AssistantContext()
+    session = AssistantSession.create(context)
+
+    try:
+        session.session_id = "changed"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("AssistantSession should be immutable")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_assistant_session_manager.py
+================================================================================
+
+from context import (
+    AssistantContext,
+    AssistantSessionManager,
+    OrganizationProfile,
+    UserProfile,
+)
+
+
+def test_start_creates_active_session() -> None:
+    manager = AssistantSessionManager()
+    context = AssistantContext()
+
+    session = manager.start(context)
+
+    assert session.context is context
+    assert manager.get_active() is session
+
+
+def test_start_replaces_previous_active_session() -> None:
+    manager = AssistantSessionManager()
+
+    first_context = AssistantContext()
+    second_context = AssistantContext()
+
+    first_session = manager.start(first_context)
+    second_session = manager.start(second_context)
+
+    assert first_session is not second_session
+    assert manager.get_active() is second_session
+    assert manager.get_active() is not first_session
+
+
+def test_close_removes_active_session() -> None:
+    manager = AssistantSessionManager()
+    context = AssistantContext()
+
+    session = manager.start(context)
+
+    closed_session = manager.close()
+
+    assert closed_session is session
+    assert manager.get_active() is None
+
+
+def test_close_without_active_session_is_safe() -> None:
+    manager = AssistantSessionManager()
+
+    assert manager.close() is None
+    assert manager.get_active() is None
+
+
+def test_session_keeps_user_and_organization_context() -> None:
+    manager = AssistantSessionManager()
+
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    session = manager.start(context)
+
+    assert session.context.user is user
+    assert session.context.organization is organization
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_bootstrap_assistant_context.py
+================================================================================
+
+
+from bootstrap.bootstrap import build_engine
+from context import (
+    AssistantContext,
+    AssistantSession,
+    OrganizationProfile,
+    UserProfile,
+)
+
+
+def test_bootstrap_can_inject_assistant_context() -> None:
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    engine = build_engine(
+        assistant_context=assistant_context,
+    )
+
+    assert engine._assistant_context is assistant_context
+    assert (
+        engine._context_builder._assistant_context
+        is assistant_context
+    )
+
+
+def test_bootstrap_keeps_context_optional() -> None:
+    engine = build_engine()
+
+    assert isinstance(engine._assistant_context, AssistantContext)
+    assert engine._assistant_context.user is None
+    assert engine._assistant_context.organization is None
+    assert (
+        engine._context_builder._assistant_context
+        is engine._assistant_context
+    )
+
+
+def test_bootstrap_can_inject_assistant_session() -> None:
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    assistant_session = AssistantSession.create(
+        assistant_context,
+    )
+
+    engine = build_engine(
+        assistant_session=assistant_session,
+    )
+
+    assert engine._assistant_context is assistant_context
+    assert (
+        engine._context_builder._assistant_context
+        is assistant_context
+    )
+
+
+def test_bootstrap_creates_session_from_context() -> None:
+    organization = OrganizationProfile.create(
+        "Organización Demo",
+        industry="technology",
+    )
+
+    user = UserProfile.create(
+        "Diego",
+        role="Administrador",
+        organization_id=organization.id,
+    )
+
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    assistant_session = AssistantSession.create(
+        assistant_context,
+    )
+
+    engine = build_engine(
+        assistant_session=assistant_session,
+    )
+
+    assert engine._assistant_context is assistant_context
+    assert (
+        engine._context_builder._assistant_context
+        is assistant_context
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

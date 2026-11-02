@@ -1,0 +1,2084 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_service_version_comparison.py
+================================================================================
+
+from pathlib import Path
+
+import pytest
+
+
+from documents import (
+    Document,
+    DocumentArtifact,
+    DocumentContentVersionStore,
+    DocumentService,
+    DocumentStore,
+    ArtifactStore,
+    ContentStore,
+    IngestionRegistry,
+    DocumentIngestionService,
+    TextIngestor,
+    LocalArtifactReader,
+    DocumentSemanticAnalysisService,
+    RuleBasedSemanticAnalyzer,
+    DocumentKnowledgeExtractionService,
+    RuleBasedDocumentKnowledgeExtractor,
+    DocumentKnowledgeRecord,
+    DocumentKnowledge,
+    DocumentSemanticChange,
+    DocumentChange,
+    DocumentChangeType,
+)
+from documents.knowledge_record_store import DocumentKnowledgeRecordStore
+from documents.content import DocumentContent
+from documents.content_version import DocumentContentVersion
+
+
+
+def build_service() -> DocumentService:
+    document_store = DocumentStore()
+    artifact_store = ArtifactStore()
+    content_store = ContentStore()
+
+    registry = IngestionRegistry()
+    registry.register(
+        "text/plain",
+        TextIngestor(LocalArtifactReader()),
+    )
+
+    ingestion_service = DocumentIngestionService(
+        registry=registry,
+    )
+
+    content_version_store = DocumentContentVersionStore()
+
+    semantic_analysis_service = DocumentSemanticAnalysisService(
+        analyzer=RuleBasedSemanticAnalyzer(),
+    )
+    knowledge_extraction_service = DocumentKnowledgeExtractionService(
+        extractor=RuleBasedDocumentKnowledgeExtractor(),
+    )
+    knowledge_record_store = DocumentKnowledgeRecordStore()
+
+    return DocumentService(
+        document_store=document_store,
+        artifact_store=artifact_store,
+        content_store=content_store,
+        ingestion_service=ingestion_service,
+        content_version_store=content_version_store,
+        semantic_analysis_service=semantic_analysis_service,
+        knowledge_extraction_service=knowledge_extraction_service,
+        knowledge_record_store=knowledge_record_store,
+    )
+
+
+def create_document(
+    service: DocumentService,
+    source: Path,
+):
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    service.add_artifact(artifact)
+
+    return service.create_document(
+        name=source.name,
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+
+def test_compare_versions_detects_modified_content(tmp_path):
+    source = tmp_path / "contract.txt"
+    source.write_text(
+        "El contrato tiene vigencia de 12 meses.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "El contrato tiene vigencia de 24 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    result = service.compare_versions(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.changed is True
+    assert result.unchanged is False
+
+    assert result.comparison.document_id == document.id
+    assert result.comparison.from_version == 1
+    assert result.comparison.to_version == 2
+
+    assert len(result.changes) == 1
+
+    change = result.changes[0]
+
+    assert change.before == (
+        "El contrato tiene vigencia de 12 meses."
+    )
+    assert change.after == (
+        "El contrato tiene vigencia de 24 meses."
+    )
+
+
+def test_compare_latest_versions_compares_previous_and_current(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Versión uno.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Versión dos.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    source.write_text(
+        "Versión tres.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    result = service.compare_latest_versions(
+        document_id=document.id,
+    )
+
+    assert result.comparison.from_version == 2
+    assert result.comparison.to_version == 3
+
+    assert len(result.changes) == 1
+    assert result.changes[0].before == "Versión dos."
+    assert result.changes[0].after == "Versión tres."
+
+
+def test_compare_versions_detects_unchanged_content(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido estable.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+    service.ingest(document)
+
+    result = service.compare_versions(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.changed is False
+    assert result.unchanged is True
+    assert result.changes == ()
+
+
+def test_compare_versions_raises_when_content_is_missing(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Primera versión.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Segunda versión.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.content_store.clear()
+
+    with pytest.raises(
+        ValueError,
+        match="Document content not found:",
+    ):
+        service.compare_versions(
+            document_id=document.id,
+            from_version=1,
+            to_version=2,
+        )
+
+
+def test_compare_latest_versions_requires_previous_version(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Primera versión.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    with pytest.raises(
+        ValueError,
+        match="No previous content version found",
+    ):
+        service.compare_latest_versions(
+            document_id=document.id,
+        )
+
+
+def test_compare_versions_requires_content_version_store(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service_without_versions = DocumentService(
+        document_store=service.document_store,
+        artifact_store=service.artifact_store,
+        content_store=service.content_store,
+        ingestion_service=service.ingestion_service,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Document content version store is not configured",
+    ):
+        service_without_versions.compare_versions(
+            document_id=document.id,
+            from_version=1,
+            to_version=2,
+        )
+
+def test_analyze_version_changes_returns_semantic_analysis(
+    tmp_path,
+):
+    source = tmp_path / "contract.txt"
+    source.write_text(
+        "El contrato tiene vigencia de 12 meses.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "El contrato tiene vigencia de 24 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    result = service.analyze_version_changes(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.changed is True
+    assert result.unchanged is False
+
+    assert result.source.comparison.document_id == document.id
+    assert result.source.comparison.from_version == 1
+    assert result.source.comparison.to_version == 2
+
+    assert len(result.changes) == 1
+
+    semantic_change = result.changes[0]
+
+    assert semantic_change.meaning == (
+        "Se modificó contenido existente del documento."
+    )
+
+    assert semantic_change.source_change.before == (
+        "El contrato tiene vigencia de 12 meses."
+    )
+
+    assert semantic_change.source_change.after == (
+        "El contrato tiene vigencia de 24 meses."
+    )
+
+    assert semantic_change.confidence == 1.0
+
+
+def test_analyze_latest_version_changes_uses_latest_pair(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Versión uno.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Versión dos.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    source.write_text(
+        "Versión tres.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    result = service.analyze_latest_version_changes(
+        document_id=document.id,
+    )
+
+    assert result.source.comparison.from_version == 2
+    assert result.source.comparison.to_version == 3
+
+    assert len(result.changes) == 1
+
+    semantic_change = result.changes[0]
+
+    assert semantic_change.meaning == (
+        "Se modificó contenido existente del documento."
+    )
+
+    assert semantic_change.source_change.before == "Versión dos."
+    assert semantic_change.source_change.after == "Versión tres."
+
+
+def test_analyze_version_changes_preserves_deterministic_evidence(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    result = service.analyze_version_changes(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    semantic_change = result.changes[0]
+    source_change = semantic_change.source_change
+
+    assert source_change.before == "Contenido original."
+    assert source_change.after == "Contenido actualizado."
+    assert source_change.before_line == 1
+    assert source_change.after_line == 1
+
+
+def test_analyze_version_changes_returns_unchanged_analysis(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido estable.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+    service.ingest(document)
+
+    result = service.analyze_version_changes(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.changed is False
+    assert result.unchanged is True
+    assert result.changes == ()
+
+
+def test_analyze_version_changes_requires_semantic_analysis_service(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    service_without_semantics = DocumentService(
+        document_store=service.document_store,
+        artifact_store=service.artifact_store,
+        content_store=service.content_store,
+        ingestion_service=service.ingestion_service,
+        content_version_store=service.content_version_store,
+    )
+
+    document = create_document(
+        service_without_semantics,
+        source,
+    )
+
+    service_without_semantics.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service_without_semantics.ingest(document)
+
+    with pytest.raises(
+        ValueError,
+        match="Document semantic analysis service is not configured",
+    ):
+        service_without_semantics.analyze_version_changes(
+            document_id=document.id,
+            from_version=1,
+            to_version=2,
+        )
+
+def test_extract_version_knowledge_returns_document_knowledge(
+    tmp_path,
+):
+    source = tmp_path / "contract.txt"
+    source.write_text(
+        "El contrato tiene vigencia de 12 meses.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "El contrato tiene vigencia de 24 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    result = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.extracted is True
+    assert result.empty is False
+
+    assert len(result.knowledge) == 1
+
+    knowledge = result.knowledge[0]
+
+    assert knowledge.statement == (
+        "Se modificó contenido existente del documento."
+    )
+
+    assert knowledge.source_change.source_change.before == (
+        "El contrato tiene vigencia de 12 meses."
+    )
+
+    assert knowledge.source_change.source_change.after == (
+        "El contrato tiene vigencia de 24 meses."
+    )
+
+
+def test_extract_latest_version_knowledge_uses_latest_versions(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Versión uno.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Versión dos.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    source.write_text(
+        "Versión tres.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    result = service.extract_latest_version_knowledge(
+        document_id=document.id,
+    )
+
+    assert result.extracted is True
+    assert len(result.knowledge) == 1
+
+    knowledge = result.knowledge[0]
+
+    assert (
+        knowledge.source_change.source_change.before
+        == "Versión dos."
+    )
+
+    assert (
+        knowledge.source_change.source_change.after
+        == "Versión tres."
+    )
+
+
+def test_extract_version_knowledge_preserves_full_traceability(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+    service.ingest(document)
+
+    result = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    knowledge = result.knowledge[0]
+
+    semantic_change = knowledge.source_change
+    deterministic_change = semantic_change.source_change
+
+    assert deterministic_change.before == (
+        "Contenido original."
+    )
+
+    assert deterministic_change.after == (
+        "Contenido actualizado."
+    )
+
+    assert semantic_change.meaning == (
+        "Se modificó contenido existente del documento."
+    )
+
+    assert knowledge.statement == (
+        "Se modificó contenido existente del documento."
+    )
+
+
+def test_extract_version_knowledge_requires_knowledge_service(
+    tmp_path,
+):
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Primera versión.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+
+    service_without_knowledge = DocumentService(
+        document_store=service.document_store,
+        artifact_store=service.artifact_store,
+        content_store=service.content_store,
+        ingestion_service=service.ingestion_service,
+        content_version_store=service.content_version_store,
+        semantic_analysis_service=service.semantic_analysis_service,
+    )
+
+    document = create_document(
+        service_without_knowledge,
+        source,
+    )
+
+    service_without_knowledge.ingest(document)
+
+    source.write_text(
+        "Segunda versión.",
+        encoding="utf-8",
+    )
+
+    service_without_knowledge.ingest(document)
+
+    with pytest.raises(
+        ValueError,
+        match="Document knowledge extraction service is not configured",
+    ):
+        service_without_knowledge.extract_version_knowledge(
+            document_id=document.id,
+            from_version=1,
+            to_version=2,
+        )
+
+def test_list_knowledge_history_returns_persisted_records() -> None:
+    service = build_service()
+
+    document = Document.create(
+        name="knowledge-history.txt",
+        mime_type="text/plain",
+        source="memory://knowledge-history.txt",
+    )
+
+    service.document_store.add(document)
+
+    artifact_v1 = DocumentArtifact.create(
+        location="memory://knowledge-history-v1.txt",
+    )
+    service.artifact_store.add(artifact_v1)
+
+    content_v1 = DocumentContent(
+        id="content-v1",
+        text="Contenido versión 1",
+        content_type="text/plain",
+    )
+    service.content_store.add(content_v1)
+
+    version_v1 = DocumentContentVersion.create(
+        document_id=document.id,
+        content_id=content_v1.id,
+        version=1,
+        content_type="text/plain",
+    )
+    service.content_version_store.add(version_v1)
+
+    artifact_v2 = DocumentArtifact.create(
+        location="memory://knowledge-history-v2.txt",
+    )
+    service.artifact_store.add(artifact_v2)
+
+    content_v2 = DocumentContent(
+        id="content-v2",
+        text="Contenido versión 2",
+        content_type="text/plain",
+    )
+    service.content_store.add(content_v2)
+
+    version_v2 = DocumentContentVersion.create(
+        document_id=document.id,
+        content_id=content_v2.id,
+        version=2,
+        content_type="text/plain",
+    )
+    service.content_version_store.add(version_v2)
+
+    extraction = service.extract_version_knowledge(
+    document_id=document.id,
+    from_version=1,
+    to_version=2,
+    )
+
+    history = service.list_knowledge_history(document.id)
+
+    assert len(history) == len(extraction.knowledge)
+
+    assert all(
+        record.document_id == document.id
+        for record in history
+    )
+
+    assert all(
+        record.content_version_id == version_v2.id
+        for record in history
+    )
+
+    assert [
+        record.knowledge
+        for record in history
+    ] == list(extraction.knowledge)
+
+def test_list_latest_knowledge_returns_knowledge_for_latest_version(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    extraction = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    latest = service.list_latest_knowledge(
+        document.id,
+    )
+
+    assert len(latest) == len(extraction.knowledge)
+
+    latest_version = (
+        service.content_version_store.get_latest_for_document(
+            document.id
+        )
+    )
+
+    assert latest_version is not None
+
+    assert all(
+        record.content_version_id == latest_version.id
+        for record in latest
+    )
+
+    assert [
+        record.knowledge
+        for record in latest
+    ] == list(extraction.knowledge)
+
+def test_list_knowledge_for_version_returns_matching_records(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    extraction = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    result = service.list_knowledge_for_version(
+        document_id=document.id,
+        version=2,
+    )
+
+    assert len(result) == len(extraction.knowledge)
+
+    assert [
+        record.knowledge
+        for record in result
+    ] == list(extraction.knowledge)
+
+    version = service.content_version_store.get_latest_for_document(
+        document.id,
+    )
+
+    assert version is not None
+
+    assert all(
+        record.content_version_id == version.id
+        for record in result
+    )
+
+def test_has_latest_knowledge_returns_true_when_knowledge_exists(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.has_latest_knowledge(
+        document.id,
+    ) is True
+
+
+def test_has_latest_knowledge_returns_false_when_knowledge_does_not_exist(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    assert service.has_latest_knowledge(
+        document.id,
+    ) is False
+
+def test_knowledge_count_returns_latest_knowledge_count(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    extraction = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.knowledge_count(
+        document.id,
+    ) == len(extraction.knowledge)
+
+
+def test_knowledge_count_returns_zero_without_knowledge(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    assert service.knowledge_count(
+        document.id,
+    ) == 0
+
+def test_validate_latest_knowledge_returns_true_for_current_records(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.validate_latest_knowledge(
+        document.id,
+    ) is True
+
+
+def test_validate_latest_knowledge_returns_true_without_knowledge(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    assert service.validate_latest_knowledge(
+        document.id,
+    ) is True
+
+def test_has_orphaned_knowledge_returns_false_for_valid_records(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.has_orphaned_knowledge(
+        document.id,
+    ) is False
+
+
+def test_has_orphaned_knowledge_returns_true_for_missing_version(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    version = service.content_version_store.get_latest_for_document(
+        document.id,
+    )
+
+    assert version is not None
+
+    service.content_version_store.remove(
+        version.id,
+    )
+
+    assert service.has_orphaned_knowledge(
+        document.id,
+    ) is True
+
+def test_list_orphaned_knowledge_returns_empty_for_valid_records(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.list_orphaned_knowledge(
+        document.id,
+    ) == []
+
+
+def test_list_orphaned_knowledge_returns_missing_version_records(
+    tmp_path,
+):
+    service = build_service()
+
+    source = tmp_path / "document.txt"
+    source.write_text(
+        "Contenido original.",
+        encoding="utf-8",
+    )
+
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido actualizado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    version = service.content_version_store.get_latest_for_document(
+        document.id,
+    )
+
+    assert version is not None
+
+    service.content_version_store.remove(
+        version.id,
+    )
+
+    orphaned = service.list_orphaned_knowledge(
+        document.id,
+    )
+
+    assert len(orphaned) == 1
+    assert orphaned[0].document_id == document.id
+    assert orphaned[0].content_version_id == version.id
+
+def test_remove_orphaned_knowledge_removes_only_orphaned_records():
+    service = build_service()
+
+    document = Document.create(
+        name="remove-orphaned.txt",
+        mime_type="text/plain",
+        source="memory://remove-orphaned.txt",
+    )
+
+    service.document_store.add(document)
+
+    valid_version = DocumentContentVersion.create(
+        document_id=document.id,
+        content_id="content-valid",
+        version=1,
+        content_type="text/plain",
+    )
+
+    service.content_version_store.add(valid_version)
+
+    valid_record = DocumentKnowledgeRecord.create(
+        document_id=document.id,
+        content_version_id=valid_version.id,
+        knowledge=DocumentKnowledge(
+            source_change=DocumentSemanticChange(
+                source_change=DocumentChange(
+                    change_type=DocumentChangeType.MODIFIED,
+                    before="A",
+                    after="B",
+                ),
+                meaning="Cambio válido",
+            ),
+            statement="Conocimiento válido",
+        ),
+    )
+
+    orphaned_record = DocumentKnowledgeRecord.create(
+        document_id=document.id,
+        content_version_id="missing-version",
+        knowledge=DocumentKnowledge(
+            source_change=DocumentSemanticChange(
+                source_change=DocumentChange(
+                    change_type=DocumentChangeType.MODIFIED,
+                    before="C",
+                    after="D",
+                ),
+                meaning="Cambio huérfano",
+            ),
+            statement="Conocimiento huérfano",
+        ),
+    )
+
+    service.knowledge_record_store.add(valid_record)
+    service.knowledge_record_store.add(orphaned_record)
+
+    removed = service.remove_orphaned_knowledge(
+        document.id
+    )
+
+    assert removed == 1
+
+    assert (
+        service.knowledge_record_store.get(
+            valid_record.id
+        )
+        == valid_record
+    )
+
+    assert (
+        service.knowledge_record_store.get(
+            orphaned_record.id
+        )
+        is None
+    )
+
+def test_remove_orphaned_knowledge_returns_zero_when_no_orphans():
+    service = build_service()
+
+    document = Document.create(
+        name="no-orphans.txt",
+        mime_type="text/plain",
+        source="memory://no-orphans.txt",
+    )
+
+    service.document_store.add(document)
+
+    assert (
+        service.remove_orphaned_knowledge(
+            document.id
+        )
+        == 0
+    )
+
+def test_extract_version_knowledge_is_idempotent(
+    tmp_path,
+):
+    source = tmp_path / "idempotent.txt"
+    source.write_text(
+        "Versión uno.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Versión dos.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    first = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    second = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert first.knowledge == second.knowledge
+
+    history = service.list_knowledge_history(
+        document.id
+    )
+
+    assert len(history) == len(first.knowledge)
+
+def test_extract_version_knowledge_without_changes_does_not_store_records(
+    tmp_path,
+):
+    source = tmp_path / "stable.txt"
+    source.write_text(
+        "Contenido estable.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+    service.ingest(document)
+
+    result = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.extracted is False
+    assert result.empty is True
+    assert result.knowledge == ()
+
+    assert (
+        service.list_knowledge_history(
+            document.id
+        )
+        == []
+    )
+
+def test_remove_knowledge_for_version_removes_only_requested_version(
+    tmp_path,
+):
+    source = tmp_path / "versioned.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Contenido modificado.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert service.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    removed = service.remove_knowledge_for_version(
+        document_id=document.id,
+        version=2,
+    )
+
+    assert removed == 1
+
+    assert (
+        service.list_knowledge_for_version(
+            document.id,
+            2,
+        )
+        == []
+    )
+
+def test_refresh_version_knowledge_replaces_existing_knowledge(
+    tmp_path,
+):
+    source = tmp_path / "refresh.txt"
+    source.write_text(
+        "Vigencia: 12 meses.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Vigencia: 24 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    first_extraction = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    first_knowledge = service.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    assert len(first_knowledge) == len(
+        first_extraction.knowledge
+    )
+    assert first_knowledge
+
+    source.write_text(
+        "Vigencia: 36 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    second_extraction = service.refresh_version_knowledge(
+        document_id=document.id,
+        from_version=2,
+        to_version=3,
+    )
+
+    second_knowledge = service.list_knowledge_for_version(
+        document.id,
+        3,
+    )
+
+    assert len(second_knowledge) == len(
+        second_extraction.knowledge
+    )
+    assert second_knowledge
+
+    assert all(
+        record.content_version_id
+        == service.content_version_store.get_latest_for_document(
+            document.id
+        ).id
+        for record in second_knowledge
+    )
+
+def test_refresh_version_knowledge_removes_stale_records(
+    tmp_path,
+):
+    source = tmp_path / "refresh-stale.txt"
+    source.write_text(
+        "Contenido inicial.",
+        encoding="utf-8",
+    )
+
+    service = build_service()
+    document = create_document(service, source)
+
+    service.ingest(document)
+
+    source.write_text(
+        "Vigencia: 24 meses.",
+        encoding="utf-8",
+    )
+
+    service.ingest(document)
+
+    extraction = service.extract_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    assert extraction.knowledge
+
+    records_before = service.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    assert len(records_before) == len(
+        extraction.knowledge
+    )
+
+    version = service.content_version_store.get_latest_for_document(
+        document.id
+    )
+
+    assert version is not None
+
+    stale_record = DocumentKnowledgeRecord.create(
+        document_id=document.id,
+        content_version_id=version.id,
+        knowledge=extraction.knowledge[0],
+    )
+
+    service.knowledge_record_store.add(
+        stale_record
+    )
+
+    assert len(
+        service.list_knowledge_for_version(
+            document.id,
+            2,
+        )
+    ) == len(records_before) + 1
+
+    refreshed = service.refresh_version_knowledge(
+        document_id=document.id,
+        from_version=1,
+        to_version=2,
+    )
+
+    records_after = service.list_knowledge_for_version(
+        document.id,
+        2,
+    )
+
+    assert len(records_after) == len(
+        refreshed.knowledge
+    )
+
+    assert records_after == [
+        record
+        for record in records_after
+        if record.knowledge in refreshed.knowledge
+    ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_services.py
+================================================================================
+
+from documents import (
+    FormatIngestionService,
+    FormatReaderRegistry,
+    TextFormatReader,
+    DocumentIngestionRecordStore,
+    DocumentContentVersionStore,
+    DocumentArtifact,
+    build_document_services,
+)
+
+from documents.context_access import DocumentContextAccess
+
+def test_document_services_build_format_reader_registry():
+    services = build_document_services()
+
+    assert isinstance(
+        services.format_reader_registry,
+        FormatReaderRegistry,
+    )
+
+
+def test_document_services_registers_text_format_reader():
+    services = build_document_services()
+
+    reader = services.format_reader_registry.get(
+        "text/plain"
+    )
+
+    assert isinstance(
+        reader,
+        TextFormatReader,
+    )
+
+
+def test_document_services_build_format_ingestion_service():
+    services = build_document_services()
+
+    assert isinstance(
+        services.format_ingestion_service,
+        FormatIngestionService,
+    )
+
+
+def test_document_services_supports_text_plain_format():
+    services = build_document_services()
+
+    assert services.format_reader_registry.supports(
+        "text/plain"
+    )
+
+
+def test_document_services_exposes_text_format():
+    services = build_document_services()
+
+    assert services.format_ingestion_service.supported_content_types() == [
+        "text/plain",
+    ]
+
+def test_document_services_build_ingestion_record_store():
+    services = build_document_services()
+
+    assert isinstance(
+        services.ingestion_record_store,
+        DocumentIngestionRecordStore,
+    )
+
+    assert (
+        services.document_service.ingestion_record_store
+        is services.ingestion_record_store
+    )
+
+def test_document_services_can_ingest_and_create_content_version(
+    tmp_path,
+):
+    source = tmp_path / "versioned.txt"
+
+    source.write_text(
+        "Primera versión.",
+        encoding="utf-8",
+    )
+
+    services = build_document_services()
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{source}",
+    )
+
+    services.document_service.add_artifact(
+        artifact
+    )
+
+    document = services.document_service.create_document(
+        name="versioned.txt",
+        mime_type="text/plain",
+        source=f"local:{source}",
+        artifact_id=artifact.id,
+    )
+
+    first_result = services.document_service.ingest(
+        document
+    )
+
+    versions = (
+        services.content_version_store
+        .list_for_document(document.id)
+    )
+
+    assert first_result.content is not None
+    assert len(versions) == 1
+
+    assert versions[0].version == 1
+    assert versions[0].document_id == document.id
+    assert versions[0].content_id == (
+        first_result.content.id
+    )
+
+def test_document_services_expose_document_context_access():
+    services = build_document_services()
+
+    assert isinstance(
+        services.context_access,
+        DocumentContextAccess,
+    )
+
+
+def test_document_context_access_uses_shared_document_access():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    result = services.context_access.resolve(
+        user_id="user-a",
+    )
+
+    assert result.documents == (document,)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_source.py
+================================================================================
+
+import pytest
+
+from documents import DocumentSource
+
+
+def test_document_source_parses_local_source():
+    source = DocumentSource.from_location(
+        "local:C:/documents/test.txt"
+    )
+
+    assert source.scheme == "local"
+    assert source.location == "C:/documents/test.txt"
+
+
+def test_document_source_normalizes_scheme():
+    source = DocumentSource.from_location(
+        " LOCAL:C:/documents/test.txt "
+    )
+
+    assert source.scheme == "local"
+
+
+def test_document_source_accepts_path_without_scheme():
+    source = DocumentSource.from_location(
+        "C:/documents/test.txt"
+    )
+
+    assert source.scheme == "local"
+    assert source.location == "C:/documents/test.txt"
+
+
+def test_document_source_rejects_empty_location():
+    with pytest.raises(ValueError):
+        DocumentSource.from_location("")
+
+
+def test_document_source_rejects_missing_source_location():
+    with pytest.raises(ValueError):
+        DocumentSource.from_location("local:")
+
+
+def test_document_source_supports_future_schemes():
+    source = DocumentSource.from_location(
+        "remote:documents/test.txt"
+    )
+
+    assert source.scheme == "remote"
+    assert source.location == "documents/test.txt"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_document_store.py
+================================================================================
+
+from documents.models import Document
+from documents.store import DocumentStore
+
+
+def test_list_for_user_returns_only_documents_for_user():
+    store = DocumentStore()
+
+    user_a_document = Document.create(
+        name="Documento A",
+        mime_type="text/plain",
+        source="a.txt",
+        user_id="user-a",
+    )
+
+    user_b_document = Document.create(
+        name="Documento B",
+        mime_type="text/plain",
+        source="b.txt",
+        user_id="user-b",
+    )
+
+    user_a_second_document = Document.create(
+        name="Documento C",
+        mime_type="text/plain",
+        source="c.txt",
+        user_id="user-a",
+    )
+
+    store.add(user_a_document)
+    store.add(user_b_document)
+    store.add(user_a_second_document)
+
+    result = store.list_for_user("user-a")
+
+    assert result == [
+        user_a_document,
+        user_a_second_document,
+    ]
+
+
+def test_list_for_user_returns_empty_list_when_user_has_no_documents():
+    store = DocumentStore()
+
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    store.add(document)
+
+    assert store.list_for_user("user-b") == []
+
+
+def test_list_for_user_does_not_include_documents_without_user():
+    store = DocumentStore()
+
+    document_without_user = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    store.add(document_without_user)
+
+    assert store.list_for_user("user-a") == []
+
+def test_list_for_organization_returns_only_documents_for_organization():
+    store = DocumentStore()
+
+    organization_a_document = Document.create(
+        name="Documento A",
+        mime_type="text/plain",
+        source="a.txt",
+        organization_id="organization-a",
+    )
+
+    organization_b_document = Document.create(
+        name="Documento B",
+        mime_type="text/plain",
+        source="b.txt",
+        organization_id="organization-b",
+    )
+
+    organization_a_second_document = Document.create(
+        name="Documento C",
+        mime_type="text/plain",
+        source="c.txt",
+        organization_id="organization-a",
+    )
+
+    store.add(organization_a_document)
+    store.add(organization_b_document)
+    store.add(organization_a_second_document)
+
+    result = store.list_for_organization("organization-a")
+
+    assert result == [
+        organization_a_document,
+        organization_a_second_document,
+    ]
+
+
+def test_list_for_organization_returns_empty_list_when_organization_has_no_documents():
+    store = DocumentStore()
+
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        organization_id="organization-a",
+    )
+
+    store.add(document)
+
+    assert store.list_for_organization("organization-b") == []
+
+
+def test_list_for_organization_does_not_include_documents_without_organization():
+    store = DocumentStore()
+
+    document_without_organization = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    store.add(document_without_organization)
+
+    assert store.list_for_organization("organization-a") == []
+
+def test_list_for_project_returns_only_documents_for_project():
+    store = DocumentStore()
+
+    project_a_document = Document.create(
+        name="Documento A",
+        mime_type="text/plain",
+        source="a.txt",
+        project_id="project-a",
+    )
+
+    project_b_document = Document.create(
+        name="Documento B",
+        mime_type="text/plain",
+        source="b.txt",
+        project_id="project-b",
+    )
+
+    project_a_second_document = Document.create(
+        name="Documento C",
+        mime_type="text/plain",
+        source="c.txt",
+        project_id="project-a",
+    )
+
+    store.add(project_a_document)
+    store.add(project_b_document)
+    store.add(project_a_second_document)
+
+    result = store.list_for_project("project-a")
+
+    assert result == [
+        project_a_document,
+        project_a_second_document,
+    ]
+
+
+def test_list_for_project_returns_empty_list_when_project_has_no_documents():
+    store = DocumentStore()
+
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        project_id="project-a",
+    )
+
+    store.add(document)
+
+    assert store.list_for_project("project-b") == []
+
+
+def test_list_for_project_does_not_include_documents_without_project():
+    store = DocumentStore()
+
+    document_without_project = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    store.add(document_without_project)
+
+    assert store.list_for_project("project-a") == []
+
+def test_list_for_context_filters_by_user():
+    store = DocumentStore()
+
+    matching = Document.create(
+        name="Matching",
+        mime_type="text/plain",
+        source="matching.txt",
+        user_id="user-a",
+    )
+
+    other_user = Document.create(
+        name="Other User",
+        mime_type="text/plain",
+        source="other-user.txt",
+        user_id="user-b",
+    )
+
+    store.add(matching)
+    store.add(other_user)
+
+    assert store.list_for_context(
+        user_id="user-a",
+    ) == [matching]
+
+
+def test_list_for_context_filters_by_organization():
+    store = DocumentStore()
+
+    matching = Document.create(
+        name="Matching",
+        mime_type="text/plain",
+        source="matching.txt",
+        organization_id="organization-a",
+    )
+
+    other_organization = Document.create(
+        name="Other Organization",
+        mime_type="text/plain",
+        source="other.txt",
+        organization_id="organization-b",
+    )
+
+    store.add(matching)
+    store.add(other_organization)
+
+    assert store.list_for_context(
+        organization_id="organization-a",
+    ) == [matching]
+
+
+def test_list_for_context_filters_by_project():
+    store = DocumentStore()
+
+    matching = Document.create(
+        name="Matching",
+        mime_type="text/plain",
+        source="matching.txt",
+        project_id="project-a",
+    )
+
+    other_project = Document.create(
+        name="Other Project",
+        mime_type="text/plain",
+        source="other.txt",
+        project_id="project-b",
+    )
+
+    store.add(matching)
+    store.add(other_project)
+
+    assert store.list_for_context(
+        project_id="project-a",
+    ) == [matching]
+
+
+def test_list_for_context_combines_context_filters():
+    store = DocumentStore()
+
+    matching = Document.create(
+        name="Matching",
+        mime_type="text/plain",
+        source="matching.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    wrong_user = Document.create(
+        name="Wrong User",
+        mime_type="text/plain",
+        source="wrong-user.txt",
+        user_id="user-b",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    wrong_organization = Document.create(
+        name="Wrong Organization",
+        mime_type="text/plain",
+        source="wrong-organization.txt",
+        user_id="user-a",
+        organization_id="organization-b",
+        project_id="project-a",
+    )
+
+    wrong_project = Document.create(
+        name="Wrong Project",
+        mime_type="text/plain",
+        source="wrong-project.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-b",
+    )
+
+    store.add(matching)
+    store.add(wrong_user)
+    store.add(wrong_organization)
+    store.add(wrong_project)
+
+    assert store.list_for_context(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    ) == [matching]
+
+
+def test_list_for_context_requires_at_least_one_filter():
+    store = DocumentStore()
+
+    try:
+        store.list_for_context()
+    except ValueError as exc:
+        assert str(exc) == (
+            "At least one document context filter is required"
+        )
+    else:
+        raise AssertionError(
+            "Expected ValueError when no context filter is provided"
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

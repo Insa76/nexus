@@ -1,0 +1,249 @@
+html:has(body.assistant-window),
+body.assistant-window {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.assistant-window #root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  background: transparent;
+}
+
+.presence {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  color: #dce8f5;
+  background: transparent;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+.presence-orb {
+  position: relative;
+  display: grid;
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.orb-halo,
+.orb-core {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.orb-halo {
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(86, 194, 246, 0.55);
+  box-shadow: 0 0 20px rgba(45, 163, 223, 0.22);
+  animation: nexus-pulse 3s ease-in-out infinite;
+}
+
+.orb-core {
+  width: 29px;
+  height: 29px;
+  border: 1px solid rgba(155, 225, 255, 0.95);
+  background: radial-gradient(circle at 35% 30%, #b4eaff, #247eb1 55%, #071725);
+  box-shadow:
+    0 0 13px rgba(74, 190, 247, 0.65),
+    inset 0 0 10px rgba(166, 232, 255, 0.3);
+  animation: nexus-breathe 2.5s ease-in-out infinite;
+}
+
+.presence-orb:hover .orb-halo {
+  border-color: #9be1ff;
+  box-shadow: 0 0 25px rgba(45, 163, 223, 0.4);
+}
+
+.assistant-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 177, 213, 0.28);
+  border-radius: 13px;
+  background: rgba(4, 12, 20, 0.97);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  -webkit-app-region: no-drag;
+}
+
+.assistant-header,
+.assistant-brand,
+.assistant-footer {
+  display: flex;
+  align-items: center;
+}
+
+.assistant-header,
+.assistant-footer {
+  justify-content: space-between;
+}
+
+.assistant-brand {
+  gap: 8px;
+  color: #c7e7f7;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+.assistant-brand small {
+  color: #5f879e;
+  font-size: 8px;
+}
+
+.mini-orb {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7ad8ff;
+  box-shadow: 0 0 10px rgba(74, 190, 247, 0.7);
+}
+
+.assistant-close {
+  width: 27px;
+  height: 25px;
+  border: 1px solid rgba(104, 177, 213, 0.2);
+  border-radius: 5px;
+  color: #9bb9ca;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.assistant-form {
+  display: flex;
+  flex: 0 0 40px;
+  gap: 7px;
+}
+
+.assistant-form input {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  padding: 0 11px;
+  border: 1px solid rgba(104, 177, 213, 0.23);
+  border-radius: 7px;
+  outline: none;
+  color: #dce8f5;
+  background: rgba(2, 7, 12, 0.8);
+  font-size: 11px;
+}
+
+.assistant-form input:focus {
+  border-color: rgba(104, 196, 239, 0.65);
+}
+
+.assistant-form input::placeholder {
+  color: #607a8b;
+}
+
+.assistant-send {
+  width: 38px;
+  border: 1px solid rgba(104, 177, 213, 0.3);
+  border-radius: 7px;
+  color: #a8e5ff;
+  background: rgba(44, 133, 174, 0.16);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.assistant-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.assistant-feedback {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  color: #91afc1;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.assistant-feedback pre {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+.feedback-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: #7ad8ff;
+  animation: nexus-breathe 1s ease-in-out infinite;
+}
+
+.assistant-footer {
+  flex: 0 0 22px;
+  color: #4e7185;
+  font-size: 8px;
+  letter-spacing: 0.13em;
+}
+
+.assistant-mic {
+  padding: 5px 7px;
+  border: 1px solid rgba(104, 177, 213, 0.2);
+  border-radius: 4px;
+  color: #81bad7;
+  background: transparent;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+@keyframes nexus-pulse {
+  0%, 100% { transform: scale(0.92); opacity: 0.55; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@keyframes nexus-breathe {
+  0%, 100% { transform: scale(0.94); }
+  50% { transform: scale(1.07); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-halo,
+  .orb-core,
+  .feedback-dot {
+    animation: none;
+  }
+}
+
+/* Permitir arrastrar la ventana desde la esfera */
+.presence {
+  -webkit-app-region: drag;
+}
+
+/* Los controles siguen siendo interactivos */
+.presence button,
+.presence input,
+.presence textarea,
+.presence a {
+  -webkit-app-region: no-drag;
+}

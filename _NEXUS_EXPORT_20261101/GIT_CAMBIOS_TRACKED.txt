@@ -1,0 +1,3954 @@
+﻿warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/bootstrap/src/bootstrap/assistant_services.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/documents/src/documents/cognitive.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/documents/tests/test_document_cognitive.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/engine/src/engine/cognitive_capabilities.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/engine/tests/test_engine_cognitive_capability_empty_context.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/engine/tests/test_engine_cognitive_found_decision_behavior.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/memory/src/memory/semantic_retriever.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/planner/src/planner/hybrid_intent_provider.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/processes/src/processes/cognitive.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/processes/tests/test_process_cognitive_operations.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/response/src/response/formatter.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/rules/src/rules/cognitive.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/runtime/src/runtime/scheduler.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'packages/tasks/src/tasks/reminder_store.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_bootstrap_assistant_context.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_reminder_scheduler.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_response_formatter_episode_query.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/test_scheduler_one_shot.py', LF will be replaced by CRLF the next time Git touches it
+diff --git a/README.md b/README.md
+index e69de29..0aa4b79 100644
+--- a/README.md
++++ b/README.md
+@@ -0,0 +1,42 @@
++# NEXUS V1 ÔÇö ejecuci├│n y validaci├│n
++
++## Ruta modular de desarrollo validada
++
++Desde `C:\Users\cdi40\Desktop\nexus`:
++
++```powershell
++uv run python -u .\server.py
++```
++
++El runtime modular escucha en `127.0.0.1:8765`. Ejecutar la suite Python:
++
++```powershell
++uv run pytest -q --ignore=backups --ignore=dist --ignore=build
++uv run python -m compileall -q .\packages .\tests .\server.py .\nexus_http_security.py
++```
++
++## Consola React + Electron en desarrollo
++
++Desde la ra├¡z del proyecto, ejecutar:
++
++```powershell
++.\start-nexus-desktop-dev.ps1
++```
++
++El script comprueba la API en `http://127.0.0.1:8765/api/status`, inicia `apps/console` con Vite en `127.0.0.1:5173` si hace falta y despu├®s abre Electron. Los logs quedan en `%TEMP%\NEXUS_V1_DESKTOP_LOGS`.
++
++Para validar Python, las pruebas y la compilaci├│n React:
++
++```powershell
++.\VERIFICAR_NEXUS_INTEGRACION.ps1
++```
++
++El build React no es un instalador comercial. La distribuci├│n final todav├¡a requiere empaquetar el runtime Python, verificar instalaci├│n limpia, actualizaci├│n, desinstalaci├│n y recuperaci├│n.
++
++## Otras l├¡neas del repositorio
++
++`backend/` + `dashboard/` y `desktop/` son rutas distintas/legadas y no se fusionan con el runtime modular en esta fase. El objetivo de este parche es dejar una ruta de desarrollo coherente: `server.py` + `apps/console` + `electron`.
++
++## Seguridad
++
++El runtime debe permanecer en loopback. No exponerlo en una red ni publicar el servidor sin dise├▒ar autenticaci├│n, autorizaci├│n y una pol├¡tica de seguridad de producci├│n.
+diff --git a/docs/NEXUS_ROADMAP_V1.md b/docs/NEXUS_ROADMAP_V1.md
+index 35f2a5b..f80a1fa 100644
+--- a/docs/NEXUS_ROADMAP_V1.md
++++ b/docs/NEXUS_ROADMAP_V1.md
+@@ -8,13 +8,13 @@ Su objetivo es comprender c├│mo trabaja una persona o empresa, mantener el conte
+ 
+ NEXUS no es:
+ 
+-- solamente una IA local;
+-- solamente un chatbot;
+-- solamente un agente de PC;
+-- solamente un sistema de automatizaci├│n;
+-- un producto r├¡gido igual para todas las empresas.
++- Solamente una IA local.
++- Solamente un chatbot.
++- Solamente un agente de PC.
++- Solamente un sistema de automatizaci├│n.
++- Un producto r├¡gido igual para todas las empresas.
+ 
+-La IA local es una capacidad tecnol├│gica fundamental para permitir que informaci├│n sensible pueda permanecer dentro de la infraestructura de la organizaci├│n.
++La IA local es una capacidad tecnol├│gica fundamental para permitir que la informaci├│n sensible pueda permanecer dentro de la infraestructura de la organizaci├│n.
+ 
+ ---
+ 
+@@ -27,15 +27,15 @@ La IA local es una capacidad tecnol├│gica fundamental para permitir que informac
+               Ôöé                         Ôöé
+        COGNITIVE CORE             ASSISTANT LAYER
+               Ôöé                         Ôöé
+-        Understand                  User
+-        Context                     Organization
+-        Decide                      Projects
+-        Objective                   Documents
+-        Plan                        Tasks
+-        Execute                     Processes
+-        Verify                      Rules
+-        Learn                       Preferences
+-              Ôöé                      Policies
++         Understand                    User
++         Context                       Organization
++         Decide                        Projects
++         Objective                     Documents
++         Plan                          Tasks
++         Execute                       Processes
++         Verify                        Rules
++         Learn                         Preferences
++              Ôöé                        Policies
+               Ôöé                         Ôöé
+               ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö¼ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
+                            Ôöé
+@@ -47,11 +47,11 @@ La IA local es una capacidad tecnol├│gica fundamental para permitir que informac
+               Ôöé            Ôöé            Ôöé
+               ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
+                            Ôöé
+-                        RUNTIME
++                         RUNTIME
+                            Ôöé
+               ÔöîÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÉ
+               Ôöé            Ôöé            Ôöé
+-           Tools       Providers      Adapters
++            Tools       Providers     Adapters
+               Ôöé            Ôöé            Ôöé
+               ÔööÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔö╝ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÿ
+                            Ôöé
+@@ -59,4 +59,117 @@ La IA local es una capacidad tecnol├│gica fundamental para permitir que informac
+                            Ôöé
+                          PRESENCE
+                            Ôöé
+-                  Reactive + Proactive
++                   Reactive + Proactive
++```
++
++---
++
++## Validaciones funcionales recientes
++
++### 1. Consulta de hora local (`system.get_time`)
++
++**Estado:** Implementada y validada mediante pruebas unitarias y de integraci├│n.
++
++**Fecha de validaci├│n:** 15/10/2026.
++
++**Comportamiento validado:**
++
++- Reconocimiento de consultas de hora en espa├▒ol.
++- Registro de la hora local en formato HH:MM.
++- Generaci├│n de una respuesta humana mediante el formateador.
++- Ejecuci├│n de extremo a extremo a trav├®s de `engine.execute(...)`.
++
++**Resultado de regresi├│n relacionada:** 43 pruebas aprobadas, 3 warnings y 0 fallos.
++
++**Alcance del cierre:** Se considera cerrada la incorporaci├│n de `system.get_time`. Esta validaci├│n no implica el cierre global de NEXUS V1.
++
++### 2. Lanzamiento de aplicaciones de Windows
++
++**Estado:** Corregido y validado mediante pruebas espec├¡ficas y de regresi├│n.
++
++**Fecha de validaci├│n:** 19/10/2026.
++
++**Archivo:** `packages/adapters/src/adapters/windows/app_launcher.py`.
++
++**Correcci├│n aplicada:** Se incorpor├│ la espera del proceso en un hilo en segundo plano, manteniendo la apertura no bloqueante y evitando cerrar autom├íticamente las aplicaciones.
++
++**Comportamiento validado:**
++
++- Inicio de procesos mediante el lanzador de Windows.
++- Gesti├│n del proceso con una espera en segundo plano.
++- Manejo de errores al iniciar procesos.
++- Validaci├│n de rutas absolutas.
++- Apertura de Notepad sin `ResourceWarning` en la prueba espec├¡fica.
++
++**Resultado de las pruebas:**
++
++- 7 pruebas espec├¡ficas del lanzador aprobadas.
++- `tests/test_core_regression.py::test_open_app` aprobada con `-W error::ResourceWarning`.
++- Suite completa aprobada sin fallos ni advertencias en la ejecuci├│n registrada.
++
++**Resultado de regresi├│n global:** 929 pruebas aprobadas en 6,55 segundos.
++
++**Alcance del cierre:** Se considera corregida la incidencia del `ResourceWarning` en el lanzamiento de aplicaciones, de acuerdo con las pruebas ejecutadas. La validaci├│n no implica que todos los alias de aplicaciones hayan sido comprobados mediante aperturas reales.
++
++### 3. Captura de pantalla
++
++**Estado:** Corregida y validada mediante pruebas de regresi├│n.
++
++**Fecha de validaci├│n:** 19/10/2026.
++
++**Archivo:** `packages/adapters/src/adapters/windows/screen_capture.py`.
++
++**Problema identificado:** La suite registraba tres advertencias porque `mss.mss()` est├í obsoleto y ser├í eliminado en una versi├│n futura de la biblioteca.
++
++**Correcci├│n aplicada:** Se reemplaz├│ `mss()` por `MSS()`.
++
++**Comportamiento validado:**
++
++- Captura de pantalla mediante la API `MSS()`.
++- Conservaci├│n del formato de imagen RGB devuelto por el adaptador.
++- Ejecuci├│n satisfactoria de la suite completa sin los tres warnings de obsolescencia identificados.
++
++**Resultado de regresi├│n global:** 929 pruebas aprobadas en 6,55 segundos.
++
++**Alcance del cierre:** Se considera corregida la incidencia de obsolescencia en la captura de pantalla. Esta validaci├│n no implica el cierre global de NEXUS V1.
++
++---
++
++## Incidencias t├®cnicas pendientes
++
++### Estado de las incidencias registradas
++
++Las dos incidencias t├®cnicas documentadas anteriormente quedan cerradas seg├║n las pruebas ejecutadas el 19/10/2026:
++
++1. `ResourceWarning` en el lanzamiento de aplicaciones.
++2. `DeprecationWarning` en capturas de pantalla.
++
++No se registran nuevas incidencias pendientes en esta secci├│n a partir de estas dos correcciones. Cualquier nueva incidencia deber├í incorporarse con su causa identificada, archivo relacionado, pr├│xima acci├│n y criterio de cierre.
++
++---
++
++## Estado de regresi├│n de NEXUS V1
++
++**Fecha de validaci├│n:** 19/10/2026.
++
++**Resultado de la suite completa:** 929 pruebas aprobadas, 0 fallos, en 6,55 segundos.
++
++**Validaciones espec├¡ficas adicionales:**
++
++- Lanzador de aplicaciones: 7 pruebas aprobadas.
++- Prueba de regresi├│n de apertura: 1 aprobada con `-W error::ResourceWarning`.
++- Captura de pantalla: validada dentro de la suite completa.
++
++**Criterio de mantenimiento:** Las nuevas modificaciones deben preservar los contratos existentes, mantener la separaci├│n entre Cognitive Core, Assistant Layer, Runtime, Providers y Adapters, y superar las pruebas de regresi├│n pertinentes.
++
++**Alcance del estado:** Este resultado confirma el estado de la suite ejecutada. No constituye por s├¡ mismo la aprobaci├│n de todas las fases arquitect├│nicas, funcionales y de producto previstas para NEXUS V1.
++
++---
++
++## Alcance del roadmap
++
++NEXUS V1 contin├║a orientado a consolidar la arquitectura cognitiva, la gesti├│n de contexto, las capacidades operativas, la memoria, la seguridad y la adaptaci├│n organizacional.
++
++Las correcciones t├®cnicas registradas en este documento no modifican la visi├│n ni el alcance de V1, y no autorizan por s├¡ mismas nuevas fases, refactorizaciones generales o cambios de arquitectura.
++
++El siguiente trabajo debe continuar desde el estado real del roadmap y priorizar las capacidades pendientes necesarias para completar V1, preservando las funcionalidades ya validadas.
+\ No newline at end of file
+diff --git a/packages/adapters/src/adapters/windows/app_launcher.py b/packages/adapters/src/adapters/windows/app_launcher.py
+index e14540c..bd1f89f 100644
+--- a/packages/adapters/src/adapters/windows/app_launcher.py
++++ b/packages/adapters/src/adapters/windows/app_launcher.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ import os
+ import subprocess
+ import time
+-
++import threading
+ import psutil
+ 
+ 
+@@ -111,19 +111,22 @@ class WindowsAppLauncher:
+         if os.path.isabs(executable):
+             if not os.path.exists(executable):
+                 return False
+-
+-            try:
+-                subprocess.Popen([executable])
+-                return True
+-            except Exception:
+-                return False
++            command = [executable]
++        else:
++            command = executable
+ 
+         try:
+-            subprocess.Popen(executable)
++            process = subprocess.Popen(command)
++            threading.Thread(
++                target=process.wait,
++                daemon=True,
++            ).start()
+             return True
+-        except Exception:
++        except OSError:
+             return False
+ 
++
++
+     def _wait_until_available(self, application: str) -> bool:
+         target_names = self._PROCESS_NAMES.get(application)
+ 
+diff --git a/packages/adapters/src/adapters/windows/screen_capture.py b/packages/adapters/src/adapters/windows/screen_capture.py
+index 70764eb..ac4ece0 100644
+--- a/packages/adapters/src/adapters/windows/screen_capture.py
++++ b/packages/adapters/src/adapters/windows/screen_capture.py
+@@ -1,28 +1,17 @@
+-from __future__ import annotations
+ 
+-from mss import mss
++from __future__ import annotations
+ 
++from mss import MSS
+ from PIL import Image
+ 
+ 
+ class WindowsScreenCapture:
+-
+     def capture(self) -> Image.Image:
+-
+-        with mss() as sct:
+-
+-            screenshot = sct.grab(
+-
+-                sct.monitors[1]
+-
+-            )
++        with MSS() as sct:
++            screenshot = sct.grab(sct.monitors[1])
+ 
+             return Image.frombytes(
+-
+                 "RGB",
+-
+                 screenshot.size,
+-
+                 screenshot.rgb,
+-
+-            )
+\ No newline at end of file
++            )
+diff --git a/packages/bootstrap/src/bootstrap/assistant_services.py b/packages/bootstrap/src/bootstrap/assistant_services.py
+index 7533767..6709d55 100644
+--- a/packages/bootstrap/src/bootstrap/assistant_services.py
++++ b/packages/bootstrap/src/bootstrap/assistant_services.py
+@@ -1,6 +1,9 @@
++
+ from __future__ import annotations
+ 
++import os
+ from dataclasses import dataclass
++from pathlib import Path
+ 
+ from runtime.scheduler import Scheduler
+ from tasks import ReminderStore
+@@ -11,33 +14,25 @@ from bootstrap.temporal_scheduler import TemporalSchedulerAdapter
+ 
+ @dataclass(slots=True)
+ class AssistantServices:
+-    """
+-    Servicios operativos del Assistant Layer.
+-
+-    Agrupa las dependencias de dominio e infraestructura que
+-    pertenecen a las capacidades auxiliares de NEXUS.
+-
+-    No contiene l├│gica cognitiva.
+-    """
+-
+     scheduler: Scheduler
+     reminder_store: ReminderStore
+     temporal_scheduler: TemporalSchedulerAdapter
+     reminder_scheduler: ReminderScheduler
+ 
+ 
+-def build_assistant_services() -> AssistantServices:
+-    """
+-    Construye los servicios del Assistant Layer.
+-    """
+-
++def build_assistant_services(
++    reminder_db_path: str | Path | None = None,
++) -> AssistantServices:
+     scheduler = Scheduler()
+ 
+-    reminder_store = ReminderStore()
++    if reminder_db_path is None:
++        reminder_db_path = os.environ.get(
++            "NEXUS_REMINDERS_DB_PATH",
++            str(Path.home() / ".nexus" / "reminders.db"),
++        )
+ 
+-    temporal_scheduler = TemporalSchedulerAdapter(
+-        scheduler
+-    )
++    reminder_store = ReminderStore(db_path=reminder_db_path)
++    temporal_scheduler = TemporalSchedulerAdapter(scheduler)
+ 
+     reminder_scheduler = ReminderScheduler(
+         scheduler_adapter=temporal_scheduler,
+diff --git a/packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py b/packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py
+index d0ac61e..4614577 100644
+--- a/packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py
++++ b/packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py
+@@ -1,3 +1,4 @@
++
+ from __future__ import annotations
+ 
+ import asyncio
+@@ -7,38 +8,34 @@ from bootstrap.assistant_services import AssistantServices
+ 
+ class AssistantServicesLifecycle:
+     """
+-    Controla el ciclo de vida de los servicios del Assistant Layer.
+-
+-    El Scheduler se ejecuta como una tarea asyncio en background
+-    para no bloquear el proceso principal.
++    Controls the lifecycle of Assistant Layer services.
+     """
+ 
+-    def __init__(
+-        self,
+-        services: AssistantServices,
+-    ) -> None:
++    def __init__(self, services: AssistantServices) -> None:
+         self.services = services
+         self.running = False
+         self._scheduler_task: asyncio.Task[None] | None = None
+ 
+     async def start(self) -> None:
+-        """
+-        Inicia los servicios del Assistant Layer.
+-        """
++        """Restore pending reminder schedules and start the scheduler."""
+ 
+         if self.running:
+             return
+ 
++        self.services.reminder_scheduler.reconcile()
++
+         self.running = True
+ 
+-        self._scheduler_task = asyncio.create_task(
+-            self.services.scheduler.start()
+-        )
++        try:
++            self._scheduler_task = asyncio.create_task(
++                self.services.scheduler.start()
++            )
++        except Exception:
++            self.running = False
++            raise
+ 
+     async def stop(self) -> None:
+-        """
+-        Detiene los servicios del Assistant Layer.
+-        """
++        """Stop the background scheduler."""
+ 
+         if not self.running:
+             return
+@@ -56,9 +53,7 @@ class AssistantServicesLifecycle:
+                 self._scheduler_task = None
+ 
+     async def restart(self) -> None:
+-        """
+-        Reinicia los servicios del Assistant Layer.
+-        """
++        """Restart the services."""
+ 
+         await self.stop()
+         await self.start()
+diff --git a/packages/bootstrap/src/bootstrap/bootstrap.py b/packages/bootstrap/src/bootstrap/bootstrap.py
+index c5d7869..d0430be 100644
+--- a/packages/bootstrap/src/bootstrap/bootstrap.py
++++ b/packages/bootstrap/src/bootstrap/bootstrap.py
+@@ -7,6 +7,7 @@ from pathlib import Path
+ from core.kernel import Kernel
+ 
+ from engine.engine import Engine
++from memory.semantic_memory import SemanticMemory
+ 
+ from runtime.runtime import Runtime
+ from runtime.executor import Executor
+@@ -36,11 +37,14 @@ from security.sqlite_stores import (
+ )
+ 
+ from actions.open_app import OpenAppAction
++from actions.open_file import OpenFileAction
+ 
+ from actions.set_volume import SetVolumeAction
+ 
+ from actions.get_volume import GetVolumeAction
+ 
++from actions.get_time import GetTimeAction
++
+ from actions.mute import MuteAction
+ 
+ from actions.unmute import UnmuteAction
+@@ -258,6 +262,12 @@ def build_engine(
+         )
+     )
+ 
++    registry.register(
++        OpenFileAction(
++            provider_manager
++        )
++    )
++
+     registry.register(
+         CloseAppAction()
+     )
+@@ -282,6 +292,8 @@ def build_engine(
+         InspectCaptureAction()
+     )
+ 
++    registry.register(GetTimeAction())
++
+     #
+     # Episodic Memory
+     #
+@@ -587,9 +599,16 @@ def build_engine(
+     # Engine
+     #
+ 
++    semantic_memory_db_path = os.environ.get(
++        "NEXUS_SEMANTIC_MEMORY_DB_PATH",
++        str(Path.home() / ".nexus" / "semantic_memory.db"),
++    )
++    semantic_memory = SemanticMemory(db_path=semantic_memory_db_path)
++
+     return Engine(
+         runtime,
+         intent_provider=intent_provider,
++        semantic_memory=semantic_memory,
+         memory=memory,
+         assistant_context=assistant_context,
+         document_capability=document_capability,
+@@ -733,53 +752,56 @@ async def _interactive_loop(
+         print()
+ 
+ 
++
+ async def _main_async() -> None:
+     """
+-    Inicializa NEXUS y mantiene una sesi├│n
+-    interactiva persistente.
++    Inicializa NEXUS, mantiene una sesi├│n interactiva
++    persistente y gestiona el ciclo de vida de sus servicios.
+     """
+ 
+     print()
+-
+     print("=" * 50)
+-
+     print("          NEXUS Cognitive OS")
+-
+     print("=" * 50)
+-
+     print()
+ 
+-    engine = build_engine()
++    engine, services, lifecycle = build_assistant_runtime()
+ 
+     print("Ô£ô Kernel")
+-
+     print("Ô£ô Runtime")
+-
+     print("Ô£ô Providers")
+-
+     print("Ô£ô Actions")
+-
+     print("Ô£ô Intent Providers")
+-
+     print("Ô£ô Executor")
+-
+     print("Ô£ô Engine")
+-
++    print("Ô£ô Reminder Store")
++    print("Ô£ô Reminder Scheduler")
+     print()
+ 
+-    print("=" * 50)
++    try:
++        await lifecycle.start()
+ 
+-    print("NEXUS READY")
++        print("=" * 50)
++        print("NEXUS READY")
++        print("=" * 50)
+ 
+-    print("=" * 50)
++        await _interactive_loop(engine)
+ 
+-    await _interactive_loop(
+-        engine
+-    )
++    finally:
++        await lifecycle.stop()
+ 
+-    print()
++        close_semantic_memory = getattr(
++            engine.semantic_memory,
++            "close",
++            None,
++        )
++
++        if callable(close_semantic_memory):
++            close_semantic_memory()
++
++        print()
++        print("NEXUS detenido.")
+ 
+-    print("NEXUS detenido.")
+ 
+ 
+ def main() -> None:
+diff --git a/packages/documents/src/documents/cognitive.py b/packages/documents/src/documents/cognitive.py
+index 0310591..0799769 100644
+--- a/packages/documents/src/documents/cognitive.py
++++ b/packages/documents/src/documents/cognitive.py
+@@ -1,3 +1,4 @@
++
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass
+@@ -58,9 +59,10 @@ class DocumentCognitiveAccess:
+             limit=limit,
+         )
+ 
+-        documents = self._capability.relevant_documents(
+-            context=context,
+-        )
++        # La consulta ya contiene los filtros, el orden y la
++        # paginaci├│n aplicados. No recuperar otra colecci├│n
++        # independiente que pueda contradecir ese resultado.
++        documents = query.documents
+ 
+         return DocumentCognitiveResult(
+             query=query,
+@@ -72,5 +74,7 @@ class DocumentCognitiveAccess:
+                 "offset": offset,
+                 "limit": limit,
+                 "count": len(documents),
++                "total": query.total,
++                "has_more": query.has_more,
+             },
+         )
+diff --git a/packages/documents/tests/test_document_cognitive.py b/packages/documents/tests/test_document_cognitive.py
+index 921edcc..4c65201 100644
+--- a/packages/documents/tests/test_document_cognitive.py
++++ b/packages/documents/tests/test_document_cognitive.py
+@@ -1,3 +1,4 @@
++
+ from unittest.mock import MagicMock
+ 
+ from documents.capability import DocumentCapability
+@@ -10,10 +11,13 @@ def test_document_cognitive_access_finds_relevant_documents():
+     capability = MagicMock(spec=DocumentCapability)
+ 
+     document = MagicMock(spec=Document)
+-
+-    query = MagicMock(spec=DocumentQueryResult)
++    query = DocumentQueryResult.from_documents(
++        (document,),
++        total=3,
++        offset=1,
++        limit=1,
++    )
+     capability.query.return_value = query
+-    capability.relevant_documents.return_value = (document,)
+ 
+     access = DocumentCognitiveAccess(capability)
+ 
+@@ -21,23 +25,25 @@ def test_document_cognitive_access_finds_relevant_documents():
+         context=MagicMock(),
+         name="manual.pdf",
+         mime_type="application/pdf",
+-        offset=0,
+-        limit=10,
++        offset=1,
++        limit=1,
+     )
+ 
+     capability.query.assert_called_once_with(
+-        context=result.query and capability.query.call_args.kwargs["context"],
++        context=capability.query.call_args.kwargs["context"],
+         name="manual.pdf",
+         mime_type="application/pdf",
+-        offset=0,
+-        limit=10,
++        offset=1,
++        limit=1,
+     )
+ 
+-    capability.relevant_documents.assert_called_once()
++    capability.relevant_documents.assert_not_called()
+ 
+     assert result.query is query
+-    assert result.documents == (document,)
++    assert result.documents == query.documents
+     assert result.metadata["operation"] == "find_relevant"
+     assert result.metadata["name"] == "manual.pdf"
+     assert result.metadata["mime_type"] == "application/pdf"
+     assert result.metadata["count"] == 1
++    assert result.metadata["total"] == 3
++    assert result.metadata["has_more"] is True
+diff --git a/packages/engine/src/engine/cognitive_capabilities.py b/packages/engine/src/engine/cognitive_capabilities.py
+index 1508236..1e89327 100644
+--- a/packages/engine/src/engine/cognitive_capabilities.py
++++ b/packages/engine/src/engine/cognitive_capabilities.py
+@@ -483,13 +483,18 @@ class CognitiveCapabilityRouter:
+                     "Document cognitive capability is not available."
+                 )
+ 
++
+             return self._document_access.find_relevant(
+-                context=context,
+-                name=invocation.parameters.get("name"),
+-                mime_type=invocation.parameters.get("mime_type"),
+-                offset=invocation.parameters.get("offset", 0),
+-                limit=invocation.parameters.get("limit"),
+-            )
++    context=(
++        assistant_context
++        if assistant_context is not None
++        else context
++    ),
++    name=invocation.parameters.get("name"),
++    mime_type=invocation.parameters.get("mime_type"),
++    offset=invocation.parameters.get("offset", 0),
++    limit=invocation.parameters.get("limit"),
++)
+ 
+         if invocation.capability == "processes":
+             if self._process_access is None:
+@@ -515,16 +520,32 @@ class CognitiveCapabilityRouter:
+                         "processes.get requires 'process_id'."
+                     )
+ 
+-                return self._process_access.get(process_id)
++                if assistant_context is None:
++                    raise ValueError(
++                        "processes.get requires 'assistant_context'."
++                    )
++
++                return self._process_access.get(
++                    process_id,
++                    context=assistant_context,
++                )
+ 
+             if invocation.operation == "list":
+-                return self._process_access.list()
++                if assistant_context is None:
++                    raise ValueError(
++                        "processes.list requires 'assistant_context'."
++                    )
++
++                return self._process_access.list(
++                    context=assistant_context,
++                )
+ 
+             raise ValueError(
+                 f"Unsupported processes operation: "
+                 f"{invocation.operation}"
+             )
+ 
++
+         if invocation.capability == "rules":
+             if self._rule_access is None:
+                 raise RuntimeError(
+@@ -549,15 +570,25 @@ class CognitiveCapabilityRouter:
+                         "rules.get requires 'rule_id'."
+                     )
+ 
+-                return self._rule_access.get(rule_id)
++                if assistant_context is None:
++                    raise ValueError(
++                        "rules.get requires 'assistant_context'."
++                    )
++
++                return self._rule_access.get(
++                    rule_id,
++                    context=assistant_context,
++                )
+ 
+             if invocation.operation == "list":
+-                return self._rule_access.list()
++                if assistant_context is None:
++                    raise ValueError(
++                        "rules.list requires 'assistant_context'."
++                    )
+ 
+-            raise ValueError(
+-                f"Unsupported rules operation: "
+-                f"{invocation.operation}"
+-            )
++                return self._rule_access.list(
++                    context=assistant_context,
++                )
+ 
+         raise ValueError(
+             f"Unsupported cognitive capability: "
+diff --git a/packages/engine/src/engine/engine.py b/packages/engine/src/engine/engine.py
+index 0904008..1083d55 100644
+--- a/packages/engine/src/engine/engine.py
++++ b/packages/engine/src/engine/engine.py
+@@ -88,11 +88,16 @@ class Engine:
+     rule_cognitive_access: RuleCognitiveAccess | None = None,
+     default_actor_id: str | None = None,
+     default_actor_type: str | None = None,
++    semantic_memory: SemanticMemory | None = None,
+ ) -> None:
+ 
+         self._runtime = runtime
+         self._intent_provider = intent_provider
+-        self._assistant_context = assistant_context
++        self._assistant_context = (
++            assistant_context
++            if assistant_context is not None
++            else AssistantContext()
++        )
+         self._document_capability = document_capability
+         self._document_cognitive_access = document_cognitive_access
+         self._cognitive_capability_router = cognitive_capability_router
+@@ -142,7 +147,7 @@ class Engine:
+         # ---------------------------------------------------------
+         #
+ 
+-        self._semantic_memory = SemanticMemory()
++        self._semantic_memory = semantic_memory if semantic_memory is not None else SemanticMemory()
+ 
+         self._semantic_knowledge_extractor = (
+             SemanticKnowledgeExtractor(
+@@ -317,6 +322,200 @@ class Engine:
+     def rule_cognitive_access(self) -> RuleCognitiveAccess | None:
+         return self._rule_cognitive_access
+ 
++    def _handle_semantic_memory_intent(
++        self,
++        intent,
++        original_text: str,
++    ) -> ExecutionResult | None:
++        # Resuelve las intenciones expl├¡citas de memoria sem├íntica de V1.
++        supported_actions = {
++            "system.remember_fact",
++            "system.recall_fact",
++            "system.recall_last_fact",
++        }
++        sub_intents = getattr(intent, "sub_intents", None)
++
++        if isinstance(sub_intents, (list, tuple)) and sub_intents:
++            intents = list(sub_intents)
++        else:
++            intents = [intent]
++        # No interceptar compuestas que mezclen memoria con otras acciones.
++        if not all(item.action in supported_actions for item in intents):
++            return None
++
++        
++        # Validar todas las intenciones antes de modificar la memoria.
++        for item in intents:
++            parameters = item.parameters
++
++            if item.action == "system.remember_fact":
++                subject = parameters.get("subject")
++                predicate = parameters.get("predicate")
++                value = parameters.get("value")
++
++                if not all(
++                    isinstance(part, str) and part.strip()
++                    for part in (subject, predicate, value)
++                ):
++                    return None
++
++            elif item.action == "system.recall_fact":
++                subject = parameters.get("subject", "user")
++                predicate = parameters.get("predicate")
++
++                if (
++                    not isinstance(subject, str)
++                    or not isinstance(predicate, str)
++                    or not predicate.strip()
++                ):
++                    return None
++
++
++        operations: list[dict[str, object]] = []
++        responses: list[str] = []
++        for item in intents:
++            parameters = item.parameters
++            if item.action == "system.remember_fact":
++                subject = parameters.get("subject")
++                predicate = parameters.get("predicate")
++                value = parameters.get("value")
++                if not all(
++                    isinstance(part, str) and part.strip()
++                    for part in (subject, predicate, value)
++                ):
++                    return None
++                fact = self._semantic_memory.learn(
++                    subject=subject,
++                    predicate=predicate,
++                    value=value.strip(),
++                    source="user",
++                )
++                responses.append(f"Recordado: {fact.predicate} = {fact.value}.")
++                operations.append({
++                    "action": item.action,
++                    "status": "stored",
++                    "subject": fact.subject,
++                    "predicate": fact.predicate,
++                    "value": fact.value,
++                })
++                continue
++
++            if item.action == "system.recall_fact":
++                subject = parameters.get("subject", "user")
++                predicate = parameters.get("predicate")
++
++                if (
++                    not isinstance(subject, str)
++                    or not isinstance(predicate, str)
++                    or not predicate.strip()
++                ):
++                    return None
++
++                
++                if predicate == "__all__":
++                    user_facts = [
++                        known_fact
++                        for known_fact in self._semantic_memory.find_by_subject(
++                            subject
++                        )
++                        if known_fact.source == "user"
++                    ]
++
++                    if not user_facts:
++                        responses.append(
++                            "Todav├¡a no tengo ning├║n dato que me hayas pedido recordar."
++                        )
++                        operations.append({
++                            "action": item.action,
++                            "status": "not_found",
++                        })
++                    else:
++                        facts_text = "; ".join(
++                            f"{known_fact.predicate} = {known_fact.value}"
++                            for known_fact in sorted(
++                                user_facts,
++                                key=lambda known_fact: known_fact.updated_at,
++                                reverse=True,
++                            )
++                        )
++                        responses.append(
++                            f"Tengo registrado sobre vos: {facts_text}."
++                        )
++                        operations.append({
++                            "action": item.action,
++                            "status": "found",
++                            "count": len(user_facts),
++                        })
++
++                    continue
++
++
++
++                # Priorizar la coincidencia exacta.
++                fact = self._semantic_memory.get(subject, predicate)
++
++                # Si no existe una coincidencia exacta, buscar sem├ínticamente.
++                if fact is None:
++                    matches = self._semantic_retriever.search(
++                        original_text,
++                        limit=10,
++                    )
++                    fact = next(
++                        (
++                            match.fact
++                            for match in matches
++                            if match.fact.subject == subject
++                        ),
++                        None,
++                    )
++
++                if fact is None:
++                    responses.append(
++                        f"Todav├¡a no tengo registrado ese dato: {predicate}."
++                    )
++                    operations.append({
++                        "action": item.action,
++                        "status": "not_found",
++                        "predicate": predicate,
++                    })
++                else:
++                    responses.append(
++                        f"Tengo registrado que {fact.predicate} es {fact.value}."
++                    )
++                    operations.append({
++                        "action": item.action,
++                        "status": "found",
++                        "predicate": fact.predicate,
++                        "value": fact.value,
++                    })
++
++                continue
++
++            user_facts = [
++                fact for fact in self._semantic_memory.find_by_subject("user")
++                if fact.source == "user"
++            ]
++            if not user_facts:
++                responses.append("Todav├¡a no tengo ning├║n dato que me hayas pedido recordar.")
++                operations.append({"action": item.action, "status": "not_found"})
++            else:
++                fact = max(user_facts, key=lambda known_fact: known_fact.updated_at)
++                responses.append(f"Me pediste recordar: {fact.predicate} = {fact.value}.")
++                operations.append({
++                    "action": item.action,
++                    "status": "found",
++                    "predicate": fact.predicate,
++                    "value": fact.value,
++                })
++
++        message = " ".join(responses)
++        return ExecutionResult(
++            success=True,
++            message=message,
++            output={"operations": operations},
++            metadata={"action": intent.action, "original_text": original_text, "response": message},
++        )
++
+     async def execute(
+         self,
+         text: str,
+@@ -447,6 +646,31 @@ class Engine:
+             },
+         )
+ 
++        semantic_memory_result = self._handle_semantic_memory_intent(intent, text)
++        if semantic_memory_result is not None:
++            semantic_memory_result.metadata = {
++                **semantic_memory_result.metadata,
++                "timings": {
++                    **timings,
++                    "total": time.perf_counter() - total_started_at,
++                },
++            }
++            self._memory.add(
++                "execution_result",
++                {
++                    "success": semantic_memory_result.success,
++                    "message": semantic_memory_result.message,
++                    "output": semantic_memory_result.output,
++                    "metadata": semantic_memory_result.metadata,
++                },
++            )
++            self._presence_events.emit_state(
++                "completed",
++                message=semantic_memory_result.message,
++                data={"action": intent.action},
++            )
++            return semantic_memory_result
++
+         #
+         # ---------------------------------------------------------
+         # 5. DECISION
+@@ -647,6 +871,210 @@ class Engine:
+             return result
+ 
+ 
++        # Las consultas cognitivas de Rules y Processes ya fueron
++        # resueltas por sus capabilities. No deben volver a Runtime.
++        if (
++            cognitive_capability is not None
++            and cognitive_capability.capability in {"rules", "processes"}
++            and cognitive_capability.operation == "find_relevant"
++            and (
++                decision.is_executable
++                or (
++                    isinstance(cognitive_capability_summary, dict)
++                    and cognitive_capability_summary.get("status") == "empty"
++                )
++            )
++        ):
++            capability_name = cognitive_capability.capability
++            operation = f"{capability_name}.find_relevant"
++            collection_name = capability_name
++
++            items = getattr(
++                cognitive_capability_result,
++                collection_name,
++                (),
++            )
++
++            item_items = []
++            for item in items:
++                item_status = getattr(item, "status", None)
++                if hasattr(item_status, "value"):
++                    item_status = item_status.value
++                elif item_status is not None:
++                    item_status = str(item_status)
++
++                item_items.append(
++                    {
++                        "id": getattr(item, "id", None),
++                        "name": getattr(item, "name", None),
++                        "description": getattr(item, "description", None),
++                        "status": item_status,
++                    }
++                )
++
++            result = ExecutionResult(
++                success=True,
++                message=f"Consulta cognitiva de {capability_name.title()} completada.",
++                output={
++                    "operation": operation,
++                    "status": "found" if item_items else "empty",
++                    collection_name: item_items,
++                    "total": len(item_items),
++                },
++                metadata={
++                    "action": intent.action,
++                    "original_text": text,
++                    "cognitive_summary": cognitive_capability_summary,
++                    "decision": {
++                        "decision_id": decision.decision_id,
++                        "selected_action": decision.selected_action,
++                        "confidence": decision.confidence,
++                        "reason": decision.reason,
++                        "requires_execution": decision.requires_execution,
++                    },
++                },
++            )
++
++            response_text = self._response_formatter.format(result)
++            total_time = time.perf_counter() - total_started_at
++
++            result.metadata = {
++                **result.metadata,
++                "response": response_text,
++                "timings": {
++                    **timings,
++                    "total": total_time,
++                },
++            }
++
++            self._memory.add(
++                "execution_result",
++                {
++                    "success": result.success,
++                    "message": result.message,
++                    "output": result.output,
++                    "metadata": result.metadata,
++                },
++            )
++
++            self._presence_events.emit_state(
++                "completed",
++                message=result.message,
++                data={
++                    "action": intent.action,
++                    "result_count": len(item_items),
++                },
++            )
++
++            return result
++
++
++        # Las consultas cognitivas de Documents ya fueron resueltas
++        # por la capability. No deben volver a ejecutarse en Runtime.
++        if (
++            cognitive_capability is not None
++            and cognitive_capability.capability == "documents"
++            and cognitive_capability.operation == "find_relevant"
++            and (
++                decision.is_executable
++                or (
++                    isinstance(cognitive_capability_summary, dict)
++                    and cognitive_capability_summary.get("status") == "empty"
++                )
++            )
++        ):
++            query_result = getattr(
++                cognitive_capability_result,
++                "query",
++                None,
++            )
++            documents = getattr(
++                cognitive_capability_result,
++                "documents",
++                (),
++            )
++
++            document_items = [
++                {
++                    "name": getattr(document, "name", None),
++                    "mime_type": getattr(document, "mime_type", None),
++                    "description": getattr(document, "description", None),
++                    "source": getattr(document, "source", None),
++                }
++                for document in documents
++            ]
++
++            result = ExecutionResult(
++                success=True,
++                message="Consulta cognitiva de Documents completada.",
++                output={
++                    "operation": "documents.find_relevant",
++                    "status": (
++                        "found" if document_items else "empty"
++                    ),
++                    "documents": document_items,
++                    "total": getattr(
++                        query_result,
++                        "total",
++                        len(document_items),
++                    ),
++                    "offset": getattr(query_result, "offset", 0),
++                    "limit": getattr(query_result, "limit", None),
++                    "has_more": getattr(
++                        query_result,
++                        "has_more",
++                        False,
++                    ),
++                },
++                metadata={
++                    "action": intent.action,
++                    "original_text": text,
++                    "cognitive_summary": cognitive_capability_summary,
++                    "decision": {
++                        "decision_id": decision.decision_id,
++                        "selected_action": decision.selected_action,
++                        "confidence": decision.confidence,
++                        "reason": decision.reason,
++                        "requires_execution": decision.requires_execution,
++                    },
++                },
++            )
++
++            response_text = self._response_formatter.format(result)
++            total_time = time.perf_counter() - total_started_at
++
++            result.metadata = {
++                **result.metadata,
++                "response": response_text,
++                "timings": {
++                    **timings,
++                    "total": total_time,
++                },
++            }
++
++            self._memory.add(
++                "execution_result",
++                {
++                    "success": result.success,
++                    "message": result.message,
++                    "output": result.output,
++                    "metadata": result.metadata,
++                },
++            )
++
++            self._presence_events.emit_state(
++                "completed",
++                message="Consulta cognitiva de Documents completada.",
++                data={
++                    "action": intent.action,
++                    "result_count": len(document_items),
++                },
++            )
++
++            return result
++
++
++
+         #
+         # ---------------------------------------------------------
+         # 7. DECISION BLOCK
+diff --git a/packages/engine/tests/test_engine_cognitive_capability_empty_context.py b/packages/engine/tests/test_engine_cognitive_capability_empty_context.py
+index f62fcbf..f33b401 100644
+--- a/packages/engine/tests/test_engine_cognitive_capability_empty_context.py
++++ b/packages/engine/tests/test_engine_cognitive_capability_empty_context.py
+@@ -9,6 +9,7 @@ from planner.intent import Intent
+ @pytest.mark.asyncio
+ async def test_engine_passes_empty_cognitive_result_to_decision():
+     runtime = MagicMock()
++    runtime.execute = AsyncMock()
+     runtime.tool_registry.describe.return_value = []
+ 
+     intent_provider = MagicMock()
+@@ -64,7 +65,14 @@ async def test_engine_passes_empty_cognitive_result_to_decision():
+         return_value=decision,
+     )
+ 
+-    await engine.execute("busca documentos")
++    result = await engine.execute("busca documentos")
++
++    assert result.success is True
++    assert result.output["operation"] == "documents.find_relevant"
++    assert result.output["status"] == "empty"
++    assert result.output["documents"] == []
++    assert "No encontr├® documentos" in result.metadata["response"]
++    runtime.execute.assert_not_awaited()
+ 
+     decision_context = (
+         engine.decision_engine.decide.call_args.kwargs["context"]
+diff --git a/packages/engine/tests/test_engine_cognitive_found_decision_behavior.py b/packages/engine/tests/test_engine_cognitive_found_decision_behavior.py
+index 1eb01a4..d79de25 100644
+--- a/packages/engine/tests/test_engine_cognitive_found_decision_behavior.py
++++ b/packages/engine/tests/test_engine_cognitive_found_decision_behavior.py
+@@ -5,6 +5,8 @@ import pytest
+ from engine.engine import Engine
+ from planner.intent import Intent
+ from runtime.execution_result import ExecutionResult
++from documents.cognitive import DocumentCognitiveResult
++from documents.query import DocumentQueryResult
+ 
+ 
+ @pytest.mark.asyncio
+@@ -37,7 +39,33 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
+     invocation.operation = "find_relevant"
+     invocation.parameters = {}
+ 
+-    cognitive_result = MagicMock()
++    document_one = MagicMock()
++    document_one.name = "manual.pdf"
++    document_one.mime_type = "application/pdf"
++    document_one.description = "Manual de usuario"
++    document_one.source = "local"
++
++    document_two = MagicMock()
++    document_two.name = "guia.pdf"
++    document_two.mime_type = "application/pdf"
++    document_two.description = "Gu├¡a de referencia"
++    document_two.source = "local"
++
++    query_result = DocumentQueryResult.from_documents(
++        (document_one, document_two),
++        total=2,
++        offset=0,
++        limit=10,
++    )
++
++    cognitive_result = DocumentCognitiveResult(
++        query=query_result,
++        documents=(document_one, document_two),
++        metadata={
++            "operation": "find_relevant",
++            "count": 2,
++        },
++    )
+ 
+     cognitive_summary = {
+         "operation": "documents.find_relevant",
+@@ -75,7 +103,7 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
+         return_value=decision,
+     )
+ 
+-    await engine.execute("busca el manual")
++    result = await engine.execute("busca el manual")
+ 
+     decision_context = (
+         engine.decision_engine.decide.call_args.kwargs["context"]
+@@ -85,4 +113,10 @@ async def test_engine_can_continue_execution_after_found_cognitive_result():
+     assert decision.requires_execution is True
+     assert decision.selected_action == "documents.find_relevant"
+ 
+-    runtime.execute.assert_awaited_once()
++    runtime.execute.assert_not_awaited()
++
++    assert result.success is True
++    assert result.output["operation"] == "documents.find_relevant"
++    assert result.output["status"] == "found"
++    assert result.metadata["response"]
++    runtime.execute.assert_not_awaited()
+diff --git a/packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py b/packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py
+index 93420b6..def243e 100644
+--- a/packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py
++++ b/packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py
+@@ -1,3 +1,4 @@
++
+ from unittest.mock import MagicMock
+ 
+ from engine.cognitive_capabilities import (
+@@ -9,17 +10,12 @@ from rules.cognitive import RuleCognitiveAccess
+ 
+ 
+ def test_router_invokes_process_get():
+-    process_access = MagicMock(
+-        spec=ProcessCognitiveAccess,
+-    )
+-
++    process_access = MagicMock(spec=ProcessCognitiveAccess)
+     expected = MagicMock()
++    context = MagicMock()
+     process_access.get.return_value = expected
+ 
+-    router = CognitiveCapabilityRouter(
+-        process_access=process_access,
+-    )
+-
++    router = CognitiveCapabilityRouter(process_access=process_access)
+     invocation = CognitiveCapabilityInvocation(
+         capability="processes",
+         operation="get",
+@@ -28,25 +24,24 @@ def test_router_invokes_process_get():
+ 
+     result = router.invoke(
+         invocation,
+-        context=MagicMock(),
++        context=context,
++        assistant_context=context,
+     )
+ 
+     assert result is expected
+-    process_access.get.assert_called_once_with("process-1")
++    process_access.get.assert_called_once_with(
++        "process-1",
++        context=context,
++    )
+ 
+ 
+ def test_router_invokes_process_list():
+-    process_access = MagicMock(
+-        spec=ProcessCognitiveAccess,
+-    )
+-
++    process_access = MagicMock(spec=ProcessCognitiveAccess)
+     expected = (MagicMock(), MagicMock())
++    context = MagicMock()
+     process_access.list.return_value = expected
+ 
+-    router = CognitiveCapabilityRouter(
+-        process_access=process_access,
+-    )
+-
++    router = CognitiveCapabilityRouter(process_access=process_access)
+     invocation = CognitiveCapabilityInvocation(
+         capability="processes",
+         operation="list",
+@@ -55,25 +50,21 @@ def test_router_invokes_process_list():
+ 
+     result = router.invoke(
+         invocation,
+-        context=MagicMock(),
++        context=context,
++        assistant_context=context,
+     )
+ 
+     assert result is expected
+-    process_access.list.assert_called_once_with()
++    process_access.list.assert_called_once_with(context=context)
+ 
+ 
+ def test_router_invokes_rule_get():
+-    rule_access = MagicMock(
+-        spec=RuleCognitiveAccess,
+-    )
+-
++    rule_access = MagicMock(spec=RuleCognitiveAccess)
+     expected = MagicMock()
++    context = MagicMock()
+     rule_access.get.return_value = expected
+ 
+-    router = CognitiveCapabilityRouter(
+-        rule_access=rule_access,
+-    )
+-
++    router = CognitiveCapabilityRouter(rule_access=rule_access)
+     invocation = CognitiveCapabilityInvocation(
+         capability="rules",
+         operation="get",
+@@ -82,25 +73,24 @@ def test_router_invokes_rule_get():
+ 
+     result = router.invoke(
+         invocation,
+-        context=MagicMock(),
++        context=context,
++        assistant_context=context,
+     )
+ 
+     assert result is expected
+-    rule_access.get.assert_called_once_with("rule-1")
++    rule_access.get.assert_called_once_with(
++        "rule-1",
++        context=context,
++    )
+ 
+ 
+ def test_router_invokes_rule_list():
+-    rule_access = MagicMock(
+-        spec=RuleCognitiveAccess,
+-    )
+-
++    rule_access = MagicMock(spec=RuleCognitiveAccess)
+     expected = (MagicMock(), MagicMock())
++    context = MagicMock()
+     rule_access.list.return_value = expected
+ 
+-    router = CognitiveCapabilityRouter(
+-        rule_access=rule_access,
+-    )
+-
++    router = CognitiveCapabilityRouter(rule_access=rule_access)
+     invocation = CognitiveCapabilityInvocation(
+         capability="rules",
+         operation="list",
+@@ -109,8 +99,9 @@ def test_router_invokes_rule_list():
+ 
+     result = router.invoke(
+         invocation,
+-        context=MagicMock(),
++        context=context,
++        assistant_context=context,
+     )
+ 
+     assert result is expected
+-    rule_access.list.assert_called_once_with()
++    rule_access.list.assert_called_once_with(context=context)
+diff --git a/packages/engine/tests/test_engine_process_cognitive_router_integration.py b/packages/engine/tests/test_engine_process_cognitive_router_integration.py
+index d5aa861..38e81ef 100644
+--- a/packages/engine/tests/test_engine_process_cognitive_router_integration.py
++++ b/packages/engine/tests/test_engine_process_cognitive_router_integration.py
+@@ -95,3 +95,24 @@ async def test_engine_process_capability_uses_assistant_context():
+ 
+     assert cognitive_result.processes == (process,)
+     assert cognitive_result.metadata["count"] == 1
++
++        # La consulta debe producir una respuesta final ├║til.
++    assert result.success is True
++    assert result.output["operation"] == "processes.find_relevant"
++    assert result.output["status"] == "found"
++    assert result.output["processes"] == [
++        {
++            "id": process.id,
++            "name": process.name,
++            "description": process.description,
++            "status": "pending",
++        }
++    ]
++
++    response = result.metadata["response"]
++    assert process.name in response
++    assert process.description in response
++    assert "pending" in response
++
++    # La capability ya resolvi├│ la consulta: Runtime no debe ejecutarla.
++    runtime.execute.assert_not_awaited()
+diff --git a/packages/engine/tests/test_engine_rule_cognitive_router_integration.py b/packages/engine/tests/test_engine_rule_cognitive_router_integration.py
+index d51c9eb..1013a52 100644
+--- a/packages/engine/tests/test_engine_rule_cognitive_router_integration.py
++++ b/packages/engine/tests/test_engine_rule_cognitive_router_integration.py
+@@ -91,3 +91,24 @@ async def test_engine_rule_capability_uses_assistant_context():
+ 
+     assert cognitive_result.rules == (rule,)
+     assert cognitive_result.metadata["count"] == 1
++
++        # La consulta debe producir una respuesta final ├║til.
++    assert result.success is True
++    assert result.output["operation"] == "rules.find_relevant"
++    assert result.output["status"] == "found"
++    assert result.output["rules"] == [
++        {
++            "id": rule.id,
++            "name": rule.name,
++            "description": rule.description,
++            "status": "active",
++        }
++    ]
++
++    response = result.metadata["response"]
++    assert rule.name in response
++    assert rule.description in response
++    assert "active" in response
++
++    # La capability ya resolvi├│ la consulta: Runtime no debe ejecutarla.
++    runtime.execute.assert_not_awaited()
+diff --git a/packages/memory/src/memory/semantic_memory.py b/packages/memory/src/memory/semantic_memory.py
+index efbe14e..d09cef2 100644
+--- a/packages/memory/src/memory/semantic_memory.py
++++ b/packages/memory/src/memory/semantic_memory.py
+@@ -1,74 +1,157 @@
++
+ from __future__ import annotations
+ 
++import json
++import sqlite3
++import threading
+ from dataclasses import dataclass, field
+ from datetime import datetime, timezone
++from functools import wraps
++from pathlib import Path
+ from typing import Any
+ 
+ 
++def _thread_safe(method):
++    """Serializa el acceso a la conexi├│n SQLite compartida."""
++
++    @wraps(method)
++    def wrapper(self, *args, **kwargs):
++        with self._lock:
++            return method(self, *args, **kwargs)
++
++    return wrapper
++
++
+ @dataclass
+ class SemanticFact:
+-    """
+-    Representa una unidad de conocimiento sem├íntico.
+-
+-    Un hecho sem├íntico no representa una ejecuci├│n concreta.
+-    Representa conocimiento que puede reutilizarse posteriormente.
+-    """
++    """Representa una unidad de conocimiento sem├íntico reutilizable."""
+ 
+     subject: str
+     predicate: str
+     value: Any
+-
+     confidence: float = 1.0
+-
+     source: str = "system"
+-
+     created_at: datetime = field(
+         default_factory=lambda: datetime.now(timezone.utc)
+     )
+-
+     updated_at: datetime = field(
+         default_factory=lambda: datetime.now(timezone.utc)
+     )
+-
+-    metadata: dict[str, Any] = field(
+-        default_factory=dict
+-    )
++    metadata: dict[str, Any] = field(default_factory=dict)
+ 
+ 
+ class SemanticMemory:
++    """Memoria sem├íntica con persistencia SQLite opcional.
++
++    Si db_path es None, usa una base SQLite en memoria.
++    Para persistencia entre reinicios, se debe proporcionar una ruta.
+     """
+-    Memoria sem├íntica de NEXUS.
+ 
+-    Responsabilidades:
++    def __init__(self, db_path: str | Path | None = None) -> None:
++        self._lock = threading.RLock()
++        self._fact_cache: dict[tuple[str, str], SemanticFact] = {}
++
++        if db_path is None or str(db_path) == ":memory:":
++            resolved_path = ":memory:"
++        else:
++            path = Path(db_path).expanduser()
++            path.parent.mkdir(parents=True, exist_ok=True)
++            resolved_path = str(path)
++
++        self._connection = sqlite3.connect(
++            resolved_path,
++            timeout=10.0,
++            check_same_thread=False,
++        )
++        self._connection.row_factory = sqlite3.Row
++        self._connection.execute("PRAGMA foreign_keys = ON")
++
++        if resolved_path != ":memory:":
++            self._connection.execute("PRAGMA journal_mode = WAL")
++
++        self._initialize_schema()
++
++    @_thread_safe
++    def _initialize_schema(self) -> None:
++        with self._connection:
++            self._connection.execute(
++                """
++                CREATE TABLE IF NOT EXISTS semantic_facts (
++                    subject TEXT NOT NULL,
++                    predicate TEXT NOT NULL,
++                    value_json TEXT NOT NULL,
++                    confidence REAL NOT NULL,
++                    source TEXT NOT NULL,
++                    created_at TEXT NOT NULL,
++                    updated_at TEXT NOT NULL,
++                    metadata_json TEXT NOT NULL,
++                    PRIMARY KEY (subject, predicate)
++                )
++                """
++            )
+ 
+-    - almacenar conocimiento estructurado
+-    - recuperar conocimiento por sujeto
+-    - recuperar conocimiento por sujeto y predicado
+-    - actualizar hechos existentes
+-    - eliminar conocimiento
+-    - consultar todos los hechos
++    @staticmethod
++    def _normalize(value: str) -> str:
++        if not isinstance(value, str):
++            raise TypeError("SemanticMemory values must be strings.")
++        return " ".join(value.strip().lower().split())
+ 
+-    Esta capa NO:
++    @staticmethod
++    def _normalize_confidence(confidence: float) -> float:
++        try:
++            confidence = float(confidence)
++        except (TypeError, ValueError) as exc:
++            raise ValueError(
++                "SemanticFact confidence must be numeric."
++            ) from exc
+ 
+-    - interpreta lenguaje natural
+-    - consulta WorkingMemory
+-    - ejecuta acciones
+-    - decide si un hecho debe aprenderse
+-    - modifica el estado real del sistema
+-    """
++        return max(0.0, min(1.0, confidence))
+ 
+-    def __init__(self) -> None:
+-        self._facts: dict[
+-            tuple[str, str],
+-            SemanticFact,
+-        ] = {}
++    def _to_fact(
++        self,
++        row: sqlite3.Row | None,
++    ) -> SemanticFact | None:
++        """Convierte una fila SQLite y conserva la identidad del objeto."""
++
++        if row is None:
++            return None
++
++        key = (row["subject"], row["predicate"])
+ 
+-    #
+-    # ---------------------------------------------------------
+-    # WRITE
+-    # ---------------------------------------------------------
+-    #
++        value = json.loads(row["value_json"])
++        confidence = float(row["confidence"])
++        source = row["source"]
++        created_at = datetime.fromisoformat(row["created_at"])
++        updated_at = datetime.fromisoformat(row["updated_at"])
++        metadata = json.loads(row["metadata_json"])
+ 
++        fact = self._fact_cache.get(key)
++
++        if fact is None:
++            fact = SemanticFact(
++                subject=row["subject"],
++                predicate=row["predicate"],
++                value=value,
++                confidence=confidence,
++                source=source,
++                created_at=created_at,
++                updated_at=updated_at,
++                metadata=metadata,
++            )
++            self._fact_cache[key] = fact
++            return fact
++
++        # Actualizar el objeto existente conserva su identidad en memoria.
++        fact.value = value
++        fact.confidence = confidence
++        fact.source = source
++        fact.created_at = created_at
++        fact.updated_at = updated_at
++        fact.metadata = metadata
++
++        return fact
++
++    @_thread_safe
+     def learn(
+         self,
+         subject: str,
+@@ -79,87 +162,86 @@ class SemanticMemory:
+         source: str = "system",
+         metadata: dict[str, Any] | None = None,
+     ) -> SemanticFact:
+-        """
+-        Aprende un hecho sem├íntico.
+-
+-        Si ya existe un hecho para el mismo
+-        subject + predicate, se actualiza su valor.
+-        """
+-
+         subject = self._normalize(subject)
+         predicate = self._normalize(predicate)
+ 
+         if not subject:
+-            raise ValueError(
+-                "SemanticFact subject cannot be empty."
+-            )
+-
++            raise ValueError("SemanticFact subject cannot be empty.")
+         if not predicate:
+-            raise ValueError(
+-                "SemanticFact predicate cannot be empty."
+-            )
+-
+-        confidence = self._normalize_confidence(
+-            confidence
+-        )
+-
+-        key = (
+-            subject,
+-            predicate,
+-        )
+-
+-        now = datetime.now(timezone.utc)
+-
+-        existing = self._facts.get(key)
+-
+-        if existing is not None:
+-            existing.value = value
+-            existing.confidence = confidence
+-            existing.source = source
+-
+-            if metadata is not None:
+-                existing.metadata = dict(metadata)
++            raise ValueError("SemanticFact predicate cannot be empty.")
+ 
+-            existing.updated_at = now
++        confidence = self._normalize_confidence(confidence)
++        now = datetime.now(timezone.utc).isoformat()
+ 
+-            return existing
++        current = self.get(subject, predicate)
++        created_at = current.created_at.isoformat() if current else now
+ 
+-        fact = SemanticFact(
+-            subject=subject,
+-            predicate=predicate,
+-            value=value,
+-            confidence=confidence,
+-            source=source,
+-            created_at=now,
+-            updated_at=now,
+-            metadata=dict(metadata or {}),
++        metadata_value = (
++            dict(metadata)
++            if metadata is not None
++            else (current.metadata.copy() if current else {})
+         )
+ 
+-        self._facts[key] = fact
++        value_json = json.dumps(value, ensure_ascii=False)
++        metadata_json = json.dumps(metadata_value, ensure_ascii=False)
++
++        with self._connection:
++            self._connection.execute(
++                """
++                INSERT INTO semantic_facts
++                    (
++                        subject,
++                        predicate,
++                        value_json,
++                        confidence,
++                        source,
++                        created_at,
++                        updated_at,
++                        metadata_json
++                    )
++                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
++                ON CONFLICT(subject, predicate) DO UPDATE SET
++                    value_json = excluded.value_json,
++                    confidence = excluded.confidence,
++                    source = excluded.source,
++                    updated_at = excluded.updated_at,
++                    metadata_json = excluded.metadata_json
++                """,
++                (
++                    subject,
++                    predicate,
++                    value_json,
++                    confidence,
++                    source,
++                    created_at,
++                    now,
++                    metadata_json,
++                ),
++            )
+ 
++        fact = self.get(subject, predicate)
++        assert fact is not None
+         return fact
+ 
+-    #
+-    # ---------------------------------------------------------
+-    # READ
+-    # ---------------------------------------------------------
+-    #
+-
++    @_thread_safe
+     def get(
+         self,
+         subject: str,
+         predicate: str,
+     ) -> SemanticFact | None:
+-        """
+-        Recupera un hecho espec├¡fico.
+-        """
+-
+-        key = (
+-            self._normalize(subject),
+-            self._normalize(predicate),
+-        )
++        row = self._connection.execute(
++            """
++            SELECT *
++            FROM semantic_facts
++            WHERE subject = ? AND predicate = ?
++            """,
++            (
++                self._normalize(subject),
++                self._normalize(predicate),
++            ),
++        ).fetchone()
+ 
+-        return self._facts.get(key)
++        return self._to_fact(row)
+ 
+     def get_value(
+         self,
+@@ -167,146 +249,100 @@ class SemanticMemory:
+         predicate: str,
+         default: Any = None,
+     ) -> Any:
+-        """
+-        Recupera directamente el valor de un hecho.
+-        """
+-
+-        fact = self.get(
+-            subject,
+-            predicate,
+-        )
+-
+-        if fact is None:
+-            return default
+-
+-        return fact.value
+-
+-    def find_by_subject(
+-        self,
+-        subject: str,
+-    ) -> list[SemanticFact]:
+-        """
+-        Recupera todos los hechos asociados a un sujeto.
+-        """
+-
+-        normalized_subject = self._normalize(
+-            subject
+-        )
++        fact = self.get(subject, predicate)
++        return default if fact is None else fact.value
++
++    @_thread_safe
++    def find_by_subject(self, subject: str) -> list[SemanticFact]:
++        rows = self._connection.execute(
++            """
++            SELECT *
++            FROM semantic_facts
++            WHERE subject = ?
++            ORDER BY created_at
++            """,
++            (self._normalize(subject),),
++        ).fetchall()
+ 
+         return [
+             fact
+-            for fact in self._facts.values()
+-            if fact.subject == normalized_subject
++            for row in rows
++            if (fact := self._to_fact(row)) is not None
+         ]
+ 
+-    def find_by_predicate(
+-        self,
+-        predicate: str,
+-    ) -> list[SemanticFact]:
+-        """
+-        Recupera todos los hechos que utilizan
+-        un determinado predicado.
+-        """
+-
+-        normalized_predicate = self._normalize(
+-            predicate
+-        )
++    @_thread_safe
++    def find_by_predicate(self, predicate: str) -> list[SemanticFact]:
++        rows = self._connection.execute(
++            """
++            SELECT *
++            FROM semantic_facts
++            WHERE predicate = ?
++            ORDER BY created_at
++            """,
++            (self._normalize(predicate),),
++        ).fetchall()
+ 
+         return [
+             fact
+-            for fact in self._facts.values()
+-            if fact.predicate == normalized_predicate
++            for row in rows
++            if (fact := self._to_fact(row)) is not None
+         ]
+ 
++    @_thread_safe
+     def all(self) -> list[SemanticFact]:
+-        """
+-        Devuelve todos los hechos conocidos.
+-        """
++        rows = self._connection.execute(
++            """
++            SELECT *
++            FROM semantic_facts
++            ORDER BY created_at, subject, predicate
++            """
++        ).fetchall()
+ 
+-        return list(
+-            self._facts.values()
+-        )
++        return [
++            fact
++            for row in rows
++            if (fact := self._to_fact(row)) is not None
++        ]
+ 
++    @_thread_safe
+     def count(self) -> int:
+-        """
+-        Devuelve la cantidad de hechos almacenados.
+-        """
+-
+-        return len(self._facts)
+-
+-    #
+-    # ---------------------------------------------------------
+-    # DELETE
+-    # ---------------------------------------------------------
+-    #
+-
+-    def forget(
+-        self,
+-        subject: str,
+-        predicate: str,
+-    ) -> bool:
+-        """
+-        Elimina un hecho espec├¡fico.
+-
+-        Devuelve True si exist├¡a.
+-        """
+-
+-        key = (
+-            self._normalize(subject),
+-            self._normalize(predicate),
+-        )
+-
+-        if key not in self._facts:
+-            return False
+-
+-        del self._facts[key]
+-
+-        return True
+-
+-    def clear(self) -> None:
+-        """
+-        Elimina todo el conocimiento sem├íntico.
+-        """
+-
+-        self._facts.clear()
+-
+-    #
+-    # ---------------------------------------------------------
+-    # INTERNAL
+-    # ---------------------------------------------------------
+-    #
+-
+-    @staticmethod
+-    def _normalize(value: str) -> str:
+-        if not isinstance(value, str):
+-            raise TypeError(
+-                "SemanticMemory values must be strings."
++        row = self._connection.execute(
++            "SELECT COUNT(*) AS total FROM semantic_facts"
++        ).fetchone()
++
++        return int(row["total"])
++
++    @_thread_safe
++    def forget(self, subject: str, predicate: str) -> bool:
++        normalized_subject = self._normalize(subject)
++        normalized_predicate = self._normalize(predicate)
++
++        with self._connection:
++            cursor = self._connection.execute(
++                """
++                DELETE FROM semantic_facts
++                WHERE subject = ? AND predicate = ?
++                """,
++                (normalized_subject, normalized_predicate),
+             )
+ 
+-        return " ".join(
+-            value.strip().lower().split()
+-        )
++        deleted = cursor.rowcount > 0
+ 
+-    @staticmethod
+-    def _normalize_confidence(
+-        confidence: float,
+-    ) -> float:
+-        try:
+-            confidence = float(
+-                confidence
++        if deleted:
++            self._fact_cache.pop(
++                (normalized_subject, normalized_predicate),
++                None,
+             )
+-        except (
+-            TypeError,
+-            ValueError,
+-        ) as exc:
+-            raise ValueError(
+-                "SemanticFact confidence must be numeric."
+-            ) from exc
+ 
+-        return max(
+-            0.0,
+-            min(
+-                1.0,
+-                confidence,
+-            ),
+-        )
++        return deleted
++
++    @_thread_safe
++    def clear(self) -> None:
++        with self._connection:
++            self._connection.execute("DELETE FROM semantic_facts")
++            self._fact_cache.clear()
++
++    @_thread_safe
++    def close(self) -> None:
++        """Cierra la conexi├│n SQLite asociada a esta instancia."""
++        self._connection.close()
+\ No newline at end of file
+diff --git a/packages/memory/src/memory/semantic_retriever.py b/packages/memory/src/memory/semantic_retriever.py
+index e7b0f1c..5eb8335 100644
+--- a/packages/memory/src/memory/semantic_retriever.py
++++ b/packages/memory/src/memory/semantic_retriever.py
+@@ -1,5 +1,5 @@
+ from __future__ import annotations
+-
++import re
+ from dataclasses import dataclass
+ 
+ from memory.semantic_memory import SemanticFact, SemanticMemory
+@@ -160,33 +160,19 @@ class SemanticRetriever:
+ 
+         return matches[:limit]
+ 
++    
+     @staticmethod
+     def _score(
+         fact: SemanticFact,
+         query: str,
+     ) -> float:
+-        """
+-        Calcula relevancia b├ísica.
+-
+-        Prioridad:
+-        - coincidencia exacta de subject
+-        - coincidencia exacta de predicate
+-        - coincidencia exacta del valor textual
+-        - coincidencias parciales
+-        """
+-
+-        subject = SemanticRetriever._normalize(
+-            fact.subject
+-        )
++        """Calcula relevancia mediante frases y t├®rminos compartidos."""
+ 
+-        predicate = SemanticRetriever._normalize(
+-            fact.predicate
+-        )
+-
+-        value = SemanticRetriever._normalize(
+-            str(fact.value)
+-        )
++        subject = SemanticRetriever._normalize(fact.subject)
++        predicate = SemanticRetriever._normalize(fact.predicate)
++        value = SemanticRetriever._normalize(str(fact.value))
+ 
++        # Conservar el comportamiento existente para coincidencias directas.
+         score = 0.0
+ 
+         if query == subject:
+@@ -207,10 +193,60 @@ class SemanticRetriever:
+         if query in value:
+             score += 0.4
+ 
+-        return score
++        # Solo aplicar coincidencia por t├®rminos si la b├║squeda directa
++        # no encontr├│ nada.
++        if score > 0:
++            return score
++
++        stopwords = {
++            "que", "qu├®", "recordas", "record├ís", "recuerdas",
++            "sobre", "el", "la", "los", "las", "de", "del",
++            "un", "una", "unos", "unas", "me", "lo", "por",
++            "favor", "acerca", "contame", "decime",
++        }
++
++        query_tokens = {
++            token
++            for token in re.findall(r"[a-z├í├®├¡├│├║├╝├▒0-9]+", query)
++            if token not in stopwords
++        }
++
++        if not query_tokens:
++            return 0.0
++
++        subject_tokens = set(
++            re.findall(r"[a-z├í├®├¡├│├║├╝├▒0-9]+", subject)
++        )
++        predicate_tokens = set(
++            re.findall(r"[a-z├í├®├¡├│├║├╝├▒0-9]+", predicate)
++        )
++        value_tokens = set(
++            re.findall(r"[a-z├í├®├¡├│├║├╝├▒0-9]+", value)
++        )
++
++        matched_subject = query_tokens & subject_tokens
++        matched_predicate = query_tokens & predicate_tokens
++        matched_value = query_tokens & value_tokens
++
++        matched_tokens = (
++            matched_subject | matched_predicate | matched_value
++        )
++
++        if not matched_tokens:
++            return 0.0
++
++        coverage = len(matched_tokens) / len(query_tokens)
++
++        return (
++            0.4 * coverage
++            + 0.2 * bool(matched_subject)
++            + 0.2 * bool(matched_predicate)
++            + 0.2 * bool(matched_value)
++        )
+ 
+     @staticmethod
+     def _normalize(value: str) -> str:
+         return " ".join(
+             value.strip().lower().split()
+         )
++
+diff --git a/packages/planner/src/planner/hybrid_intent_provider.py b/packages/planner/src/planner/hybrid_intent_provider.py
+index 672f341..8939a02 100644
+--- a/packages/planner/src/planner/hybrid_intent_provider.py
++++ b/packages/planner/src/planner/hybrid_intent_provider.py
+@@ -87,6 +87,19 @@ class HybridIntentProvider(IntentProvider):
+             text
+         )
+ 
++        # Antes de separar por la conjunci├│n "y", damos prioridad a una
++        # intenci├│n determinista reconocida sobre la solicitud completa.
++        # As├¡, expresiones como "fecha y hora actual" no se dividen en dos
++        # fragmentos incompletos y no terminan innecesariamente en Ollama.
++        if len(parts) > 1:
++            whole_intent = await self._rule_provider.recognize(
++                text,
++                capabilities,
++                context,
++            )
++            if whole_intent.action != "system.unknown":
++                return whole_intent
++
+         #
+         # Solicitud simple.
+         #
+diff --git a/packages/planner/src/planner/intent_recognizer.py b/packages/planner/src/planner/intent_recognizer.py
+index d416f25..f01eff7 100644
+--- a/packages/planner/src/planner/intent_recognizer.py
++++ b/packages/planner/src/planner/intent_recognizer.py
+@@ -44,24 +44,31 @@ class IntentRecognizer:
+         # capture toda la solicitud.
+         #
+ 
++        # Conservamos el texto original para no perder may├║sculas
++        # en valores que el usuario pide guardar.
+         compound_parts = re.split(
+-            r"\s+(?:y|e|luego|despu├®s|despues|adem├ís|ademas)\s+",
+-            normalized,
++            r"\s+(?:(?:y|e)\s+)?(?:luego|despu├®s|despues|adem├ís|ademas)\s+|\s+(?:y|e)\s+",
++            text.strip(),
+             maxsplit=1,
++            flags=re.IGNORECASE,
+         )
+ 
+         if len(compound_parts) == 2:
+-            first_text = compound_parts[0].strip()
+-            second_text = compound_parts[1].strip()
++            first_original = compound_parts[0].strip()
++            second_original = compound_parts[1].strip()
++            first_text = first_original.lower()
++            second_text = second_original.lower()
+ 
+             first_intent = self._recognize_single(
+                 first_text,
+                 context,
++                original_text=first_original,
+             )
+ 
+             second_intent = self._recognize_single(
+                 second_text,
+                 context,
++                original_text=second_original,
+                 previous_intent=first_intent,
+             )
+ 
+@@ -82,13 +89,13 @@ class IntentRecognizer:
+                             action=first_intent.action,
+                             confidence=first_intent.confidence,
+                             parameters=first_intent.parameters.copy(),
+-                            original_text=first_text,
++                            original_text=first_original,
+                         ),
+                         Intent(
+                             action=second_intent.action,
+                             confidence=second_intent.confidence,
+                             parameters=second_intent.parameters.copy(),
+-                            original_text=second_text,
++                            original_text=second_original,
+                         ),
+                     ],
+                 )
+@@ -108,6 +115,79 @@ class IntentRecognizer:
+     ) -> Intent:
+         text = original_text or normalized
+ 
++                #
++        # Semantic memory lookup by topic
++        # Supports questions such as:
++        # "┬┐Qu├® record├ís sobre mi proyecto?"
++        # "┬┐Qu├® ten├®s registrado sobre mi proyecto?"
++        #
++
++        
++        # Semantic memory lookup by topic.
++        # Supports both explicit memory questions and direct factual questions.
++        broad_memory_match = re.search(
++            r"^┬┐?\s*(?:qu├®|que)\s+"
++            r"(?:record├ís|recordas|recuerdas|ten├®s registrado|"
++            r"tenes registrado|tienes registrado)\s+"
++            r"(?:sobre|acerca de)\s+"
++            r"(?:m├¡|mi persona|mi informaci├│n|mi informacion)"
++            r"[?!.]*$",
++            normalized,
++            re.IGNORECASE,
++        )
++
++        if broad_memory_match:
++            return Intent(
++                action="system.recall_fact",
++                original_text=text,
++                parameters={
++                    "subject": "user",
++                    "predicate": "__all__",
++                },
++            )
++
++        direct_lookup_match = re.search(
++            r"^┬┐?\s*(?:cu├íl|cual)\s+es\s+"
++            r"(?:mi|mis)\s+(.+?)[?!.]*$",
++            normalized,
++            re.IGNORECASE,
++        )
++
++        if direct_lookup_match:
++            predicate = direct_lookup_match.group(1).strip()
++            if predicate:
++                return Intent(
++                    action="system.recall_fact",
++                    original_text=text,
++                    parameters={
++                        "subject": "user",
++                        "predicate": predicate,
++                    },
++                )
++
++        memory_lookup_match = re.search(
++            r"^┬┐?\s*(?:qu├®|que)\s+"
++            r"(?:record├ís|recordas|recuerdas|ten├®s registrado|"
++            r"tenes registrado|tienes registrado)\s+"
++            r"(?:sobre|acerca de|de)\s+(.+?)[?!.]*$",
++            normalized,
++            re.IGNORECASE,
++        )
++
++        if memory_lookup_match:
++            predicate = memory_lookup_match.group(1).strip()
++
++            if predicate:
++                return Intent(
++                    action="system.recall_fact",
++                    original_text=text,
++                    parameters={
++                        "subject": "user",
++                        "predicate": predicate,
++                    },
++                )
++
++
+         #
+         # Semantic reference resolution
+         #
+@@ -143,6 +223,67 @@ class IntentRecognizer:
+                 },
+             )
+ 
++        #
++        # Explicit semantic memory
++        #
++        # V1: explicit requests to remember a fact and retrieve it later.
++        #
++        remember_match = re.match(
++            r"^(?:record[a├í]|recordame|acordate|acord[a├í]te|"
++            r"guard[a├í]|guarda|aprend[e├®]|memoriz[a├í])\s+"
++            r"(?:que\s+)?(.+?)\s+(?:se llama|es|son|est├í|esta)\s+"
++            r"(.+?)[.!?]*$",
++            text.strip(),
++            re.IGNORECASE,
++        )
++
++        if remember_match:
++            predicate = re.sub(
++                r"^(?:mi|mis|el|la|los|las|un|una)\s+",
++                "",
++                remember_match.group(1).strip(),
++                flags=re.IGNORECASE,
++            )
++            value = remember_match.group(2).strip().rstrip(".!?")
++            if predicate and value:
++                return Intent(
++                    action="system.remember_fact",
++                    original_text=text,
++                    parameters={
++                        "subject": "user",
++                        "predicate": predicate.lower(),
++                        "value": value,
++                    },
++                )
++
++        if re.search(
++            r"\b(?:qu├®|que)\s+(?:nombre|dato|informaci├│n|informacion|color|valor|hecho|preferencia)\s+"
++            r"(?:te\s+)?(?:ped[i├¡]\s+)?(?:recordar|guardar|memorizar)\b",
++            normalized,
++        ):
++            return Intent(
++                action="system.recall_last_fact",
++                original_text=text,
++                parameters={"subject": "user"},
++            )
++
++        recall_match = re.search(
++            r"\b(?:c├│mo|como)\s+se\s+llama\s+"
++            r"(?:(?:mi|mis|el|la|los|las|un|una)\s+)?(.+?)[?!.]*$",
++            normalized,
++        )
++        if recall_match:
++            predicate = recall_match.group(1).strip()
++            if predicate:
++                return Intent(
++                    action="system.recall_fact",
++                    original_text=text,
++                    parameters={
++                        "subject": "user",
++                        "predicate": predicate,
++                    },
++                )
++
+         #
+         # Anaphoric references inside compound intents
+         #
+@@ -267,6 +408,35 @@ class IntentRecognizer:
+                         },
+                     )
+ 
++        # Distinguir documentos de aplicaciones antes de la regla gen├®rica system.open_app.
++        file_match = re.match(
++            r"^(?:abr[i├¡]|abrir|abrime|abrirme)\s+"
++            r"(?:(pdf|docx?|xlsx?|pptx?|txt|csv|jpg|jpeg|png)\s+)?"
++            r"(.+?)"
++            r"(?:\s+en\s+(?:el\s+)?(escritorio|desktop|documentos|documents|descargas|downloads))?$",
++            normalized,
++            re.IGNORECASE,
++        )
++        if file_match:
++            extension, file_name, location_text = file_match.groups()
++            file_name = re.sub(r"^(?:el|la|un|una)\s+", "", file_name.strip())
++            location_text = location_text or "escritorio"
++            locations = {
++                "escritorio": "desktop", "desktop": "desktop",
++                "documentos": "documents", "documents": "documents",
++                "descargas": "downloads", "downloads": "downloads",
++            }
++            if file_name:
++                return Intent(
++                    action="system.open_file",
++                    original_text=text,
++                    parameters={
++                        "file_name": file_name,
++                        "location": locations[location_text],
++                        "extension": extension,
++                    },
++                )
++
+         #
+         # Open Application
+         #
+@@ -941,6 +1111,37 @@ class IntentRecognizer:
+                 parameters={},
+             )
+ 
++        # Time
++        time_patterns = (
++            r"\bfecha y hora actual(?: del sistema)?\b",
++            r"\bfecha actual y hora(?: del sistema)?\b",
++            r"\bdecime la fecha y hora actual(?: del sistema)?\b",
++            r"\bdecime la fecha y hora\b",
++            r"\bqu├® hora es\b",
++            r"\bque hora es\b",
++            r"\bdecime la hora\b",
++            r"\bdec├¡me la hora\b",
++            r"\bdime la hora\b",
++            r"\bdecime qu├® hora es\b",
++            r"\bdecime que hora es\b",
++            r"\bdec├¡me qu├® hora es\b",
++            r"\bqu├® hora tenemos\b",
++            r"\bque hora tenemos\b",
++            r"\bme dec├¡s la hora\b",
++            r"\bme decis la hora\b",
++        )
++
++        if any(
++            re.search(pattern, normalized)
++            for pattern in time_patterns
++        ):
++            return Intent(
++                action="system.get_time",
++                original_text=text,
++                parameters={},
++            )
++
++
+         #
+         # Unknown
+         #
+diff --git a/packages/planner/src/planner/ollama_intent_provider.py b/packages/planner/src/planner/ollama_intent_provider.py
+index 07c2b56..b5de52c 100644
+--- a/packages/planner/src/planner/ollama_intent_provider.py
++++ b/packages/planner/src/planner/ollama_intent_provider.py
+@@ -1,10 +1,11 @@
+ from __future__ import annotations
+-
++import asyncio
+ import json
+ import re
+ from typing import Any
+ 
+-from ollama import AsyncClient
++import httpx
++from ollama import AsyncClient, RequestError
+ 
+ from planner.intent import Intent
+ from planner.intent_provider import IntentProvider
+@@ -14,6 +15,7 @@ class OllamaIntentProvider(IntentProvider):
+     """Interpreta lenguaje natural usando Ollama y valida la intenci├│n resultante."""
+ 
+     MIN_CONFIDENCE = 0.50
++    REQUEST_TIMEOUT_SECONDS = 10.0
+ 
+     def __init__(
+         self,
+@@ -210,7 +212,9 @@ REGLAS ESTRICTAS:
+ 
+ 6. Para system.open_app, el usuario debe estar
+    pidiendo expl├¡citamente abrir, ejecutar o
+-   iniciar una aplicaci├│n.
++   iniciar una aplicaci├│n. No lo uses para documentos.
++   Para documentos usa system.open_file solo si hay
++   nombre de archivo y carpeta autorizada.
+ 
+ 7. Para system.set_volume, el usuario puede
+    referirse al volumen, m├║sica, sonido, audio
+@@ -355,13 +359,25 @@ SOLICITUD DEL USUARIO:
+ {text}
+ """
+ 
+-        async with AsyncClient(host=self._host) as client:
+-            response = await client.chat(
+-                model=self._model,
+-                messages=[{"role": "system", "content": system_prompt}],
+-                format="json",
+-                options={"temperature": 0},
+-            )
++        try:
++            async with asyncio.timeout(self.REQUEST_TIMEOUT_SECONDS):
++                async with AsyncClient(
++                    host=self._host,
++                    timeout=self.REQUEST_TIMEOUT_SECONDS,
++                ) as client:
++                    response = await client.chat(
++                        model=self._model,
++                        messages=[{"role": "system", "content": system_prompt}],
++                        format="json",
++                        options={"temperature": 0},
++                    )
++        except (
++            TimeoutError,
++            httpx.TimeoutException,
++            httpx.RequestError,
++            RequestError,
++        ):
++            return self._unknown(text)
+ 
+         try:
+             data = json.loads(response.message.content)
+@@ -419,6 +435,17 @@ SOLICITUD DEL USUARIO:
+         context = context or {}
+         normalized = text.lower().strip()
+ 
++        if action == "system.open_file":
++            open_pattern = r"\b(abr[i├¡]r?|abrime|abrirme)\b"
++            if not re.search(open_pattern, normalized):
++                return False
++            file_name = parameters.get("file_name")
++            location = parameters.get("location")
++            return (
++                isinstance(file_name, str) and bool(file_name.strip())
++                and location in {"desktop", "documents", "downloads"}
++            )
++
+         if action == "system.open_app":
+             open_pattern = r"\b(abr[i├¡]r?|ejecut[a├í]r?|inici[a├í]r?|lanzar?)\b"
+             if not re.search(open_pattern, normalized):
+diff --git a/packages/processes/src/processes/cognitive.py b/packages/processes/src/processes/cognitive.py
+index 33aaed6..3cbb39f 100644
+--- a/packages/processes/src/processes/cognitive.py
++++ b/packages/processes/src/processes/cognitive.py
+@@ -54,8 +54,29 @@ class ProcessCognitiveAccess:
+     def get(
+         self,
+         process_id: str,
++        *,
++        context: object,
+     ) -> Process | None:
+-        return self._capability.get(process_id)
++        processes = self._capability.relevant(
++            context=context,
++        )
+ 
+-    def list(self) -> tuple[Process, ...]:
+-        return tuple(self._capability.list())
++        return next(
++            (
++                process
++                for process in processes
++                if process.id == process_id
++            ),
++            None,
++        )
++
++    def list(
++        self,
++        *,
++        context: object,
++    ) -> tuple[Process, ...]:
++        return tuple(
++            self._capability.relevant(
++                context=context,
++            )
++        )
+diff --git a/packages/processes/tests/test_process_cognitive_operations.py b/packages/processes/tests/test_process_cognitive_operations.py
+index 2055c2a..f0f6cc3 100644
+--- a/packages/processes/tests/test_process_cognitive_operations.py
++++ b/packages/processes/tests/test_process_cognitive_operations.py
+@@ -1,16 +1,13 @@
++
++from types import SimpleNamespace
++
+ from context import AssistantContext
+ from processes.capability import ProcessCapability
+ from processes.cognitive import ProcessCognitiveAccess
+-from processes.models import Process
+ from processes.resolver import ProcessResolver
+ from processes.store import ProcessStore
+ 
+ 
+-class User:
+-    def __init__(self, user_id: str):
+-        self.id = user_id
+-
+-
+ def build_access() -> ProcessCognitiveAccess:
+     store = ProcessStore()
+     resolver = ProcessResolver(store)
+@@ -21,6 +18,14 @@ def build_access() -> ProcessCognitiveAccess:
+     return ProcessCognitiveAccess(capability)
+ 
+ 
++def make_context(user_id: str) -> AssistantContext:
++    return AssistantContext(
++        user=SimpleNamespace(id=user_id),
++        organization=None,
++        projects=(),
++    )
++
++
+ def test_cognitive_access_can_find_process_by_id():
+     access = build_access()
+ 
+@@ -29,7 +34,10 @@ def test_cognitive_access_can_find_process_by_id():
+         user_id="user-1",
+     )
+ 
+-    result = access.get(process.id)
++    result = access.get(
++        process.id,
++        context=make_context("user-1"),
++    )
+ 
+     assert result == process
+ 
+@@ -46,7 +54,9 @@ def test_cognitive_access_can_list_processes():
+         user_id="user-1",
+     )
+ 
+-    result = access.list()
++    result = access.list(
++        context=make_context("user-1"),
++    )
+ 
+     assert result == (first, second)
+ 
+@@ -59,14 +69,43 @@ def test_cognitive_access_can_resolve_relevant_processes():
+         user_id="user-1",
+     )
+ 
+-    context = AssistantContext(
+-        user=User("user-1"),
+-        organization=None,
+-        projects=[],
++    result = access.find_relevant(
++        context=make_context("user-1"),
+     )
+ 
+-    result = access.find_relevant(context=context)
++    assert process in result.processes
++
++
++def test_cognitive_access_cannot_get_process_from_another_user():
++    access = build_access()
++
++    process = access._capability.create(
++        name="Proceso ajeno",
++        user_id="user-2",
++    )
++
++    result = access.get(
++        process.id,
++        context=make_context("user-1"),
++    )
++
++    assert result is None
++
++
++def test_cognitive_access_lists_only_processes_from_current_context():
++    access = build_access()
++
++    own_process = access._capability.create(
++        name="Proceso propio",
++        user_id="user-1",
++    )
++    access._capability.create(
++        name="Proceso ajeno",
++        user_id="user-2",
++    )
++
++    result = access.list(
++        context=make_context("user-1"),
++    )
+ 
+-    assert result.processes == (process,)
+-    assert result.metadata["operation"] == "processes.find_relevant"
+-    assert result.metadata["count"] == 1
++    assert result == (own_process,)
+diff --git a/packages/providers/src/providers/local_provider.py b/packages/providers/src/providers/local_provider.py
+index 0deb37c..2dca24d 100644
+--- a/packages/providers/src/providers/local_provider.py
++++ b/packages/providers/src/providers/local_provider.py
+@@ -5,6 +5,7 @@ from typing import Any
+ from adapters.windows.app_launcher import (
+     WindowsAppLauncher,
+ )
++from adapters.windows.file_opener import WindowsFileOpener
+ 
+ from adapters.windows.process_manager import (
+     WindowsProcessManager,
+@@ -48,6 +49,7 @@ class LocalProvider(ToolProvider):
+     def __init__(self) -> None:
+ 
+         self._launcher = WindowsAppLauncher()
++        self._file_opener = WindowsFileOpener()
+ 
+         self._process_manager = (
+             WindowsProcessManager()
+@@ -68,6 +70,18 @@ class LocalProvider(ToolProvider):
+         """
+ 
+         return [
++            Tool(
++                name="windows.open_file",
++                action="system.open_file",
++                description="Busca y abre un archivo con la aplicaci├│n predeterminada.",
++                provider=self.name,
++                parameters={
++                    "file_name": {"type": "string", "required": True, "description": "Nombre del archivo."},
++                    "location": {"type": "string", "required": True, "description": "desktop, documents o downloads."},
++                    "extension": {"type": "string", "required": False, "description": "Extensi├│n opcional."},
++                },
++            ),
++
+             Tool(
+                 name="windows.open_app",
+                 action="system.open_app",
+@@ -189,6 +203,13 @@ class LocalProvider(ToolProvider):
+         parameters: dict[str, Any],
+     ) -> Any:
+ 
++        if tool == "windows.open_file":
++            return self._file_opener.open(
++                parameters.get("file_name", ""),
++                parameters.get("location", "desktop"),
++                parameters.get("extension"),
++            )
++
+         if tool == "windows.open_app":
+             return await self._open_app(
+                 parameters
+diff --git a/packages/response/src/response/formatter.py b/packages/response/src/response/formatter.py
+index 57ff36a..b841ba7 100644
+--- a/packages/response/src/response/formatter.py
++++ b/packages/response/src/response/formatter.py
+@@ -112,6 +112,92 @@ class ResponseFormatter:
+                 "de forma natural."
+             )
+ 
++                # B├║squeda cognitiva de documentos
++        if output.get("operation") == "documents.find_relevant":
++            documents = output.get("documents", [])
++
++            if not documents:
++                return "No encontr├® documentos que coincidan con tu b├║squeda."
++
++            names = [
++                document.get("name")
++                for document in documents
++                if isinstance(document, dict) and document.get("name")
++            ]
++
++            if not names:
++                return f"Encontr├® {len(documents)} documento(s) relevante(s)."
++
++            if len(names) == 1:
++                return f"Encontr├® un documento relevante: {names[0]}."
++
++            return (
++                f"Encontr├® {len(names)} documentos relevantes: "
++                + ", ".join(names)
++                + "."
++            )
++
++        # B├║squeda cognitiva de reglas y procesos
++        operation = output.get("operation")
++
++        cognitive_collections = {
++            "rules.find_relevant": ("rules", "reglas"),
++            "processes.find_relevant": ("processes", "procesos"),
++        }
++
++        if operation in cognitive_collections:
++            collection_name, label = cognitive_collections[operation]
++            items = output.get(collection_name, [])
++
++            if not items:
++                return f"No encontr├® {label} relevantes para tu b├║squeda."
++
++            names = [
++                item.get("name")
++                for item in items
++                if isinstance(item, dict) and item.get("name")
++            ]
++
++            if not names:
++                return (
++                    f"Encontr├® {len(items)} {label} relevantes, "
++                    "pero no tienen nombres disponibles."
++                )
++
++            if len(names) == 1:
++                response = f"Encontr├® una {label[:-1]} relevante: {names[0]}."
++            else:
++                response = (
++                    f"Encontr├® {len(names)} {label} relevantes: "
++                    + ", ".join(names)
++                    + "."
++                )
++
++            details = []
++            for item in items:
++                if not isinstance(item, dict):
++                    continue
++
++                name = item.get("name")
++                description = item.get("description")
++                status = item.get("status")
++
++                detail = name or "Sin nombre"
++                if description:
++                    detail += f" ÔÇö {description}"
++                if status:
++                    detail += f" (estado: {status})"
++
++                details.append(detail)
++
++            if details:
++                response += "\n\n" + "\n".join(
++                    f"- {detail}" for detail in details
++                )
++
++            return response
++
++
+         if not output:
+             return "Listo."
+ 
+@@ -412,6 +498,14 @@ class ResponseFormatter:
+             if output["muted"] is False:
+                 return "El sonido est├í activado."
+ 
++        #
++        # Hora actual
++        #
++        if output.get("status") == "read" and "time" in output:
++            if "date" in output:
++                return f"Hoy es {output['date']} y son las {output['time']}."
++            return f"Son las {output['time']}."
++
+         #
+         # Fallback
+         #
+diff --git a/packages/rules/src/rules/cognitive.py b/packages/rules/src/rules/cognitive.py
+index 30648a0..f84e746 100644
+--- a/packages/rules/src/rules/cognitive.py
++++ b/packages/rules/src/rules/cognitive.py
+@@ -54,8 +54,29 @@ class RuleCognitiveAccess:
+     def get(
+         self,
+         rule_id: str,
++        *,
++        context: object,
+     ) -> Rule | None:
+-        return self._capability.get(rule_id)
++        rules = self._capability.relevant(
++            context=context,
++        )
+ 
+-    def list(self) -> tuple[Rule, ...]:
+-        return tuple(self._capability.list())
++        return next(
++            (
++                rule
++                for rule in rules
++                if rule.id == rule_id
++            ),
++            None,
++        )
++
++    def list(
++        self,
++        *,
++        context: object,
++    ) -> tuple[Rule, ...]:
++        return tuple(
++            self._capability.relevant(
++                context=context,
++            )
++        )
+diff --git a/packages/runtime/src/runtime/scheduler.py b/packages/runtime/src/runtime/scheduler.py
+index 5a6b1ba..b7778c2 100644
+--- a/packages/runtime/src/runtime/scheduler.py
++++ b/packages/runtime/src/runtime/scheduler.py
+@@ -1,6 +1,9 @@
++
+ from __future__ import annotations
+ 
+ import asyncio
++import threading
++from concurrent.futures import Future
+ from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from typing import Awaitable, Callable
+@@ -11,10 +14,6 @@ TaskCallback = Callable[[], Awaitable[None]]
+ 
+ @dataclass(slots=True)
+ class ScheduledTask:
+-    """
+-    Representa una tarea peri├│dica.
+-    """
+-
+     name: str
+     interval: float
+     callback: TaskCallback
+@@ -22,136 +21,238 @@ class ScheduledTask:
+ 
+ @dataclass(slots=True)
+ class ScheduledOneShot:
+-    """
+-    Representa una ejecuci├│n ├║nica en un instante absoluto.
+-    """
+-
+     name: str
+     execute_at: datetime
+     callback: TaskCallback
+ 
+ 
+ class Scheduler:
+-    """
+-    Scheduler principal de NEXUS.
+-
+-    Administra tareas peri├│dicas y ejecuciones ├║nicas.
+-
+-    No conoce IA.
+-    No conoce Providers.
+-    No conoce Planner.
+-
+-    Solo ejecuta tareas registradas.
+-    """
+-
+-    def __init__(self) -> None:
++    def __init__(self):
+         self._tasks: list[ScheduledTask] = []
+         self._one_shots: list[ScheduledOneShot] = []
++        self._one_shot_tasks: dict[str, set[asyncio.Task[None]]] = {}
++        self._periodic_tasks: set[asyncio.Task[None]] = set()
+         self._running = False
+-
+-    def register(
+-        self,
+-        name: str,
+-        interval: float,
+-        callback: TaskCallback,
+-    ) -> None:
+-        self._tasks.append(
+-            ScheduledTask(
+-                name=name,
+-                interval=interval,
+-                callback=callback,
++        self._loop: asyncio.AbstractEventLoop | None = None
++        self._stop_event: asyncio.Event | None = None
++        self._state_lock = threading.RLock()
++
++    def register(self, name, interval, callback):
++        if interval <= 0:
++            raise ValueError("interval must be greater than zero")
++
++        with self._state_lock:
++            self._tasks.append(
++                ScheduledTask(
++                    name=name,
++                    interval=interval,
++                    callback=callback,
++                )
+             )
+-        )
+ 
+-    def register_at(
+-        self,
+-        name: str,
+-        execute_at: datetime,
+-        callback: TaskCallback,
+-    ) -> None:
+-        self._one_shots.append(
+-            ScheduledOneShot(
+-                name=name,
+-                execute_at=execute_at,
+-                callback=callback,
+-            )
++    def register_at(self, name, execute_at, callback):
++        one_shot = ScheduledOneShot(
++            name=name,
++            execute_at=execute_at,
++            callback=callback,
+         )
+ 
+-    def cancel_one_shot(
+-        self,
+-        name: str,
+-    ) -> bool:
+-        """
+-        Cancela una ejecuci├│n ├║nica previamente registrada.
++        with self._state_lock:
++            self._one_shots.append(one_shot)
++            loop = self._loop if self._running else None
++
++        # Si el scheduler ya est├í activo, delegar la creaci├│n
++        # de la tarea al hilo propietario del event loop.
++        if loop is not None and not loop.is_closed():
++            loop.call_soon_threadsafe(self._start_one_shot, one_shot)
++
++    def cancel_one_shot(self, name):
++        with self._state_lock:
++            original_count = len(self._one_shots)
++            self._one_shots = [
++                item for item in self._one_shots
++                if item.name != name
++            ]
++            found_pending = len(self._one_shots) < original_count
++            loop = self._loop if self._running else None
++
++        if loop is None or loop.is_closed():
++            return found_pending
++
++        # Si se llama desde el propio event loop, no bloquearlo.
++        try:
++            current_loop = asyncio.get_running_loop()
++        except RuntimeError:
++            current_loop = None
++
++        if current_loop is loop:
++            return self._cancel_active_one_shot(name) or found_pending
++
++        # Desde otro hilo, pedir la cancelaci├│n al event loop
++        # y esperar su resultado para preservar el retorno bool.
++        result: Future[bool] = Future()
++
++        def cancel_on_loop():
++            try:
++                active = self._cancel_active_one_shot(name)
++                result.set_result(active or found_pending)
++            except Exception as exc:
++                result.set_exception(exc)
+ 
+-        Devuelve True si se encontr├│ y elimin├│ la ejecuci├│n.
+-        Devuelve False si no exist├¡a una ejecuci├│n con ese nombre.
+-        """
++        loop.call_soon_threadsafe(cancel_on_loop)
++        return result.result(timeout=5)
+ 
+-        original_count = len(self._one_shots)
++    def _cancel_active_one_shot(self, name) -> bool:
++        active_tasks = self._one_shot_tasks.pop(name, set())
++        found_active = bool(active_tasks)
+ 
+-        self._one_shots = [
+-            one_shot
+-            for one_shot in self._one_shots
+-            if one_shot.name != name
+-        ]
++        for task in active_tasks:
++            task.cancel()
+ 
+-        return len(self._one_shots) < original_count
++        return found_active
+ 
+-    async def start(self) -> None:
+-        if self._running:
++    def _start_one_shot(self, one_shot):
++        if self._loop is None:
+             return
+ 
+-        self._running = True
+-
+-        await asyncio.gather(
+-            *[
+-                self._run_task(task)
+-                for task in self._tasks
+-            ],
+-            *[
+-                self._run_one_shot(one_shot)
+-                for one_shot in self._one_shots
+-            ],
+-        )
++        if not self._running:
++            return
+ 
+-    async def stop(self) -> None:
+-        self._running = False
++        task = self._loop.create_task(self._run_one_shot(one_shot))
++        self._one_shot_tasks.setdefault(one_shot.name, set()).add(task)
++        return task
+ 
+-    async def _run_task(
+-        self,
+-        task: ScheduledTask,
+-    ) -> None:
+-        while self._running:
+-            try:
+-                await task.callback()
++    async def start(self, *, keep_alive: bool = False) -> None:
++        with self._state_lock:
++            if self._running:
++                return
++
++            self._running = True
++            self._loop = asyncio.get_running_loop()
++            self._stop_event = asyncio.Event()
++            initial_one_shots = list(self._one_shots)
++            periodic_tasks = list(self._tasks)
+ 
+-            except Exception as ex:
+-                print(
+-                    f"[Scheduler] {task.name}: {ex}"
++        try:
++            for scheduled in periodic_tasks:
++                task = self._loop.create_task(self._run_task(scheduled))
++                self._periodic_tasks.add(task)
++
++            for one_shot in initial_one_shots:
++                self._start_one_shot(one_shot)
++
++            if keep_alive:
++                assert self._stop_event is not None
++                await self._stop_event.wait()
++            elif self._periodic_tasks:
++                await asyncio.gather(
++                    *list(self._periodic_tasks),
++                    return_exceptions=True,
+                 )
++            else:
++                while self._running:
++                    active_tasks = {
++                        task
++                        for tasks in self._one_shot_tasks.values()
++                        for task in tasks
++                        if not task.done()
++                    }
++
++                    if not active_tasks:
++                        break
++
++                    await asyncio.gather(
++                        *active_tasks,
++                        return_exceptions=True,
++                    )
++        finally:
++            with self._state_lock:
++                self._running = False
++
++            active_tasks = set(self._periodic_tasks)
++
++            for tasks in self._one_shot_tasks.values():
++                active_tasks.update(tasks)
++
++            current = asyncio.current_task()
++            if current is not None:
++                active_tasks.discard(current)
++
++            for task in active_tasks:
++                if not task.done():
++                    task.cancel()
++
++            if active_tasks:
++                await asyncio.gather(
++                    *active_tasks,
++                    return_exceptions=True,
++                )
++
++            self._periodic_tasks.difference_update(active_tasks)
++            self._one_shot_tasks.clear()
++
++            with self._state_lock:
++                self._loop = None
++                self._stop_event = None
++
++    async def stop(self) -> None:
++        with self._state_lock:
++            self._running = False
++            stop_event = self._stop_event
++
++        if stop_event is not None:
++            stop_event.set()
+ 
+-            await asyncio.sleep(
+-                task.interval
++        active_tasks = set(self._periodic_tasks)
++
++        for tasks in self._one_shot_tasks.values():
++            active_tasks.update(tasks)
++
++        current = asyncio.current_task()
++        if current is not None:
++            active_tasks.discard(current)
++
++        for task in active_tasks:
++            if not task.done():
++                task.cancel()
++
++        if active_tasks:
++            await asyncio.gather(
++                *active_tasks,
++                return_exceptions=True,
+             )
+ 
+-    async def _run_one_shot(
+-        self,
+-        one_shot: ScheduledOneShot,
+-    ) -> None:
++        self._periodic_tasks.difference_update(active_tasks)
++
++    async def _run_task(self, task: ScheduledTask) -> None:
++        try:
++            while self._running:
++                try:
++                    await task.callback()
++                except asyncio.CancelledError:
++                    return
++                except Exception as ex:
++                    print(f"[Scheduler] {task.name}: {ex}")
++
++                if self._running:
++                    try:
++                        await asyncio.sleep(task.interval)
++                    except asyncio.CancelledError:
++                        return
++        finally:
++            current = asyncio.current_task()
++            if current is not None:
++                self._periodic_tasks.discard(current)
++
++    async def _run_one_shot(self, one_shot: ScheduledOneShot) -> None:
+         try:
+             now = datetime.now(timezone.utc)
+-
+             execute_at = one_shot.execute_at
+ 
+             if execute_at.tzinfo is None:
+-                execute_at = execute_at.replace(
+-                    tzinfo=timezone.utc
+-                )
++                execute_at = execute_at.replace(tzinfo=timezone.utc)
+ 
+-            delay = (
+-                execute_at - now
+-            ).total_seconds()
++            delay = (execute_at - now).total_seconds()
+ 
+             if delay > 0:
+                 await asyncio.sleep(delay)
+@@ -161,23 +262,54 @@ class Scheduler:
+ 
+             await one_shot.callback()
+ 
++        except asyncio.CancelledError:
++            return
+         except Exception as ex:
+-            print(
+-                f"[Scheduler] {one_shot.name}: {ex}"
+-            )
++            print(f"[Scheduler] {one_shot.name}: {ex}")
++        finally:
++            current = asyncio.current_task()
++            active_tasks = self._one_shot_tasks.get(one_shot.name)
++
++            if active_tasks is not None and current is not None:
++                active_tasks.discard(current)
++
++                if not active_tasks:
++                    self._one_shot_tasks.pop(one_shot.name, None)
+ 
+     def clear(self) -> None:
+-        self._tasks.clear()
+-        self._one_shots.clear()
++        with self._state_lock:
++            self._tasks.clear()
++            self._one_shots.clear()
++            loop = self._loop if self._running else None
++
++        def clear_active_tasks():
++            for task in self._periodic_tasks:
++                task.cancel()
++
++            for active_tasks in self._one_shot_tasks.values():
++                for task in active_tasks:
++                    task.cancel()
++
++            self._periodic_tasks.clear()
++            self._one_shot_tasks.clear()
++
++        if loop is not None and not loop.is_closed():
++            try:
++                current_loop = asyncio.get_running_loop()
++            except RuntimeError:
++                current_loop = None
++
++            if current_loop is loop:
++                clear_active_tasks()
++            else:
++                loop.call_soon_threadsafe(clear_active_tasks)
++        else:
++            clear_active_tasks()
+ 
+     def tasks(self) -> list[str]:
+-        return [
+-            task.name
+-            for task in self._tasks
+-        ]
++        with self._state_lock:
++            return [task.name for task in self._tasks]
+ 
+     def one_shots(self) -> list[str]:
+-        return [
+-            one_shot.name
+-            for one_shot in self._one_shots
+-        ]
++        with self._state_lock:
++            return [one_shot.name for one_shot in self._one_shots]
+diff --git a/packages/tasks/src/tasks/reminder_store.py b/packages/tasks/src/tasks/reminder_store.py
+index ae85c9f..0fa42a2 100644
+--- a/packages/tasks/src/tasks/reminder_store.py
++++ b/packages/tasks/src/tasks/reminder_store.py
+@@ -1,36 +1,179 @@
++
+ from __future__ import annotations
+ 
+-from tasks.reminders import Reminder
++import sqlite3
++import threading
++from datetime import datetime
++from pathlib import Path
++
++from tasks.reminders import Reminder, ReminderStatus
+ 
+ 
+ class ReminderStore:
+-    """In-memory store for assistant reminders."""
++    """SQLite-backed store for assistant reminders."""
++
++    def __init__(
++        self,
++        db_path: str | Path | None = None,
++    ) -> None:
++        self._lock = threading.RLock()
++
++        if db_path is None or str(db_path) == ":memory:":
++            resolved_path = ":memory:"
++        else:
++            path = Path(db_path).expanduser()
++            path.parent.mkdir(parents=True, exist_ok=True)
++            resolved_path = str(path)
++
++        self._connection = sqlite3.connect(
++            resolved_path,
++            timeout=10.0,
++            check_same_thread=False,
++        )
++        self._connection.row_factory = sqlite3.Row
++        self._connection.execute("PRAGMA foreign_keys = ON")
++
++        if resolved_path != ":memory:":
++            self._connection.execute("PRAGMA journal_mode = WAL")
++
++        self._initialize_schema()
++
++    def _initialize_schema(self) -> None:
++        with self._lock, self._connection:
++            self._connection.execute(
++                """
++                CREATE TABLE IF NOT EXISTS reminders (
++                    id TEXT PRIMARY KEY,
++                    message TEXT NOT NULL,
++                    trigger_at TEXT NOT NULL,
++                    status TEXT NOT NULL,
++                    task_id TEXT,
++                    user_id TEXT,
++                    organization_id TEXT,
++                    project_id TEXT,
++                    created_at TEXT NOT NULL
++                )
++                """
++            )
++
++    @staticmethod
++    def _to_reminder(row: sqlite3.Row | None) -> Reminder | None:
++        if row is None:
++            return None
++
++        return Reminder(
++            id=row["id"],
++            message=row["message"],
++            trigger_at=datetime.fromisoformat(row["trigger_at"]),
++            status=ReminderStatus(row["status"]),
++            task_id=row["task_id"],
++            user_id=row["user_id"],
++            organization_id=row["organization_id"],
++            project_id=row["project_id"],
++            created_at=datetime.fromisoformat(row["created_at"]),
++        )
+ 
+-    def __init__(self) -> None:
+-        self._reminders: dict[str, Reminder] = {}
++    def _save(self, reminder: Reminder) -> None:
++        self._connection.execute(
++            """
++            INSERT INTO reminders (
++                id, message, trigger_at, status, task_id,
++                user_id, organization_id, project_id, created_at
++            )
++            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
++            ON CONFLICT(id) DO UPDATE SET
++                message = excluded.message,
++                trigger_at = excluded.trigger_at,
++                status = excluded.status,
++                task_id = excluded.task_id,
++                user_id = excluded.user_id,
++                organization_id = excluded.organization_id,
++                project_id = excluded.project_id,
++                created_at = excluded.created_at
++            """,
++            (
++                reminder.id,
++                reminder.message,
++                reminder.trigger_at.isoformat(),
++                reminder.status.value,
++                reminder.task_id,
++                reminder.user_id,
++                reminder.organization_id,
++                reminder.project_id,
++                reminder.created_at.isoformat(),
++            ),
++        )
+ 
+     def add(self, reminder: Reminder) -> Reminder:
+-        self._reminders[reminder.id] = reminder
++        with self._lock, self._connection:
++            self._save(reminder)
+         return reminder
+ 
+     def get(self, reminder_id: str) -> Reminder | None:
+-        return self._reminders.get(reminder_id)
++        with self._lock:
++            row = self._connection.execute(
++                "SELECT * FROM reminders WHERE id = ?",
++                (reminder_id,),
++            ).fetchone()
++
++        return self._to_reminder(row)
+ 
+     def list(self) -> list[Reminder]:
+-        return list(self._reminders.values())
++        with self._lock:
++            rows = self._connection.execute(
++                "SELECT * FROM reminders ORDER BY rowid"
++            ).fetchall()
++
++        return [
++            reminder
++            for row in rows
++            if (reminder := self._to_reminder(row)) is not None
++        ]
+ 
+     def update(self, reminder: Reminder) -> Reminder:
+-        if reminder.id not in self._reminders:
+-            raise KeyError(f"Reminder not found: {reminder.id}")
++        with self._lock, self._connection:
++            exists = self._connection.execute(
++                "SELECT 1 FROM reminders WHERE id = ?",
++                (reminder.id,),
++            ).fetchone()
++
++            if exists is None:
++                raise KeyError(f"Reminder not found: {reminder.id}")
++
++            self._save(reminder)
+ 
+-        self._reminders[reminder.id] = reminder
+         return reminder
+ 
+     def remove(self, reminder_id: str) -> Reminder | None:
+-        return self._reminders.pop(reminder_id, None)
++        with self._lock, self._connection:
++            row = self._connection.execute(
++                "SELECT * FROM reminders WHERE id = ?",
++                (reminder_id,),
++            ).fetchone()
++
++            reminder = self._to_reminder(row)
++
++            if reminder is not None:
++                self._connection.execute(
++                    "DELETE FROM reminders WHERE id = ?",
++                    (reminder_id,),
++                )
++
++        return reminder
+ 
+     def clear(self) -> None:
+-        self._reminders.clear()
++        with self._lock, self._connection:
++            self._connection.execute("DELETE FROM reminders")
+ 
+     def count(self) -> int:
+-        return len(self._reminders)
++        with self._lock:
++            row = self._connection.execute(
++                "SELECT COUNT(*) AS total FROM reminders"
++            ).fetchone()
++
++        return int(row["total"])
++
++    def close(self) -> None:
++        """Close the SQLite connection."""
++        with self._lock:
++            self._connection.close()
+diff --git a/pyproject.toml b/pyproject.toml
+index a750cbe..20d33d8 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -30,3 +30,5 @@ dev = [
+ asyncio_mode = "auto"
+ python_classes = ["Test*"]
+ python_files = ["test_*.py"]
++# No recolectar copias de respaldo: contienen tests con nombres duplicados.
++norecursedirs = [".git", ".venv", "venv", "backups", "dist", "build", "node_modules", ".pytest_cache", "__pycache__"]
+diff --git a/tests/test_bootstrap_assistant_context.py b/tests/test_bootstrap_assistant_context.py
+index c3a2fc4..60bb84c 100644
+--- a/tests/test_bootstrap_assistant_context.py
++++ b/tests/test_bootstrap_assistant_context.py
+@@ -1,10 +1,10 @@
++
+ from bootstrap.bootstrap import build_engine
+ from context import (
+     AssistantContext,
+     AssistantSession,
+     OrganizationProfile,
+     UserProfile,
+-    AssistantSessionManager,
+ )
+ 
+ 
+@@ -39,8 +39,14 @@ def test_bootstrap_can_inject_assistant_context() -> None:
+ def test_bootstrap_keeps_context_optional() -> None:
+     engine = build_engine()
+ 
+-    assert engine._assistant_context is None
+-    assert engine._context_builder._assistant_context is None
++    assert isinstance(engine._assistant_context, AssistantContext)
++    assert engine._assistant_context.user is None
++    assert engine._assistant_context.organization is None
++    assert (
++        engine._context_builder._assistant_context
++        is engine._assistant_context
++    )
++
+ 
+ def test_bootstrap_can_inject_assistant_session() -> None:
+     organization = OrganizationProfile.create(
+@@ -73,8 +79,9 @@ def test_bootstrap_can_inject_assistant_session() -> None:
+         is assistant_context
+     )
+ 
+-    def test_bootstrap_creates_session_from_context() -> None:
+-      organization = OrganizationProfile.create(
++
++def test_bootstrap_creates_session_from_context() -> None:
++    organization = OrganizationProfile.create(
+         "Organizaci├│n Demo",
+         industry="technology",
+     )
+@@ -90,8 +97,12 @@ def test_bootstrap_can_inject_assistant_session() -> None:
+         organization=organization,
+     )
+ 
++    assistant_session = AssistantSession.create(
++        assistant_context,
++    )
++
+     engine = build_engine(
+-        assistant_context=assistant_context,
++        assistant_session=assistant_session,
+     )
+ 
+     assert engine._assistant_context is assistant_context
+diff --git a/tests/test_reminder_scheduler.py b/tests/test_reminder_scheduler.py
+index 5299775..2fd3247 100644
+--- a/tests/test_reminder_scheduler.py
++++ b/tests/test_reminder_scheduler.py
+@@ -403,3 +403,45 @@ def test_reconcile_does_not_duplicate_existing_schedule() -> None:
+     assert scheduler.one_shots() == [
+         f"reminder:{reminder.id}",
+     ]
++
++
++def test_reschedule_while_scheduler_is_running_executes_new_time() -> None:
++    scheduler = Scheduler()
++    adapter = TemporalSchedulerAdapter(scheduler)
++    store = ReminderStore()
++
++    reminder = Reminder.create(
++        message="Reprogramar durante la espera",
++        trigger_at=datetime.now(timezone.utc) + timedelta(seconds=0.15),
++    )
++    store.add(reminder)
++
++    reminder_scheduler = ReminderScheduler(
++        scheduler_adapter=adapter,
++        reminder_store=store,
++    )
++    reminder_scheduler.schedule(reminder)
++
++    async def run() -> None:
++        task = asyncio.create_task(scheduler.start())
++
++        # Permite que el scheduler comience a esperar el horario original.
++        await asyncio.sleep(0.03)
++
++        new_trigger_at = datetime.now(timezone.utc) + timedelta(seconds=0.15)
++        assert reminder_scheduler.reschedule(
++            reminder.id,
++            new_trigger_at,
++        ) is True
++
++        # Espera m├ís all├í del nuevo horario.
++        await asyncio.sleep(0.22)
++
++        await scheduler.stop()
++        await asyncio.wait_for(task, timeout=1.0)
++
++    asyncio.run(run())
++
++    stored = reminder_scheduler.get(reminder.id)
++    assert stored is not None
++    assert stored.status is ReminderStatus.TRIGGERED
+\ No newline at end of file
+diff --git a/tests/test_response_formatter_episode_query.py b/tests/test_response_formatter_episode_query.py
+index 624de6c..a7a739f 100644
+--- a/tests/test_response_formatter_episode_query.py
++++ b/tests/test_response_formatter_episode_query.py
+@@ -150,3 +150,34 @@ if __name__ == "__main__":
+         test()
+ 
+     print(f"PASS: {len(tests)}/{len(tests)}")
++from runtime.execution_result import ExecutionResult
++from response.formatter import ResponseFormatter
++
++
++def test_format_current_time() -> None:
++    formatter = ResponseFormatter()
++    result = ExecutionResult(
++        success=True,
++        message="",
++        output={
++            "status": "read",
++            "time": "14:35",
++        },
++    )
++
++    assert formatter.format(result) == "Son las 14:35."
++
++def test_format_current_date_and_time() -> None:
++    formatter = ResponseFormatter()
++    result = ExecutionResult(
++        success=True,
++        message="",
++        output={
++            "status": "read",
++            "date": "28/10/2026",
++            "time": "14:35",
++        },
++    )
++
++    assert formatter.format(result) == "Hoy es 28/10/2026 y son las 14:35."
++
+diff --git a/tests/test_scheduler_one_shot.py b/tests/test_scheduler_one_shot.py
+index d96bc2c..4b20e36 100644
+--- a/tests/test_scheduler_one_shot.py
++++ b/tests/test_scheduler_one_shot.py
+@@ -1,3 +1,4 @@
++
+ import asyncio
+ from datetime import datetime, timedelta, timezone
+ 
+@@ -166,3 +167,157 @@ def test_clear_removes_periodic_and_one_shot_tasks() -> None:
+ 
+     assert scheduler.tasks() == []
+     assert scheduler.one_shots() == []
++
++
++def test_cancel_one_shot_prevents_execution_after_scheduler_starts() -> None:
++    scheduler = Scheduler()
++    executions: list[str] = []
++
++    async def callback() -> None:
++        executions.append("executed")
++
++    scheduler.register_at(
++        name="cancelled-reminder",
++        execute_at=(
++            datetime.now(timezone.utc)
++            + timedelta(seconds=0.20)
++        ),
++        callback=callback,
++    )
++
++    async def run() -> None:
++        task = asyncio.create_task(
++            scheduler.start()
++        )
++
++        # Deja que el scheduler comience a esperar la ejecuci├│n.
++        await asyncio.sleep(0.03)
++
++        assert scheduler.cancel_one_shot(
++            "cancelled-reminder"
++        ) is True
++
++        # Espera m├ís all├í de la fecha programada originalmente.
++        await asyncio.sleep(0.25)
++
++        await scheduler.stop()
++        await asyncio.wait_for(task, timeout=1.0)
++
++    asyncio.run(run())
++
++    assert executions == []
++
++
++def test_stop_cancels_future_one_shot_immediately() -> None:
++    scheduler = Scheduler()
++    executions: list[str] = []
++
++    async def callback() -> None:
++        executions.append("executed")
++
++    scheduler.register_at(
++        name="future-reminder",
++        execute_at=(
++            datetime.now(timezone.utc)
++            + timedelta(hours=2)
++        ),
++        callback=callback,
++    )
++
++    async def run() -> None:
++        task = asyncio.create_task(
++            scheduler.start()
++        )
++
++        await asyncio.sleep(0.02)
++
++        await asyncio.wait_for(
++            scheduler.stop(),
++            timeout=1.0,
++        )
++
++        await asyncio.wait_for(
++            task,
++            timeout=1.0,
++        )
++
++        assert task.done()
++
++    asyncio.run(run())
++
++    assert executions == []
++
++
++def test_register_at_from_another_thread() -> None:
++    scheduler = Scheduler()
++    executions: list[str] = []
++
++    async def callback() -> None:
++        executions.append("executed")
++
++    async def run() -> None:
++        task = asyncio.create_task(
++            scheduler.start(keep_alive=True)
++        )
++
++        await asyncio.sleep(0.03)
++
++        await asyncio.to_thread(
++            scheduler.register_at,
++            name="http-thread-reminder",
++            execute_at=(
++                datetime.now(timezone.utc)
++                + timedelta(seconds=0.10)
++            ),
++            callback=callback,
++        )
++
++        await asyncio.sleep(0.20)
++
++        await scheduler.stop()
++        await asyncio.wait_for(task, timeout=1.0)
++
++    asyncio.run(run())
++
++    assert executions == ["executed"]
++
++
++def test_cancel_one_shot_from_another_thread() -> None:
++    scheduler = Scheduler()
++    executions: list[str] = []
++
++    async def callback() -> None:
++        executions.append("executed")
++
++    scheduler.register_at(
++        name="http-thread-cancel",
++        execute_at=(
++            datetime.now(timezone.utc)
++            + timedelta(seconds=0.30)
++        ),
++        callback=callback,
++    )
++
++    async def run() -> None:
++        task = asyncio.create_task(
++            scheduler.start(keep_alive=True)
++        )
++
++        await asyncio.sleep(0.03)
++
++        cancelled = await asyncio.to_thread(
++            scheduler.cancel_one_shot,
++            "http-thread-cancel",
++        )
++
++        assert cancelled is True
++
++        await asyncio.sleep(0.35)
++
++        await scheduler.stop()
++        await asyncio.wait_for(task, timeout=1.0)
++
++    asyncio.run(run())
++
++    assert executions == []
++

@@ -483,13 +483,18 @@ class CognitiveCapabilityRouter:
                     "Document cognitive capability is not available."
                 )
 
+
             return self._document_access.find_relevant(
-                context=context,
-                name=invocation.parameters.get("name"),
-                mime_type=invocation.parameters.get("mime_type"),
-                offset=invocation.parameters.get("offset", 0),
-                limit=invocation.parameters.get("limit"),
-            )
+    context=(
+        assistant_context
+        if assistant_context is not None
+        else context
+    ),
+    name=invocation.parameters.get("name"),
+    mime_type=invocation.parameters.get("mime_type"),
+    offset=invocation.parameters.get("offset", 0),
+    limit=invocation.parameters.get("limit"),
+)
 
         if invocation.capability == "processes":
             if self._process_access is None:
@@ -515,15 +520,31 @@ class CognitiveCapabilityRouter:
                         "processes.get requires 'process_id'."
                     )
 
-                return self._process_access.get(process_id)
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.get requires 'assistant_context'."
+                    )
+
+                return self._process_access.get(
+                    process_id,
+                    context=assistant_context,
+                )
 
             if invocation.operation == "list":
-                return self._process_access.list()
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.list requires 'assistant_context'."
+                    )
+
+                return self._process_access.list(
+                    context=assistant_context,
+                )
 
             raise ValueError(
                 f"Unsupported processes operation: "
                 f"{invocation.operation}"
             )
+
 
         if invocation.capability == "rules":
             if self._rule_access is None:
@@ -549,15 +570,25 @@ class CognitiveCapabilityRouter:
                         "rules.get requires 'rule_id'."
                     )
 
-                return self._rule_access.get(rule_id)
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.get requires 'assistant_context'."
+                    )
+
+                return self._rule_access.get(
+                    rule_id,
+                    context=assistant_context,
+                )
 
             if invocation.operation == "list":
-                return self._rule_access.list()
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.list requires 'assistant_context'."
+                    )
 
-            raise ValueError(
-                f"Unsupported rules operation: "
-                f"{invocation.operation}"
-            )
+                return self._rule_access.list(
+                    context=assistant_context,
+                )
 
         raise ValueError(
             f"Unsupported cognitive capability: "

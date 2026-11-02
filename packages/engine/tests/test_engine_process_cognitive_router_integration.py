@@ -95,3 +95,24 @@ async def test_engine_process_capability_uses_assistant_context():
 
     assert cognitive_result.processes == (process,)
     assert cognitive_result.metadata["count"] == 1
+
+        # La consulta debe producir una respuesta final útil.
+    assert result.success is True
+    assert result.output["operation"] == "processes.find_relevant"
+    assert result.output["status"] == "found"
+    assert result.output["processes"] == [
+        {
+            "id": process.id,
+            "name": process.name,
+            "description": process.description,
+            "status": "pending",
+        }
+    ]
+
+    response = result.metadata["response"]
+    assert process.name in response
+    assert process.description in response
+    assert "pending" in response
+
+    # La capability ya resolvió la consulta: Runtime no debe ejecutarla.
+    runtime.execute.assert_not_awaited()

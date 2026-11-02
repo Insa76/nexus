@@ -1,0 +1,468 @@
+﻿
+================================================================================
+ARCHIVO: apps\console\src\assets\react.svg
+================================================================================
+
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" aria-hidden="true" role="img" class="iconify iconify--logos" width="35.93" height="32" preserveAspectRatio="xMidYMid meet" viewBox="0 0 256 228"><path fill="#00D8FF" d="M210.483 73.824a171.49 171.49 0 0 0-8.24-2.597c.465-1.9.893-3.777 1.273-5.621c6.238-30.281 2.16-54.676-11.769-62.708c-13.355-7.7-35.196.329-57.254 19.526a171.23 171.23 0 0 0-6.375 5.848a155.866 155.866 0 0 0-4.241-3.917C100.759 3.829 77.587-4.822 63.673 3.233C50.33 10.957 46.379 33.89 51.995 62.588a170.974 170.974 0 0 0 1.892 8.48c-3.28.932-6.445 1.924-9.474 2.98C17.309 83.498 0 98.307 0 113.668c0 15.865 18.582 31.778 46.812 41.427a145.52 145.52 0 0 0 6.921 2.165a167.467 167.467 0 0 0-2.01 9.138c-5.354 28.2-1.173 50.591 12.134 58.266c13.744 7.926 36.812-.22 59.273-19.855a145.567 145.567 0 0 0 5.342-4.923a168.064 168.064 0 0 0 6.92 6.314c21.758 18.722 43.246 26.282 56.54 18.586c13.731-7.949 18.194-32.003 12.4-61.268a145.016 145.016 0 0 0-1.535-6.842c1.62-.48 3.21-.974 4.76-1.488c29.348-9.723 48.443-25.443 48.443-41.52c0-15.417-17.868-30.326-45.517-39.844Zm-6.365 70.984c-1.4.463-2.836.91-4.3 1.345c-3.24-10.257-7.612-21.163-12.963-32.432c5.106-11 9.31-21.767 12.459-31.957c2.619.758 5.16 1.557 7.61 2.4c23.69 8.156 38.14 20.213 38.14 29.504c0 9.896-15.606 22.743-40.946 31.14Zm-10.514 20.834c2.562 12.94 2.927 24.64 1.23 33.787c-1.524 8.219-4.59 13.698-8.382 15.893c-8.067 4.67-25.32-1.4-43.927-17.412a156.726 156.726 0 0 1-6.437-5.87c7.214-7.889 14.423-17.06 21.459-27.246c12.376-1.098 24.068-2.894 34.671-5.345a134.17 134.17 0 0 1 1.386 6.193ZM87.276 214.515c-7.882 2.783-14.16 2.863-17.955.675c-8.075-4.657-11.432-22.636-6.853-46.752a156.923 156.923 0 0 1 1.869-8.499c10.486 2.32 22.093 3.988 34.498 4.994c7.084 9.967 14.501 19.128 21.976 27.15a134.668 134.668 0 0 1-4.877 4.492c-9.933 8.682-19.886 14.842-28.658 17.94ZM50.35 144.747c-12.483-4.267-22.792-9.812-29.858-15.863c-6.35-5.437-9.555-10.836-9.555-15.216c0-9.322 13.897-21.212 37.076-29.293c2.813-.98 5.757-1.905 8.812-2.773c3.204 10.42 7.406 21.315 12.477 32.332c-5.137 11.18-9.399 22.249-12.634 32.792a134.718 134.718 0 0 1-6.318-1.979Zm12.378-84.26c-4.811-24.587-1.616-43.134 6.425-47.789c8.564-4.958 27.502 2.111 47.463 19.835a144.318 144.318 0 0 1 3.841 3.545c-7.438 7.987-14.787 17.08-21.808 26.988c-12.04 1.116-23.565 2.908-34.161 5.309a160.342 160.342 0 0 1-1.76-7.887Zm110.427 27.268a347.8 347.8 0 0 0-7.785-12.803c8.168 1.033 15.994 2.404 23.343 4.08c-2.206 7.072-4.956 14.465-8.193 22.045a381.151 381.151 0 0 0-7.365-13.322Zm-45.032-43.861c5.044 5.465 10.096 11.566 15.065 18.186a322.04 322.04 0 0 0-30.257-.006c4.974-6.559 10.069-12.652 15.192-18.18ZM82.802 87.83a323.167 323.167 0 0 0-7.227 13.238c-3.184-7.553-5.909-14.98-8.134-22.152c7.304-1.634 15.093-2.97 23.209-3.984a321.524 321.524 0 0 0-7.848 12.897Zm8.081 65.352c-8.385-.936-16.291-2.203-23.593-3.793c2.26-7.3 5.045-14.885 8.298-22.6a321.187 321.187 0 0 0 7.257 13.246c2.594 4.48 5.28 8.868 8.038 13.147Zm37.542 31.03c-5.184-5.592-10.354-11.779-15.403-18.433c4.902.192 9.899.29 14.978.29c5.218 0 10.376-.117 15.453-.343c-4.985 6.774-10.018 12.97-15.028 18.486Zm52.198-57.817c3.422 7.8 6.306 15.345 8.596 22.52c-7.422 1.694-15.436 3.058-23.88 4.071a382.417 382.417 0 0 0 7.859-13.026a347.403 347.403 0 0 0 7.425-13.565Zm-16.898 8.101a358.557 358.557 0 0 1-12.281 19.815a329.4 329.4 0 0 1-23.444.823c-7.967 0-15.716-.248-23.178-.732a310.202 310.202 0 0 1-12.513-19.846h.001a307.41 307.41 0 0 1-10.923-20.627a310.278 310.278 0 0 1 10.89-20.637l-.001.001a307.318 307.318 0 0 1 12.413-19.761c7.613-.576 15.42-.876 23.31-.876H128c7.926 0 15.743.303 23.354.883a329.357 329.357 0 0 1 12.335 19.695a358.489 358.489 0 0 1 11.036 20.54a329.472 329.472 0 0 1-11 20.722Zm22.56-122.124c8.572 4.944 11.906 24.881 6.52 51.026c-.344 1.668-.73 3.367-1.15 5.09c-10.622-2.452-22.155-4.275-34.23-5.408c-7.034-10.017-14.323-19.124-21.64-27.008a160.789 160.789 0 0 1 5.888-5.4c18.9-16.447 36.564-22.941 44.612-18.3ZM128 90.808c12.625 0 22.86 10.235 22.86 22.86s-10.235 22.86-22.86 22.86s-22.86-10.235-22.86-22.86s10.235-22.86 22.86-22.86Z"></path></svg>
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\assets\vite.svg
+================================================================================
+
+<svg xmlns="http://www.w3.org/2000/svg" width="77" height="47" fill="none" aria-labelledby="vite-logo-title" viewBox="0 0 77 47"><title id="vite-logo-title">Vite</title><style>.parenthesis{fill:#000}@media (prefers-color-scheme:dark){.parenthesis{fill:#fff}}</style><path fill="#9135ff" d="M40.151 45.71c-.663.844-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.493c-.92 0-1.457-1.04-.92-1.788l7.479-10.471c1.07-1.498 0-3.578-1.842-3.578H15.443c-.92 0-1.456-1.04-.92-1.788l9.696-13.576c.213-.297.556-.474.92-.474h28.894c.92 0 1.456 1.04.92 1.788l-7.48 10.472c-1.07 1.497 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.087.89 1.83L40.153 45.712z"/><mask id="a" width="48" height="47" x="14" y="0" maskUnits="userSpaceOnUse" style="mask-type:alpha"><path fill="#000" d="M40.047 45.71c-.663.843-2.02.374-2.02-.699V34.708a2.26 2.26 0 0 0-2.262-2.262H24.389c-.92 0-1.457-1.04-.92-1.788l7.479-10.472c1.07-1.497 0-3.578-1.842-3.578H15.34c-.92 0-1.456-1.04-.92-1.788l9.696-13.575c.213-.297.556-.474.92-.474H53.93c.92 0 1.456 1.04.92 1.788L47.37 13.03c-1.07 1.498 0 3.578 1.842 3.578h11.376c.944 0 1.474 1.088.89 1.831L40.049 45.712z"/></mask><g mask="url(#a)"><g filter="url(#b)"><ellipse cx="5.508" cy="14.704" fill="#eee6ff" rx="5.508" ry="14.704" transform="rotate(269.814 20.96 11.29)scale(-1 1)"/></g><g filter="url(#c)"><ellipse cx="10.399" cy="29.851" fill="#eee6ff" rx="10.399" ry="29.851" transform="rotate(89.814 -16.902 -8.275)scale(1 -1)"/></g><g filter="url(#d)"><ellipse cx="5.508" cy="30.487" fill="#8900ff" rx="5.508" ry="30.487" transform="rotate(89.814 -19.197 -7.127)scale(1 -1)"/></g><g filter="url(#e)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.928 4.177)scale(1 -1)"/></g><g filter="url(#f)"><ellipse cx="5.508" cy="30.599" fill="#8900ff" rx="5.508" ry="30.599" transform="rotate(89.814 -25.738 5.52)scale(1 -1)"/></g><g filter="url(#g)"><ellipse cx="14.072" cy="22.078" fill="#eee6ff" rx="14.072" ry="22.078" transform="rotate(93.35 31.245 55.578)scale(-1 1)"/></g><g filter="url(#h)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#i)"><ellipse cx="3.47" cy="21.501" fill="#8900ff" rx="3.47" ry="21.501" transform="rotate(89.009 35.419 55.202)scale(-1 1)"/></g><g filter="url(#j)"><ellipse cx="14.592" cy="9.743" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(39.51 14.592 9.743)"/></g><g filter="url(#k)"><ellipse cx="61.728" cy="-5.321" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 61.728 -5.32)"/></g><g filter="url(#l)"><ellipse cx="55.618" cy="7.104" fill="#00c2ff" rx="5.971" ry="9.665" transform="rotate(37.892 55.618 7.104)"/></g><g filter="url(#m)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#n)"><ellipse cx="12.326" cy="39.103" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 12.326 39.103)"/></g><g filter="url(#o)"><ellipse cx="49.857" cy="30.678" fill="#8900ff" rx="4.407" ry="29.108" transform="rotate(37.892 49.857 30.678)"/></g><g filter="url(#p)"><ellipse cx="52.623" cy="33.171" fill="#00c2ff" rx="5.971" ry="15.297" transform="rotate(37.892 52.623 33.17)"/></g></g><path d="M6.919 0c-9.198 13.166-9.252 33.575 0 46.789h6.215c-9.25-13.214-9.196-33.623 0-46.789zm62.424 0h-6.215c9.198 13.166 9.252 33.575 0 46.789h6.215c9.25-13.214 9.196-33.623 0-46.789" class="parenthesis"/><defs><filter id="b" width="60.045" height="41.654" x="-5.564" y="16.92" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="c" width="90.34" height="51.437" x="-40.407" y="-6.762" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="d" width="79.355" height="29.4" x="-35.435" y="2.801" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="e" width="79.579" height="29.4" x="-30.84" y="20.8" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="f" width="79.579" height="29.4" x="-29.307" y="21.949" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="g" width="74.749" height="58.852" x="29.961" y="-17.13" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="7.659"/></filter><filter id="h" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="i" width="61.377" height="25.362" x="37.754" y="3.055" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="j" width="56.045" height="63.649" x="-13.43" y="-22.082" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="k" width="54.814" height="64.646" x="34.321" y="-37.644" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="l" width="33.541" height="35.313" x="38.847" y="-10.552" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="m" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="n" width="54.814" height="64.646" x="-15.081" y="6.78" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="o" width="54.814" height="64.646" x="22.45" y="-1.645" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter><filter id="p" width="39.409" height="43.623" x="32.919" y="11.36" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feFlood flood-opacity="0" result="BackgroundImageFix"/><feBlend in="SourceGraphic" in2="BackgroundImageFix" result="shape"/><feGaussianBlur result="effect1_foregroundBlur_2002_17286" stdDeviation="4.596"/></filter></defs></svg>
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\assistant.css
+================================================================================
+
+html:has(body.assistant-window),
+body.assistant-window {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.assistant-window #root {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  background: transparent;
+}
+
+.presence {
+  position: relative;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  overflow: hidden;
+  color: #dce8f5;
+  background: transparent;
+  font-family: Inter, "Segoe UI", sans-serif;
+}
+
+.presence-orb {
+  position: relative;
+  display: grid;
+  width: 68px;
+  height: 68px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.orb-halo,
+.orb-core {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.orb-halo {
+  width: 58px;
+  height: 58px;
+  border: 1px solid rgba(86, 194, 246, 0.55);
+  box-shadow: 0 0 20px rgba(45, 163, 223, 0.22);
+  animation: nexus-pulse 3s ease-in-out infinite;
+}
+
+.orb-core {
+  width: 29px;
+  height: 29px;
+  border: 1px solid rgba(155, 225, 255, 0.95);
+  background: radial-gradient(circle at 35% 30%, #b4eaff, #247eb1 55%, #071725);
+  box-shadow:
+    0 0 13px rgba(74, 190, 247, 0.65),
+    inset 0 0 10px rgba(166, 232, 255, 0.3);
+  animation: nexus-breathe 2.5s ease-in-out infinite;
+}
+
+.presence-orb:hover .orb-halo {
+  border-color: #9be1ff;
+  box-shadow: 0 0 25px rgba(45, 163, 223, 0.4);
+}
+
+.assistant-panel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(104, 177, 213, 0.28);
+  border-radius: 13px;
+  background: rgba(4, 12, 20, 0.97);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35);
+  -webkit-app-region: no-drag;
+}
+
+.assistant-header,
+.assistant-brand,
+.assistant-footer {
+  display: flex;
+  align-items: center;
+}
+
+.assistant-header,
+.assistant-footer {
+  justify-content: space-between;
+}
+
+.assistant-brand {
+  gap: 8px;
+  color: #c7e7f7;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+
+.assistant-brand small {
+  color: #5f879e;
+  font-size: 8px;
+}
+
+.mini-orb {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7ad8ff;
+  box-shadow: 0 0 10px rgba(74, 190, 247, 0.7);
+}
+
+.assistant-close {
+  width: 27px;
+  height: 25px;
+  border: 1px solid rgba(104, 177, 213, 0.2);
+  border-radius: 5px;
+  color: #9bb9ca;
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+}
+
+.assistant-form {
+  display: flex;
+  flex: 0 0 40px;
+  gap: 7px;
+}
+
+.assistant-form input {
+  width: 0;
+  min-width: 0;
+  flex: 1;
+  padding: 0 11px;
+  border: 1px solid rgba(104, 177, 213, 0.23);
+  border-radius: 7px;
+  outline: none;
+  color: #dce8f5;
+  background: rgba(2, 7, 12, 0.8);
+  font-size: 11px;
+}
+
+.assistant-form input:focus {
+  border-color: rgba(104, 196, 239, 0.65);
+}
+
+.assistant-form input::placeholder {
+  color: #607a8b;
+}
+
+.assistant-send {
+  width: 38px;
+  border: 1px solid rgba(104, 177, 213, 0.3);
+  border-radius: 7px;
+  color: #a8e5ff;
+  background: rgba(44, 133, 174, 0.16);
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.assistant-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.assistant-feedback {
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  color: #91afc1;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.assistant-feedback pre {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: inherit;
+}
+
+.feedback-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: #7ad8ff;
+  animation: nexus-breathe 1s ease-in-out infinite;
+}
+
+.assistant-footer {
+  flex: 0 0 22px;
+  color: #4e7185;
+  font-size: 8px;
+  letter-spacing: 0.13em;
+}
+
+.assistant-mic {
+  padding: 5px 7px;
+  border: 1px solid rgba(104, 177, 213, 0.2);
+  border-radius: 4px;
+  color: #81bad7;
+  background: transparent;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+@keyframes nexus-pulse {
+  0%, 100% { transform: scale(0.92); opacity: 0.55; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+@keyframes nexus-breathe {
+  0%, 100% { transform: scale(0.94); }
+  50% { transform: scale(1.07); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb-halo,
+  .orb-core,
+  .feedback-dot {
+    animation: none;
+  }
+}
+
+/* Permitir arrastrar la ventana desde la esfera */
+.presence {
+  -webkit-app-region: drag;
+}
+
+/* Los controles siguen siendo interactivos */
+.presence button,
+.presence input,
+.presence textarea,
+.presence a {
+  -webkit-app-region: no-drag;
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: apps\console\src\Assistant.tsx
+================================================================================
+
+import { useEffect, useRef, useState } from "react";
+import "./assistant.css";
+
+type DesktopBridge = {
+  setExpanded: (expanded: boolean) => void;
+};
+
+declare global {
+  interface Window {
+    nexusDesktop?: DesktopBridge;
+  }
+}
+
+export default function Assistant() {
+  const [expanded, setExpanded] = useState(false);
+  const [command, setCommand] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    document.body.classList.add("assistant-window");
+
+    return () => {
+      document.body.classList.remove("assistant-window");
+    };
+  }, []);
+
+  function togglePanel() {
+    const next = !expanded;
+    setExpanded(next);
+    setFeedback("");
+    window.nexusDesktop?.setExpanded(next);
+
+    if (next) {
+      window.setTimeout(() => inputRef.current?.focus(), 120);
+    }
+  }
+
+  async function submitCommand(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const text = command.trim();
+    if (!text || busy) return;
+
+    setBusy(true);
+    setFeedback("NEXUS está procesando la instrucción…");
+
+    try {
+      const response = await fetch("http://127.0.0.1:8765/api/execute", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const errorMessage =
+          typeof payload === "object" &&
+          payload !== null &&
+          "error" in payload &&
+          typeof payload.error === "string"
+            ? payload.error
+            : `Error HTTP ${response.status}`;
+
+        throw new Error(errorMessage);
+      }
+
+      if (typeof payload === "string") {
+        setFeedback(payload);
+      } else if (payload && typeof payload === "object") {
+        const data = payload as Record<string, unknown>;
+        const message = ["message", "response", "result", "output", "text"]
+          .map((key) => data[key])
+          .find((value) => typeof value === "string" && value.length > 0);
+
+        setFeedback(
+          typeof message === "string"
+            ? message
+            : JSON.stringify(payload, null, 2),
+        );
+      } else {
+        setFeedback("Instrucción enviada. No se recibió contenido de respuesta.");
+      }
+
+      setCommand("");
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se pudo enviar la instrucción.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className={`presence ${expanded ? "presence-expanded" : ""}`}>
+      {!expanded ? (
+        <button
+          className="presence-orb"
+          type="button"
+          aria-label="Activar NEXUS"
+          title="Activar NEXUS"
+          onClick={togglePanel}
+        >
+          <span className="orb-halo" />
+          <span className="orb-core" />
+        </button>
+      ) : (
+        <section className="assistant-panel">
+          <header className="assistant-header">
+            <span className="assistant-brand">
+              <span className="mini-orb" />
+              NEXUS
+              <small>PRESENCE</small>
+            </span>
+            <button
+              className="assistant-close"
+              type="button"
+              onClick={togglePanel}
+              aria-label="Volver al modo discreto"
+              title="Minimizar"
+            >
+              −
+            </button>
+          </header>
+
+          <form className="assistant-form" onSubmit={submitCommand}>
+            <input
+              ref={inputRef}
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder="Escribí una instrucción…"
+              aria-label="Instrucción para NEXUS"
+              disabled={busy}
+            />
+            <button
+              className="assistant-send"
+              type="submit"
+              disabled={busy || !command.trim()}
+              aria-label="Enviar instrucción"
+              title="Enviar"
+            >
+              ↑
+            </button>
+          </form>
+
+          <div className="assistant-feedback" aria-live="polite">
+            {busy && <span className="feedback-dot" />}
+            <pre>{feedback || "Disponible para recibir instrucciones."}</pre>
+          </div>
+
+          <footer className="assistant-footer">
+            <span>{busy ? "PROCESANDO" : "RUNTIME LOCAL"}</span>
+            <button
+              type="button"
+              className="assistant-mic"
+              onClick={() =>
+                setFeedback(
+                  "La entrada por voz se integrará en la siguiente etapa.",
+                )
+              }
+              title="Entrada por voz: próxima etapa"
+              aria-label="Entrada por voz"
+            >
+              MIC
+            </button>
+          </footer>
+        </section>
+      )}
+    </main>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

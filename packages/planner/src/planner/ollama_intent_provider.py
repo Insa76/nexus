@@ -1,10 +1,11 @@
 from __future__ import annotations
-
+import asyncio
 import json
 import re
 from typing import Any
 
-from ollama import AsyncClient
+import httpx
+from ollama import AsyncClient, RequestError
 
 from planner.intent import Intent
 from planner.intent_provider import IntentProvider
@@ -14,6 +15,7 @@ class OllamaIntentProvider(IntentProvider):
     """Interpreta lenguaje natural usando Ollama y valida la intención resultante."""
 
     MIN_CONFIDENCE = 0.50
+    REQUEST_TIMEOUT_SECONDS = 10.0
 
     def __init__(
         self,
@@ -210,7 +212,9 @@ REGLAS ESTRICTAS:
 
 6. Para system.open_app, el usuario debe estar
    pidiendo explícitamente abrir, ejecutar o
-   iniciar una aplicación.
+   iniciar una aplicación. No lo uses para documentos.
+   Para documentos usa system.open_file solo si hay
+   nombre de archivo y carpeta autorizada.
 
 7. Para system.set_volume, el usuario puede
    referirse al volumen, música, sonido, audio
@@ -355,13 +359,25 @@ SOLICITUD DEL USUARIO:
 {text}
 """
 
-        async with AsyncClient(host=self._host) as client:
-            response = await client.chat(
-                model=self._model,
-                messages=[{"role": "system", "content": system_prompt}],
-                format="json",
-                options={"temperature": 0},
-            )
+        try:
+            async with asyncio.timeout(self.REQUEST_TIMEOUT_SECONDS):
+                async with AsyncClient(
+                    host=self._host,
+                    timeout=self.REQUEST_TIMEOUT_SECONDS,
+                ) as client:
+                    response = await client.chat(
+                        model=self._model,
+                        messages=[{"role": "system", "content": system_prompt}],
+                        format="json",
+                        options={"temperature": 0},
+                    )
+        except (
+            TimeoutError,
+            httpx.TimeoutException,
+            httpx.RequestError,
+            RequestError,
+        ):
+            return self._unknown(text)
 
         try:
             data = json.loads(response.message.content)
@@ -418,6 +434,17 @@ SOLICITUD DEL USUARIO:
         """Comprueba que la acción propuesta sea compatible con la solicitud."""
         context = context or {}
         normalized = text.lower().strip()
+
+        if action == "system.open_file":
+            open_pattern = r"\b(abr[ií]r?|abrime|abrirme)\b"
+            if not re.search(open_pattern, normalized):
+                return False
+            file_name = parameters.get("file_name")
+            location = parameters.get("location")
+            return (
+                isinstance(file_name, str) and bool(file_name.strip())
+                and location in {"desktop", "documents", "downloads"}
+            )
 
         if action == "system.open_app":
             open_pattern = r"\b(abr[ií]r?|ejecut[aá]r?|inici[aá]r?|lanzar?)\b"

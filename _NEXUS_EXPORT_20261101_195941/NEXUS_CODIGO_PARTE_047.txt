@@ -1,0 +1,1744 @@
+﻿
+================================================================================
+ARCHIVO: packages\bootstrap\tests\test_security_integration.py
+================================================================================
+
+from bootstrap.bootstrap import build_engine
+from context import AssistantContext
+from security import Actor
+
+
+class User:
+    def __init__(self, user_id: str) -> None:
+        self.id = user_id
+
+
+def get_action_authorization(engine):
+    manager = engine._runtime.action_manager
+    return manager._action_authorization
+
+
+def test_local_console_has_explicit_permissions():
+    engine = build_engine()
+
+    authorization = get_action_authorization(engine)
+
+    local_actor = Actor.system("local-console")
+
+    assert authorization is not None
+    assert authorization.is_allowed(
+        local_actor,
+        "system.open_app",
+    )
+
+
+def test_identified_user_does_not_inherit_local_permissions():
+    context = AssistantContext(
+        user=User("user-1"),
+        organization=None,
+        projects=[],
+    )
+
+    engine = build_engine(
+        assistant_context=context,
+    )
+
+    authorization = get_action_authorization(engine)
+
+    user_actor = Actor.user("user-1")
+
+    assert authorization is not None
+    assert not authorization.is_allowed(
+        user_actor,
+        "system.open_app",
+    )
+
+
+def test_unassigned_user_is_denied_for_other_actions():
+    context = AssistantContext(
+        user=User("user-2"),
+        organization=None,
+        projects=[],
+    )
+
+    engine = build_engine(
+        assistant_context=context,
+    )
+
+    authorization = get_action_authorization(engine)
+
+    assert authorization is not None
+    assert not authorization.is_allowed(
+        Actor.user("user-2"),
+        "system.set_volume",
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\pyproject.toml
+================================================================================
+
+[project]
+name = "context"
+version = "0.1.0"
+description = "NEXUS Assistant Context"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\README.md
+================================================================================
+
+# NEXUS Context
+
+Assistant context models and in-memory context store.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\__init__.py
+================================================================================
+
+from context.models import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+from context.resolver import ContextResolver
+from context.session import AssistantSession
+from context.store import ContextStore
+from context.session_manager import AssistantSessionManager
+
+__all__ = [
+    "AssistantContext",
+    "AssistantSession",
+    "ContextResolver",
+    "ContextStore",
+    "OrganizationProfile",
+    "ProjectContext",
+    "UserProfile",
+    "AssistantSessionManager",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class UserProfile:
+    id: str
+    name: str
+    role: str | None = None
+    organization_id: str | None = None
+    preferences: dict[str, object] = field(default_factory=dict)
+    responsibilities: tuple[str, ...] = ()
+    priorities: tuple[str, ...] = ()
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        *,
+        role: str | None = None,
+        organization_id: str | None = None,
+        preferences: dict[str, object] | None = None,
+        responsibilities: tuple[str, ...] = (),
+        priorities: tuple[str, ...] = (),
+    ) -> "UserProfile":
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            role=role,
+            organization_id=organization_id,
+            preferences=dict(preferences or {}),
+            responsibilities=responsibilities,
+            priorities=priorities,
+        )
+
+
+@dataclass(frozen=True)
+class OrganizationProfile:
+    id: str
+    name: str
+    industry: str | None = None
+    description: str | None = None
+    areas: tuple[str, ...] = ()
+    rules: tuple[str, ...] = ()
+    priorities: tuple[str, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        *,
+        industry: str | None = None,
+        description: str | None = None,
+        areas: tuple[str, ...] = (),
+        rules: tuple[str, ...] = (),
+        priorities: tuple[str, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> "OrganizationProfile":
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            industry=industry,
+            description=description,
+            areas=areas,
+            rules=rules,
+            priorities=priorities,
+            metadata=dict(metadata or {}),
+        )
+
+
+@dataclass(frozen=True)
+class ProjectContext:
+    id: str
+    name: str
+    organization_id: str
+    description: str | None = None
+    status: str = "active"
+    responsible_user_ids: tuple[str, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        organization_id: str,
+        *,
+        description: str | None = None,
+        status: str = "active",
+        responsible_user_ids: tuple[str, ...] = (),
+        metadata: dict[str, object] | None = None,
+    ) -> "ProjectContext":
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            organization_id=organization_id,
+            description=description,
+            status=status,
+            responsible_user_ids=responsible_user_ids,
+            metadata=dict(metadata or {}),
+        )
+
+
+@dataclass(frozen=True)
+class AssistantContext:
+    user: UserProfile | None = None
+    organization: OrganizationProfile | None = None
+    projects: tuple[ProjectContext, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def project(self, project_id: str) -> ProjectContext | None:
+        for project in self.projects:
+            if project.id == project_id:
+                return project
+
+        return None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "user": (
+                {
+                    "id": self.user.id,
+                    "name": self.user.name,
+                    "role": self.user.role,
+                    "organization_id": self.user.organization_id,
+                    "preferences": dict(self.user.preferences),
+                    "responsibilities": list(self.user.responsibilities),
+                    "priorities": list(self.user.priorities),
+                    "created_at": self.user.created_at.isoformat(),
+                }
+                if self.user is not None
+                else None
+            ),
+            "organization": (
+                {
+                    "id": self.organization.id,
+                    "name": self.organization.name,
+                    "industry": self.organization.industry,
+                    "description": self.organization.description,
+                    "areas": list(self.organization.areas),
+                    "rules": list(self.organization.rules),
+                    "priorities": list(self.organization.priorities),
+                    "metadata": dict(self.organization.metadata),
+                    "created_at": self.organization.created_at.isoformat(),
+                }
+                if self.organization is not None
+                else None
+            ),
+            "projects": [
+                {
+                    "id": project.id,
+                    "name": project.name,
+                    "organization_id": project.organization_id,
+                    "description": project.description,
+                    "status": project.status,
+                    "responsible_user_ids": list(
+                        project.responsible_user_ids
+                    ),
+                    "metadata": dict(project.metadata),
+                    "created_at": project.created_at.isoformat(),
+                }
+                for project in self.projects
+            ],
+            "metadata": dict(self.metadata),
+        }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from context.models import AssistantContext
+from context.store import ContextStore
+
+
+class ContextResolver:
+    """
+    Frontera de resolución del contexto operativo de NEXUS.
+
+    El resolver no almacena usuarios, organizaciones ni proyectos.
+    Tampoco conoce el Engine.
+
+    Su única responsabilidad es transformar una selección de contexto
+    en un AssistantContext utilizando el ContextStore.
+    """
+
+    def __init__(self, store: ContextStore) -> None:
+        self._store = store
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> AssistantContext:
+        """
+        Resuelve el contexto seleccionado por la capa superior.
+
+        La lógica de selección y aislamiento permanece en ContextStore.
+        """
+
+        return self._store.build_context(
+            user_id=user_id,
+            organization_id=organization_id,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\session.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from context.models import AssistantContext
+
+
+@dataclass(frozen=True)
+class AssistantSession:
+    """
+    Sesión activa de la capa Assistant de NEXUS.
+
+    Una sesión representa el contexto operativo seleccionado para
+    una interacción determinada.
+
+    No resuelve contexto, no accede al ContextStore y no contiene
+    memoria cognitiva.
+    """
+
+    session_id: str
+    context: AssistantContext
+    created_at: datetime
+
+    @classmethod
+    def create(
+        cls,
+        context: AssistantContext,
+    ) -> AssistantSession:
+        return cls(
+            session_id=str(uuid4()),
+            context=context,
+            created_at=datetime.now(timezone.utc),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\session_manager.py
+================================================================================
+
+from __future__ import annotations
+
+from context.models import AssistantContext
+from context.session import AssistantSession
+
+
+class AssistantSessionManager:
+    """
+    Administra el ciclo de vida de una sesión Assistant activa.
+
+    El manager no resuelve contexto ni persiste sesiones.
+    Su única responsabilidad es crear, exponer y cerrar
+    la sesión activa.
+    """
+
+    def __init__(self) -> None:
+        self._active_session: AssistantSession | None = None
+
+    def start(
+        self,
+        context: AssistantContext,
+    ) -> AssistantSession:
+        """
+        Crea una nueva sesión y la establece como activa.
+        """
+
+        session = AssistantSession.create(context)
+        self._active_session = session
+
+        return session
+
+    def get_active(self) -> AssistantSession | None:
+        """
+        Devuelve la sesión actualmente activa.
+        """
+
+        return self._active_session
+
+    def close(self) -> AssistantSession | None:
+        """
+        Cierra la sesión activa y devuelve la sesión que estaba activa.
+        """
+
+        session = self._active_session
+        self._active_session = None
+
+        return session
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\context\src\context\store.py
+================================================================================
+
+from __future__ import annotations
+
+from context.models import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+
+class ContextStore:
+    """
+    Almacén en memoria para el contexto operativo de NEXUS.
+
+    Su responsabilidad es resolver el contexto de una capa superior
+    sin introducir lógica de contexto dentro del Engine.
+
+    Flujo:
+
+        ContextStore
+            ↓
+        AssistantContext
+            ↓
+        User / Organization / Projects
+
+    El almacenamiento es deliberadamente en memoria en esta fase.
+    """
+
+    def __init__(self) -> None:
+        self._users: dict[str, UserProfile] = {}
+        self._organizations: dict[str, OrganizationProfile] = {}
+        self._projects: dict[str, ProjectContext] = {}
+
+    def add_user(self, user: UserProfile) -> None:
+        self._users[user.id] = user
+
+    def add_organization(
+        self,
+        organization: OrganizationProfile,
+    ) -> None:
+        self._organizations[organization.id] = organization
+
+    def add_project(self, project: ProjectContext) -> None:
+        self._projects[project.id] = project
+
+    def get_user(self, user_id: str) -> UserProfile | None:
+        return self._users.get(user_id)
+
+    def get_organization(
+        self,
+        organization_id: str,
+    ) -> OrganizationProfile | None:
+        return self._organizations.get(organization_id)
+
+    def get_project(self, project_id: str) -> ProjectContext | None:
+        return self._projects.get(project_id)
+
+    def projects_for_organization(
+        self,
+        organization_id: str,
+    ) -> tuple[ProjectContext, ...]:
+        return tuple(
+            project
+            for project in self._projects.values()
+            if project.organization_id == organization_id
+        )
+
+    def build_context(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> AssistantContext:
+        """
+        Construye un AssistantContext a partir de los identificadores
+        seleccionados por la capa superior.
+
+        Reglas:
+
+        - user_id selecciona al usuario.
+        - Si no se especifica organization_id, se utiliza la organización
+          asociada al usuario.
+        - Si organization_id se especifica explícitamente, tiene prioridad
+          sobre la organización asociada al usuario.
+        - Los proyectos siempre se limitan a la organización finalmente
+          seleccionada.
+        - IDs inexistentes no generan errores; simplemente producen un
+          contexto parcial o vacío.
+        """
+
+        user = (
+            self.get_user(user_id)
+            if user_id is not None
+            else None
+        )
+
+        selected_organization_id = organization_id
+
+        if selected_organization_id is None and user is not None:
+            selected_organization_id = user.organization_id
+
+        organization = (
+            self.get_organization(selected_organization_id)
+            if selected_organization_id is not None
+            else None
+        )
+
+        projects = (
+            self.projects_for_organization(organization.id)
+            if organization is not None
+            else ()
+        )
+
+        return AssistantContext(
+            user=user,
+            organization=organization,
+            projects=projects,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\pyproject.toml
+================================================================================
+
+[project]
+name = "core"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "diego", email = "dinsaurralde@yahoo.com.ar" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi",
+    "websockets",
+]
+
+[project.scripts]
+core = "core:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\__init__.py
+================================================================================
+
+def main() -> None:
+    print("Hello from core!")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\connection_manager.py
+================================================================================
+
+from __future__ import annotations
+
+from fastapi import WebSocket
+from fastapi import WebSocketDisconnect
+
+
+class ConnectionManager:
+    """
+    Administra las conexiones WebSocket activas del Kernel.
+
+    Responsabilidades:
+    - aceptar conexiones
+    - cerrar conexiones
+    - enviar mensajes a todos los clientes
+
+    No conoce lógica de negocio.
+    No conoce IA.
+    No conoce eventos.
+    """
+
+    def __init__(self) -> None:
+        self._connections: list[WebSocket] = []
+
+    @property
+    def count(self) -> int:
+        """Cantidad de clientes conectados."""
+        return len(self._connections)
+
+    async def connect(self, websocket: WebSocket) -> None:
+        """
+        Acepta una nueva conexión.
+        """
+
+        await websocket.accept()
+
+        self._connections.append(websocket)
+
+        print(f"[Kernel] Client connected ({self.count})")
+
+    def disconnect(self, websocket: WebSocket) -> None:
+        """
+        Elimina una conexión.
+        """
+
+        if websocket in self._connections:
+            self._connections.remove(websocket)
+
+        print(f"[Kernel] Client disconnected ({self.count})")
+
+    async def broadcast(self, message: dict) -> None:
+        """
+        Envía un mensaje a todos los clientes conectados.
+
+        Las conexiones inválidas son eliminadas automáticamente.
+        """
+
+        disconnected: list[WebSocket] = []
+
+        for websocket in self._connections:
+
+            try:
+                await websocket.send_json(message)
+
+            except WebSocketDisconnect:
+                disconnected.append(websocket)
+
+            except Exception:
+                disconnected.append(websocket)
+
+        for websocket in disconnected:
+            self.disconnect(websocket)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\event_bus.py
+================================================================================
+
+from __future__ import annotations
+
+from collections import deque
+from typing import Any
+
+
+class EventBus:
+    """
+    Bus interno de eventos del Kernel.
+
+    Su única responsabilidad es almacenar eventos
+    publicados por distintos componentes y entregarlos
+    posteriormente para su procesamiento.
+
+    No conoce WebSocket.
+    No conoce IA.
+    No conoce Runtime.
+    """
+
+    def __init__(self) -> None:
+        self._events: deque[Any] = deque()
+
+    def emit(self, event: Any) -> None:
+        """
+        Publica un nuevo evento.
+        """
+        self._events.append(event)
+
+    def consume_all(self) -> list[Any]:
+        """
+        Devuelve todos los eventos pendientes y limpia el bus.
+        """
+
+        events = list(self._events)
+
+        self._events.clear()
+
+        return events
+
+    def has_events(self) -> bool:
+        """
+        Indica si existen eventos pendientes.
+        """
+
+        return len(self._events) > 0
+
+    def size(self) -> int:
+        """
+        Cantidad de eventos pendientes.
+        """
+
+        return len(self._events)
+
+    def clear(self) -> None:
+        """
+        Elimina todos los eventos pendientes.
+        """
+
+        self._events.clear()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\event_queue.py
+================================================================================
+
+import asyncio
+from typing import Any
+
+
+class EventQueue:
+    """
+    Cola de eventos del Kernel.
+
+    Centraliza el ingreso de eventos que luego serán
+    procesados por el Runtime.
+
+    La cola es completamente asíncrona y mantiene
+    prioridad por evento.
+    """
+
+    def __init__(self):
+
+        self._queue: asyncio.PriorityQueue[
+            tuple[int, Any]
+        ] = asyncio.PriorityQueue()
+
+    async def put(
+        self,
+        priority: int,
+        event: Any
+    ) -> None:
+
+        """
+        Agrega un evento a la cola.
+
+        A mayor prioridad, antes será procesado.
+        """
+
+        await self._queue.put(
+            (-priority, event)
+        )
+
+    async def get(self) -> Any:
+
+        """
+        Espera hasta que exista un evento disponible.
+        """
+
+        _, event = await self._queue.get()
+
+        return event
+
+    def empty(self) -> bool:
+
+        return self._queue.empty()
+
+    def size(self) -> int:
+
+        return self._queue.qsize()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\kernel.py
+================================================================================
+
+from __future__ import annotations
+
+from core.connection_manager import ConnectionManager
+from core.event_bus import EventBus
+from core.event_queue import EventQueue
+from core.runtime_state import RuntimeState
+
+
+class Kernel:
+    """
+    Núcleo principal de NEXUS.
+
+    El Kernel coordina los componentes fundamentales
+    del sistema, pero no contiene lógica de negocio.
+
+    Responsabilidades:
+
+    - mantener el estado global
+    - administrar conexiones
+    - administrar eventos
+    - exponer una única interfaz para el Runtime
+
+    El Kernel NO conoce:
+
+    - IA
+    - Memoria
+    - Planner
+    - Knowledge
+    - Providers
+    - Agentes
+    """
+
+    def __init__(self) -> None:
+
+        self.state = RuntimeState()
+
+        self.connections = ConnectionManager()
+
+        self.events = EventBus()
+
+        self.queue = EventQueue()
+
+    @property
+    def online(self) -> bool:
+        return self.state.online
+
+    @property
+    def connected_clients(self) -> int:
+        return self.state.connected_clients
+
+    def start(self) -> None:
+        """
+        Inicia el Kernel.
+        """
+
+        self.state.online = True
+
+    def stop(self) -> None:
+        """
+        Detiene el Kernel.
+        """
+
+        self.state.online = False
+
+    def info(self) -> dict:
+        """
+        Devuelve información básica del Kernel.
+        """
+
+        return {
+
+            "online": self.state.online,
+
+            "clients": self.state.connected_clients,
+
+            "model": self.state.current_model,
+
+            "version": self.state.kernel_version
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\core\src\core\runtime_state.py
+================================================================================
+
+from pydantic import BaseModel, Field
+
+
+class RuntimeState(BaseModel):
+    """
+    Estado global del Kernel.
+
+    Este objeto representa únicamente el estado operativo
+    del Runtime. No contiene lógica.
+    """
+
+    online: bool = True
+
+    connected_clients: int = 0
+
+    active_agents: list[str] = Field(default_factory=list)
+
+    current_model: str = "NEXUS Core"
+
+    kernel_version: str = "0.1.0"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\pyproject.toml
+================================================================================
+
+[project]
+name = "documents"
+version = "0.1.0"
+description = "NEXUS Assistant Documents"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\README.md
+================================================================================
+
+# NEXUS Documents
+
+Domain models for assistant documents.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\__init__.py
+================================================================================
+
+"""NEXUS Assistant Documents."""
+
+from .artifact_store import ArtifactStore
+from .artifacts import DocumentArtifact
+from .content import DocumentContent
+from .content_store import ContentStore
+from .ingestion import DocumentIngestor, IngestionResult
+from .ingestion_registry import IngestionRegistry
+from .metadata import DocumentMetadata
+from .models import Document
+from .resolver import DocumentResolution, DocumentResolver
+from .store import DocumentStore
+from .artifact_reader import ArtifactReader
+from .text_ingestion import TextIngestor
+from .local_artifact_reader import LocalArtifactReader
+from .ingestion_service import DocumentIngestionService
+from .service import DocumentService
+from .services import DocumentServices, build_document_services
+from .access import DocumentsAccess
+from .document_type import DocumentType
+from .type_resolver import DocumentTypeResolver
+from .sources import DocumentSource
+from .format_reader import DocumentFormatReader
+from .text_format_reader import TextFormatReader
+from .format_reader_registry import FormatReaderRegistry
+from .format_ingestion import FormatIngestionService
+from .artifact_type_resolver import ArtifactTypeResolver
+from .extension_type_detection import ExtensionTypeDetectionStrategy
+from .type_detection import DocumentTypeDetectionStrategy
+from .declared_type_detection import (
+    DeclaredTypeDetectionStrategy,
+)
+from .type_validation import DocumentTypeValidation
+from .type_validator import DocumentTypeValidator
+from .format_ingestion import (
+    FormatIngestionResult,
+)
+from .document_ingestion_result import DocumentIngestionResult
+from .type_detection_evidence import (
+    DocumentTypeDetectionEvidence,
+)
+from .ingestion_evidence import DocumentIngestionEvidence
+from .ingestion_record import DocumentIngestionRecord
+from .ingestion_record_store import DocumentIngestionRecordStore
+from .content_version import DocumentContentVersion
+from .content_version_store import DocumentContentVersionStore
+from .version_resolver import (
+    DocumentVersionResolution,
+    DocumentVersionResolver,
+)
+from .version_comparison import (
+    DocumentVersionComparison,
+    DocumentVersionComparator,
+)
+from .change import DocumentChange, DocumentChangeType
+from .change_detector import (
+    DocumentChangeDetection,
+    DocumentChangeDetector,
+)
+from .version_change import DocumentVersionChangeResult
+from .semantic_change import DocumentSemanticChange
+from .semantic_analyzer import DocumentSemanticAnalyzer
+from .rule_based_semantic_analyzer import RuleBasedSemanticAnalyzer
+from .semantic_analysis import DocumentSemanticAnalysis
+from .semantic_analysis_service import DocumentSemanticAnalysisService
+from .knowledge import DocumentKnowledge
+from .knowledge_extractor import DocumentKnowledgeExtractor
+from .rule_based_knowledge_extractor import (
+    RuleBasedDocumentKnowledgeExtractor,
+)
+from .knowledge_extraction import DocumentKnowledgeExtraction
+from .knowledge_extraction_service import (
+    DocumentKnowledgeExtractionService,
+)
+from .knowledge_record import DocumentKnowledgeRecord
+from .knowledge_record_store import DocumentKnowledgeRecordStore
+from .context_access import DocumentContextAccess
+from .context_resolver import (
+    DocumentContext,
+    DocumentContextResolver,
+    DocumentContextSelection,
+)
+from .context_relevance import (
+    DocumentContextMatch,
+    DocumentContextRelevance,
+)
+from .context_relevance_resolver import (
+    DocumentContextRelevanceResolver,
+)
+from .query import DocumentQueryResult
+from .capability import DocumentCapability
+from .cognitive import DocumentCognitiveAccess, DocumentCognitiveResult
+
+
+__all__ = [
+    "ArtifactStore",
+    "ContentStore",
+    "Document",
+    "DocumentArtifact",
+    "DocumentContent",
+    "DocumentIngestor",
+    "DocumentMetadata",
+    "DocumentResolution",
+    "DocumentResolver",
+    "DocumentStore",
+    "IngestionRegistry",
+    "IngestionResult",
+    "ArtifactReader",
+    "TextIngestor",
+    "LocalArtifactReader",
+    "DocumentIngestionService",
+    "DocumentServices",
+    "build_document_services",
+    "DocumentsAccess",
+    "DocumentType",
+    "DocumentTypeResolver",
+    "DocumentSource",
+    "DocumentFormatReader",
+    "TextFormatReader",
+    "FormatReaderRegistry",
+    "FormatIngestionService",
+    "ArtifactTypeResolver",
+    "ExtensionTypeDetectionStrategy",
+    "DocumentTypeDetectionStrategy",
+    "DeclaredTypeDetectionStrategy",
+    "DocumentTypeValidation",
+    "DocumentTypeValidator",
+    "FormatIngestionResult",
+    "DocumentIngestionResult",
+    "DocumentTypeDetectionEvidence",
+    "DocumentIngestionEvidence",
+    "DocumentIngestionRecord",
+    "DocumentIngestionRecordStore",
+    "DocumentContentVersion",
+    "DocumentContentVersionStore",
+    "DocumentVersionChangeResult",
+    "DocumentVersionResolution",
+    "DocumentVersionResolver",
+    "DocumentVersionComparison",
+    "DocumentVersionComparator",
+    "DocumentChange",
+    "DocumentChangeDetection",
+    "DocumentChangeDetector",
+    "DocumentSemanticChange",
+    "DocumentSemanticAnalyzer",
+    "RuleBasedSemanticAnalyzer",
+    "DocumentSemanticAnalysis",
+    "DocumentSemanticAnalysisService",
+    "DocumentKnowledge",
+    "DocumentKnowledgeExtractor",
+    "RuleBasedDocumentKnowledgeExtractor",
+    "DocumentKnowledgeExtraction",
+    "DocumentKnowledgeExtractionService",
+    "DocumentKnowledgeRecord",
+    "DocumentKnowledgeRecordStore",
+    "DocumentContext",
+    "DocumentContextAccess",
+    "DocumentContextResolver",
+    "DocumentContextSelection",
+    "DocumentContextMatch",
+    "DocumentContextRelevance",
+    "DocumentContextRelevanceResolver",
+    "DocumentQueryResult",
+    "DocumentQueryResult",
+    "DocumentCapability",
+    "DocumentCognitiveAccess",
+    "DocumentCognitiveResult",
+
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\access.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.artifacts import DocumentArtifact
+from documents.document_ingestion_result import DocumentIngestionResult
+from documents.models import Document
+from documents.resolver import DocumentResolution
+from documents.service import DocumentService
+from documents.content import DocumentContent
+from documents.content_version import DocumentContentVersion
+
+
+@dataclass(slots=True)
+class DocumentsAccess:
+    service: DocumentService
+
+    def create_document(
+        self,
+        *,
+        name: str,
+        mime_type: str,
+        source: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+        artifact_id: str | None = None,
+        content_id: str | None = None,
+        metadata: dict[str, str] | None = None,
+    ) -> Document:
+        return self.service.create_document(
+            name=name,
+            mime_type=mime_type,
+            source=source,
+            description=description,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            artifact_id=artifact_id,
+            content_id=content_id,
+            metadata=metadata,
+        )
+
+    def get_document(
+        self,
+        document_id: str,
+    ) -> Document | None:
+        return self.service.get_document(
+            document_id,
+        )
+
+    def update_document(
+        self,
+        document: Document,
+    ) -> Document:
+        return self.service.update_document(
+            document,
+        )
+
+    def get_artifact(
+        self,
+        artifact_id: str,
+    ) -> DocumentArtifact | None:
+        return self.service.get_artifact(
+            artifact_id,
+        )
+
+    def get_content(
+        self,
+        content_id: str,
+    ) -> DocumentContent | None:
+        return self.service.get_content(
+            content_id,
+        )
+
+    def count_documents(self) -> int:
+        return self.service.count_documents()
+
+    def list_documents(self) -> list[Document]:
+        return self.service.list_documents()
+
+    def remove_document(
+        self,
+        document_id: str,
+    ):
+        return self.service.remove_document(
+            document_id
+        )
+
+    def add_artifact(
+        self,
+        artifact: DocumentArtifact,
+    ) -> DocumentArtifact:
+        return self.service.add_artifact(
+            artifact
+        )
+
+    def ingest(
+        self,
+        document: Document,
+    ) -> DocumentResolution:
+        return self.service.ingest(
+            document
+        )
+
+    def ingest_with_validation(
+        self,
+        document: Document,
+    ) -> DocumentIngestionResult:
+        return self.service.ingest_with_validation(
+            document
+        )
+
+    def resolve(
+        self,
+        document_id: str,
+    ) -> DocumentResolution | None:
+        return self.service.resolve(
+            document_id
+        )
+
+    def supported_content_types(self) -> list[str]:
+        return (
+            self.service.ingestion_service
+            .supported_content_types()
+        )
+
+    def list_knowledge_history(
+        self,
+        document_id: str,
+    ):
+        return self.service.list_knowledge_history(
+            document_id
+        )
+
+    def list_latest_knowledge(
+        self,
+        document_id: str,
+    ):
+        return self.service.list_latest_knowledge(
+            document_id
+        )
+
+    def list_knowledge_for_version(
+        self,
+        document_id: str,
+        version: int,
+    ):
+        return self.service.list_knowledge_for_version(
+            document_id=document_id,
+            version=version,
+        )
+
+    def list_versions(
+        self,
+        document_id: str,
+    ) -> list[DocumentContentVersion]:
+        return self.service.list_versions(
+            document_id,
+        )
+
+    def get_version(
+        self,
+        version_id: str,
+    ) -> DocumentContentVersion | None:
+        return self.service.get_version(
+            version_id,
+        )
+
+    def get_latest_version(
+        self,
+        document_id: str,
+    ) -> DocumentContentVersion | None:
+        return self.service.get_latest_version(
+            document_id,
+        )
+
+    def has_latest_knowledge(
+        self,
+        document_id: str,
+    ) -> bool:
+        return self.service.has_latest_knowledge(
+            document_id,
+        )
+
+    def knowledge_count(
+        self,
+        document_id: str,
+    ) -> int:
+        return self.service.knowledge_count(
+            document_id,
+        )
+
+    def validate_latest_knowledge(
+        self,
+        document_id: str,
+    ) -> bool:
+        return self.service.validate_latest_knowledge(
+            document_id,
+        )
+
+    def has_orphaned_knowledge(
+        self,
+        document_id: str,
+    ) -> bool:
+        return self.service.has_orphaned_knowledge(
+            document_id,
+        )
+
+    def list_orphaned_knowledge(
+        self,
+        document_id: str,
+    ):
+        return self.service.list_orphaned_knowledge(
+            document_id,
+        )
+
+    def remove_orphaned_knowledge(
+        self,
+        document_id: str,
+    ) -> int:
+        return self.service.remove_orphaned_knowledge(
+            document_id
+        )
+
+    def remove_knowledge_for_version(
+        self,
+        document_id: str,
+        version: int,
+    ) -> int:
+        return self.service.remove_knowledge_for_version(
+            document_id=document_id,
+            version=version,
+        )
+
+    def refresh_version_knowledge(
+        self,
+        *,
+        document_id: str,
+        from_version: int,
+        to_version: int,
+    ):
+        return self.service.refresh_version_knowledge(
+            document_id=document_id,
+            from_version=from_version,
+            to_version=to_version,
+        )
+
+    def list_documents_for_user(
+        self,
+        user_id: str,
+    ) -> list[Document]:
+        return self.service.list_documents_for_user(
+            user_id
+        )
+
+    def list_documents_for_organization(
+        self,
+        organization_id: str,
+    ) -> list[Document]:
+        return self.service.list_documents_for_organization(
+            organization_id
+        )
+
+    def list_documents_for_project(
+        self,
+        project_id: str,
+    ) -> list[Document]:
+        return self.service.list_documents_for_project(
+            project_id
+        )
+
+    def list_documents_for_context(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> list[Document]:
+        return self.service.list_documents_for_context(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\artifact_reader.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Protocol
+
+from documents.artifacts import DocumentArtifact
+
+
+class ArtifactReader(Protocol):
+    def read(self, artifact: DocumentArtifact) -> str:
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\artifact_store.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.artifacts import DocumentArtifact
+
+
+class ArtifactStore:
+    def __init__(self) -> None:
+        self._artifacts: dict[str, DocumentArtifact] = {}
+
+    def add(self, artifact: DocumentArtifact) -> DocumentArtifact:
+        self._artifacts[artifact.id] = artifact
+        return artifact
+
+    def get(self, artifact_id: str) -> DocumentArtifact | None:
+        return self._artifacts.get(artifact_id)
+
+    def list(self) -> list[DocumentArtifact]:
+        return list(self._artifacts.values())
+
+    def update(self, artifact: DocumentArtifact) -> DocumentArtifact:
+        if artifact.id not in self._artifacts:
+            raise KeyError(f"Artifact not found: {artifact.id}")
+
+        self._artifacts[artifact.id] = artifact
+        return artifact
+
+    def remove(self, artifact_id: str) -> DocumentArtifact | None:
+        return self._artifacts.pop(artifact_id, None)
+
+    def clear(self) -> None:
+        self._artifacts.clear()
+
+    def count(self) -> int:
+        return len(self._artifacts)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\artifact_type_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from documents.artifacts import DocumentArtifact
+from documents.declared_type_detection import DeclaredTypeDetectionStrategy
+from documents.extension_type_detection import ExtensionTypeDetectionStrategy
+from documents.type_detection import DocumentTypeDetectionStrategy
+from documents.type_detection_evidence import DocumentTypeDetectionEvidence
+from documents.document_type import DocumentType
+
+
+class ArtifactTypeResolver:
+    def __init__(
+        self,
+        strategies: list[DocumentTypeDetectionStrategy] | None = None,
+    ) -> None:
+        self._strategies = list(
+            strategies
+            if strategies is not None
+            else [
+                DeclaredTypeDetectionStrategy(),
+                ExtensionTypeDetectionStrategy(),
+            ]
+        )
+
+    def resolve(
+        self,
+        artifact: DocumentArtifact,
+    ) -> DocumentType:
+        evidence = self.resolve_with_evidence(
+            artifact
+        )
+
+        return evidence.detected_type
+
+    def resolve_with_evidence(
+        self,
+        artifact: DocumentArtifact,
+    ) -> DocumentTypeDetectionEvidence:
+        for strategy in self._strategies:
+            detected_type = strategy.resolve(
+                artifact
+            )
+
+            if detected_type is not None:
+                return DocumentTypeDetectionEvidence(
+                    detected_type=detected_type,
+                    strategy=type(strategy).__name__,
+                )
+
+        raise ValueError(
+            "Cannot resolve document type for artifact: "
+            f"{artifact.id}"
+        )
+
+    def strategies(
+        self,
+    ) -> list[DocumentTypeDetectionStrategy]:
+        return list(self._strategies)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\artifacts.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class DocumentArtifact:
+    """
+    Representa el artefacto físico o digital asociado a un documento.
+
+    El modelo describe el artefacto, pero no realiza operaciones
+    de almacenamiento, lectura o hashing.
+    """
+
+    id: str
+    location: str
+    size: int | None = None
+    checksum: str | None = None
+    checksum_algorithm: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        location: str,
+        size: int | None = None,
+        checksum: str | None = None,
+        checksum_algorithm: str | None = None,
+    ) -> DocumentArtifact:
+        return cls(
+            id=str(uuid4()),
+            location=location,
+            size=size,
+            checksum=checksum,
+            checksum_algorithm=checksum_algorithm,
+            created_at=_utc_now(),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\src\documents\capability.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.context_access import DocumentContextAccess
+from documents.query import DocumentQueryResult
+from documents.context_relevance import DocumentContextMatch
+from documents.models import Document
+
+
+@dataclass(slots=True)
+class DocumentCapability:
+    """
+    Interfaz cognitiva de acceso a documentos.
+
+    Expone operaciones orientadas al Assistant/Cognitive Core
+    sin exponer stores ni detalles internos del subsistema Documents.
+    """
+
+    context_access: DocumentContextAccess
+
+    def query(
+        self,
+        *,
+        context: object,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        return self.context_access.query_from_context(
+            context,
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def relevant(
+        self,
+        *,
+        context: object,
+    ) -> tuple[DocumentContextMatch, ...]:
+        return self.context_access.resolve_ordered_matches_from_context(
+            context,
+        )
+
+    def relevant_documents(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Document, ...]:
+        return self.context_access.resolve_ordered_documents_from_context(
+            context,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

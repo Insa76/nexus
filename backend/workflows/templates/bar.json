@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Abrir BarSync",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_url","value":"http://localhost:5173"}
+    ]
+  },
+  {
+    "name": "Exportar ventas",
+    "trigger": "manual",
+    "steps": [
+      {"action":"run_cmd","value":"echo Exportando ventas..."}
+    ]
+  }
+]

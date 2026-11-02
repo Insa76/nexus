@@ -1,0 +1,1291 @@
+﻿
+================================================================================
+ARCHIVO: cognitive_capabilities.txt
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from documents.cognitive import (
+    DocumentCognitiveAccess,
+    DocumentCognitiveResult,
+)
+from processes.cognitive import (
+    ProcessCognitiveAccess,
+    ProcessCognitiveResult,
+)
+from processes.models import Process
+from rules.cognitive import (
+    RuleCognitiveAccess,
+    RuleCognitiveResult,
+)
+from rules.models import Rule
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityContext:
+    """
+    Contexto disponible para una operación cognitiva.
+
+    Mantiene la información de entrada separada de las
+    implementaciones concretas de las capabilities.
+    """
+
+    context: object
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityInvocation:
+    """
+    Representa una capability cognitiva seleccionada,
+    pero todavía no ejecutada.
+    """
+
+    capability: str
+    operation: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityDescriptor:
+    """
+    Describe una capability cognitiva disponible.
+
+    El descriptor permite separar:
+
+    - qué capability existe
+    - qué operación expone
+    - qué acción puede seleccionarla
+
+    No contiene implementación ni ejecuta nada.
+    """
+
+    capability: str
+    operation: str
+    action: str
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityOperation:
+    """
+    Describe una operación cognitiva disponible.
+
+    Representa la capacidad concreta que el Cognitive Core
+    puede utilizar.
+    """
+
+    capability: str
+    operation: str
+    action: str
+
+
+class CognitiveCapabilityRouter:
+    """
+    Punto de entrada para que el Cognitive Core utilice capabilities.
+
+    No conoce stores ni detalles internos de Documents, Processes o Rules.
+    """
+
+    def __init__(
+        self,
+        *,
+        document_access: DocumentCognitiveAccess | None = None,
+        process_access: ProcessCognitiveAccess | None = None,
+        rule_access: RuleCognitiveAccess | None = None,
+    ) -> None:
+        self._document_access = document_access
+        self._process_access = process_access
+        self._rule_access = rule_access
+
+    @property
+    def document_access(self) -> DocumentCognitiveAccess | None:
+        return self._document_access
+
+    @property
+    def process_access(self) -> ProcessCognitiveAccess | None:
+        return self._process_access
+
+    @property
+    def rule_access(self) -> RuleCognitiveAccess | None:
+        return self._rule_access
+
+    @property
+    def descriptors(self) -> tuple[CognitiveCapabilityDescriptor, ...]:
+        """
+        Devuelve las capabilities cognitivas actualmente disponibles.
+        """
+
+        descriptors: list[CognitiveCapabilityDescriptor] = []
+
+        if self._document_access is not None:
+            descriptors.append(
+                CognitiveCapabilityDescriptor(
+                    capability="documents",
+                    operation="find_relevant",
+                    action="documents.find_relevant",
+                )
+            )
+
+        if self._process_access is not None:
+            descriptors.extend(
+                (
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="find_relevant",
+                        action="processes.find_relevant",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="get",
+                        action="processes.get",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="list",
+                        action="processes.list",
+                    ),
+                )
+            )
+
+        if self._rule_access is not None:
+            descriptors.extend(
+                (
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="find_relevant",
+                        action="rules.find_relevant",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="get",
+                        action="rules.get",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="list",
+                        action="rules.list",
+                    ),
+                )
+            )
+
+        return tuple(descriptors)
+
+    def available_capabilities(self) -> tuple[str, ...]:
+        """
+        Devuelve los identificadores de las capabilities cognitivas
+        actualmente disponibles para el Cognitive Core.
+        """
+
+        return tuple(
+            descriptor.capability
+            for descriptor in self.descriptors
+        )
+
+    def available_operations(
+        self,
+    ) -> tuple[CognitiveCapabilityOperation, ...]:
+        """
+        Devuelve las operaciones cognitivas actualmente disponibles.
+        """
+
+        return tuple(
+            CognitiveCapabilityOperation(
+                capability=descriptor.capability,
+                operation=descriptor.operation,
+                action=descriptor.action,
+            )
+            for descriptor in self.descriptors
+        )
+
+    def find_operation(
+        self,
+        *,
+        action: str,
+    ) -> CognitiveCapabilityOperation | None:
+        """
+        Busca la operación cognitiva asociada a una acción.
+        """
+
+        for operation in self.available_operations():
+            if operation.action == action:
+                return operation
+
+        return None
+
+    @staticmethod
+    def summarize_operation_result(
+        result: (
+            DocumentCognitiveResult
+            | ProcessCognitiveResult
+            | RuleCognitiveResult
+            | Process
+            | tuple[Process, ...]
+            | Rule
+            | tuple[Rule, ...]
+            | None
+        ),
+        *,
+        operation: str,
+    ) -> dict[str, Any]:
+        if isinstance(result, DocumentCognitiveResult):
+            count = len(result.documents)
+
+            return {
+                "operation": "documents.find_relevant",
+                "result_count": count,
+                "document_count": count,
+                "query_count": len(result.query.documents),
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if isinstance(result, ProcessCognitiveResult):
+            count = len(result.processes)
+
+            return {
+                "operation": "processes.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if isinstance(result, RuleCognitiveResult):
+            count = len(result.rules)
+
+            return {
+                "operation": "rules.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "processes.get":
+            count = 1 if isinstance(result, Process) else 0
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "processes.list":
+            if not isinstance(result, tuple):
+                raise TypeError(
+                    f"Expected tuple result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            if result and not all(
+                isinstance(item, Process)
+                for item in result
+            ):
+                raise TypeError(
+                    f"Expected tuple[Process, ...] result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            count = len(result)
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "rules.get":
+            count = 1 if isinstance(result, Rule) else 0
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "rules.list":
+            if not isinstance(result, tuple):
+                raise TypeError(
+                    f"Expected tuple result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            if result and not all(
+                isinstance(item, Rule)
+                for item in result
+            ):
+                raise TypeError(
+                    f"Expected tuple[Rule, ...] result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            count = len(result)
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        raise TypeError(
+            f"Unsupported cognitive capability result type: {type(result)!r}"
+        )
+
+    def find_relevant_documents(
+        self,
+        *,
+        context: object,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentCognitiveResult:
+        if self._document_access is None:
+            raise RuntimeError(
+                "Document cognitive capability is not available."
+            )
+
+        return self._document_access.find_relevant(
+            context=context,
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def find_relevant_processes(
+        self,
+        *,
+        context: object,
+    ) -> ProcessCognitiveResult:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.find_relevant(
+            context=context,
+        )
+
+    def get_process(
+        self,
+        *,
+        process_id: str,
+    ) -> Process | None:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.get(process_id)
+
+    def list_processes(self) -> tuple[Process, ...]:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.list()
+
+    def find_relevant_rules(
+        self,
+        *,
+        context: object,
+    ) -> RuleCognitiveResult:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.find_relevant(
+            context=context,
+        )
+
+    def get_rule(
+        self,
+        *,
+        rule_id: str,
+    ) -> Rule | None:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.get(rule_id)
+
+    def list_rules(self) -> tuple[Rule, ...]:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.list()
+
+    def select(
+        self,
+        *,
+        action: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> CognitiveCapabilityInvocation | None:
+        """
+        Determina si una intención corresponde a una
+        capability cognitiva disponible.
+
+        La selección no ejecuta ninguna operación.
+        """
+
+        parameters = parameters or {}
+
+        for descriptor in self.descriptors:
+            if descriptor.action != action:
+                continue
+
+            return CognitiveCapabilityInvocation(
+                capability=descriptor.capability,
+                operation=descriptor.operation,
+                parameters=dict(parameters),
+            )
+
+        return None
+
+    def invoke(
+        self,
+        invocation: CognitiveCapabilityInvocation,
+        *,
+        context: object,
+        assistant_context: object | None = None,
+    ) -> (
+        DocumentCognitiveResult
+        | ProcessCognitiveResult
+        | RuleCognitiveResult
+        | Process
+        | tuple[Process, ...]
+        | Rule
+        | tuple[Rule, ...]
+        | None
+    ):
+        """
+        Ejecuta la operación cognitiva previamente seleccionada.
+
+        La invocación ocurre sobre el acceso cognitivo de la capability.
+        No ejecuta acciones del Runtime.
+        """
+
+        if invocation.capability == "documents":
+            if invocation.operation != "find_relevant":
+                raise ValueError(
+                    f"Unsupported documents operation: "
+                    f"{invocation.operation}"
+                )
+
+            if self._document_access is None:
+                raise RuntimeError(
+                    "Document cognitive capability is not available."
+                )
+
+            return self._document_access.find_relevant(
+                context=context,
+                name=invocation.parameters.get("name"),
+                mime_type=invocation.parameters.get("mime_type"),
+                offset=invocation.parameters.get("offset", 0),
+                limit=invocation.parameters.get("limit"),
+            )
+
+        if invocation.capability == "processes":
+            if self._process_access is None:
+                raise RuntimeError(
+                    "Process cognitive capability is not available."
+                )
+
+            if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.find_relevant requires 'assistant_context'."
+                    )
+
+                return self._process_access.find_relevant(
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "get":
+                process_id = invocation.parameters.get("process_id")
+
+                if not process_id:
+                    raise ValueError(
+                        "processes.get requires 'process_id'."
+                    )
+
+                return self._process_access.get(process_id)
+
+            if invocation.operation == "list":
+                return self._process_access.list()
+
+            raise ValueError(
+                f"Unsupported processes operation: "
+                f"{invocation.operation}"
+            )
+
+        if invocation.capability == "rules":
+            if self._rule_access is None:
+                raise RuntimeError(
+                    "Rule cognitive capability is not available."
+                )
+
+            if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.find_relevant requires 'assistant_context'."
+                    )
+
+                return self._rule_access.find_relevant(
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "get":
+                rule_id = invocation.parameters.get("rule_id")
+
+                if not rule_id:
+                    raise ValueError(
+                        "rules.get requires 'rule_id'."
+                    )
+
+                return self._rule_access.get(rule_id)
+
+            if invocation.operation == "list":
+                return self._rule_access.list()
+
+            raise ValueError(
+                f"Unsupported rules operation: "
+                f"{invocation.operation}"
+            )
+
+        raise ValueError(
+            f"Unsupported cognitive capability: "
+            f"{invocation.capability}"
+        )
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: context_access.txt
+================================================================================
+
+from __future__ import annotations
+
+from context.models import AssistantContext
+
+from documents.context_resolver import (
+    DocumentContext,
+    DocumentContextResolver,
+)
+from documents.context_relevance import DocumentContextMatch
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+class DocumentContextAccess:
+    """
+    Frontera de acceso al contexto documental.
+
+    Los consumidores externos no necesitan conocer la implementación
+    interna del resolver.
+    """
+
+    def __init__(
+        self,
+        resolver: DocumentContextResolver,
+    ) -> None:
+        self._resolver = resolver
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> DocumentContext:
+        return self._resolver.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+    def resolve_from_context(
+        self,
+        context: AssistantContext,
+    ) -> DocumentContext:
+        return self._resolver.resolve_from_context(
+            context,
+        )
+
+    def query(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def query_from_context(
+        self,
+        context: AssistantContext,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.query(
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def resolve_ordered_matches_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[DocumentContextMatch, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_matches()
+
+    def resolve_ordered_documents_from_context(
+        self,
+        context: AssistantContext,
+    ) -> tuple[Document, ...]:
+        document_context = self.resolve_from_context(
+            context,
+        )
+
+        return document_context.ordered_documents()
+
+    def resolve_ordered_matches(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[DocumentContextMatch, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_matches()
+
+    def resolve_ordered_documents(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> tuple[Document, ...]:
+        context = self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+        return context.ordered_documents()
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: contracts\CORE_CONTRACTS.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: contracts\NEXUS CORE SPECIFICATION v1.0
+================================================================================
+
+# NEXUS CORE SPECIFICATION v1.0
+
+**Estado:** Aprobado (Sprint 1)
+**Versión:** 1.0
+**Documento:** Fundacional
+
+---
+
+# 1. Propósito
+
+NEXUS es una plataforma diseñada para reducir la fricción operativa dentro de las organizaciones.
+
+Su misión no es responder preguntas ni reemplazar personas. Su misión es transformar objetivos de negocio en trabajo ejecutado de forma segura, auditable y eficiente.
+
+NEXUS coordina personas, sistemas y capacidades para ejecutar procesos de trabajo independientemente de la tecnología utilizada en cada momento.
+
+La inteligencia artificial es un medio. Nunca es el producto.
+
+---
+
+# 2. Visión
+
+Toda empresa posee conocimiento distribuido entre personas, documentos y sistemas.
+
+Ese conocimiento suele estar fragmentado, generando pérdidas de tiempo, errores, duplicación de tareas y dependencia de personas específicas.
+
+NEXUS existe para convertir ese conocimiento distribuido en una operación coordinada.
+
+El éxito de NEXUS no se mide por la cantidad de conversaciones con la IA, sino por el tiempo recuperado para las personas.
+
+---
+
+# 3. Principios Fundamentales
+
+## Principio 1 — El Core es independiente de la tecnología
+
+El Core nunca depende de un modelo de IA, un proveedor, un sistema operativo o un framework específico.
+
+Toda tecnología utilizada debe poder reemplazarse sin modificar el Core.
+
+---
+
+## Principio 2 — El sistema trabaja sobre Objetivos
+
+Las interfaces pueden recibir voz, texto, eventos o llamadas API.
+
+Todo ingreso debe transformarse en un Objetivo normalizado antes de ingresar al Core.
+
+---
+
+## Principio 3 — Las capacidades son reemplazables
+
+El Core nunca conoce implementaciones concretas.
+
+Solo conoce contratos funcionales.
+
+Una misma capacidad puede poseer múltiples implementaciones.
+
+---
+
+## Principio 4 — Las decisiones son auditables
+
+Toda decisión relevante tomada por el sistema debe quedar registrada.
+
+Debe ser posible reconstruir posteriormente:
+
+* qué ocurrió;
+* por qué ocurrió;
+* qué políticas fueron aplicadas;
+* qué capacidades participaron;
+* cuál fue el resultado.
+
+---
+
+## Principio 5 — Las políticas gobiernan la ejecución
+
+Ninguna capacidad puede ejecutarse sin respetar las políticas definidas por la organización.
+
+Las políticas pertenecen al negocio, no a la implementación técnica.
+
+---
+
+## Principio 6 — El Core coordina, no ejecuta
+
+El Core nunca realiza trabajo especializado.
+
+Su responsabilidad consiste exclusivamente en coordinar la ejecución del trabajo.
+
+---
+
+## Principio 7 — El aprendizaje mejora procesos
+
+El conocimiento acumulado tiene como finalidad mejorar futuras ejecuciones.
+
+NEXUS no aprende para conversar mejor.
+
+Aprende para ejecutar mejor.
+
+---
+
+# 4. Pipeline Universal
+
+Todo objetivo debe atravesar exactamente el mismo ciclo.
+
+1. Observar
+2. Interpretar
+3. Decidir
+4. Planificar
+5. Ejecutar
+6. Validar
+7. Aprender
+
+Ningún flujo de negocio puede omitir este pipeline sin una decisión arquitectónica explícita.
+
+---
+
+# 5. Responsabilidades del Core
+
+El Core únicamente garantiza:
+
+* recibir entradas;
+* normalizarlas como Objetivos;
+* coordinar el pipeline;
+* solicitar planificación;
+* coordinar capacidades;
+* registrar decisiones;
+* actualizar la memoria operativa.
+
+Todo comportamiento adicional pertenece a componentes externos.
+
+---
+
+# 6. Lo que el Core nunca hará
+
+El Core nunca:
+
+* leerá PDFs;
+* enviará correos;
+* llamará directamente a un LLM;
+* accederá a un ERP;
+* conocerá Windows o Linux;
+* contendrá lógica específica de proveedores;
+* implementará reglas particulares de una empresa.
+
+Estas responsabilidades pertenecen a las capacidades o a sus implementaciones.
+
+---
+
+# 7. Definición de Éxito
+
+Una funcionalidad solo será considerada exitosa si demuestra una reducción medible de la fricción operativa.
+
+La métrica principal del producto es:
+
+**Minutos recuperados por persona por día.**
+
+Toda decisión futura deberá poder justificar cómo contribuye a mejorar esa métrica.
+
+---
+
+# 8. Lema del Proyecto
+
+**Cada línea de código debe devolver tiempo a alguien.**
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: contracts\OBJECTIVE.md
+================================================================================
+
+# OBJECTIVE CONTRACT
+Versión: 1.0
+Estado: Aprobado
+
+--------------------------------------------------
+
+PROPÓSITO
+
+Representa un resultado de negocio que NEXUS debe conseguir.
+
+Un Objective nunca representa una acción individual.
+
+Un Objective siempre representa un resultado esperado.
+
+--------------------------------------------------
+
+RESPONSABILIDADES
+
+✓ Mantener el propósito del trabajo.
+
+✓ Mantener el estado de ejecución.
+
+✓ Mantener el contexto necesario.
+
+✓ Registrar el resultado esperado.
+
+✓ Mantener el historial del objetivo.
+
+--------------------------------------------------
+
+NO ES RESPONSABLE DE
+
+✗ Ejecutar trabajo.
+
+✗ Conocer modelos de IA.
+
+✗ Conocer herramientas.
+
+✗ Conocer proveedores.
+
+✗ Conocer implementaciones.
+
+--------------------------------------------------
+
+CICLO DE VIDA
+
+CREATED
+
+↓
+
+PLANNED
+
+↓
+
+RUNNING
+
+↓
+
+WAITING
+
+↓
+
+VALIDATING
+
+↓
+
+COMPLETED
+
+o
+
+FAILED
+
+o
+
+CANCELLED
+
+--------------------------------------------------
+
+ATRIBUTOS MÍNIMOS
+
+id
+
+Identificador único.
+
+--------------------------------------------------
+
+source
+
+Origen del objetivo.
+
+Ejemplos
+
+Usuario
+
+Evento
+
+API
+
+Sistema
+
+--------------------------------------------------
+
+title
+
+Descripción breve.
+
+Ejemplo
+
+Preparar Orden de Pago.
+
+--------------------------------------------------
+
+expected_result
+
+Qué debe existir al finalizar.
+
+Ejemplo
+
+Orden de Pago lista para aprobación.
+
+--------------------------------------------------
+
+context
+
+Información necesaria para comprender el objetivo.
+
+--------------------------------------------------
+
+priority
+
+LOW
+
+NORMAL
+
+HIGH
+
+CRITICAL
+
+--------------------------------------------------
+
+status
+
+Estado actual.
+
+--------------------------------------------------
+
+constraints
+
+Restricciones del negocio.
+
+Ejemplos
+
+Solo procesamiento local.
+
+Debe aprobar Finanzas.
+
+No enviar información externa.
+
+--------------------------------------------------
+
+plan_reference
+
+Referencia al plan generado.
+
+Nunca contiene el plan.
+
+Solo la referencia.
+
+--------------------------------------------------
+
+execution_history
+
+Historial cronológico.
+
+--------------------------------------------------
+
+created_at
+
+--------------------------------------------------
+
+updated_at
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: contracts\PLAN.md
+================================================================================
+
+Plan
+
+id
+
+objective_ref
+
+version
+
+status
+
+steps
+
+checkpoints
+
+estimated_cost
+
+estimated_duration
+
+created_at
+
+updated_at
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\.gitignore
+================================================================================
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\Dockerfile
+================================================================================
+
+FROM node:20
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+EXPOSE 5174
+
+CMD ["npm","run","dev","--","--host"]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\eslint.config.js
+================================================================================
+
+import js from '@eslint/js'
+import globals from 'globals'
+import reactHooks from 'eslint-plugin-react-hooks'
+import reactRefresh from 'eslint-plugin-react-refresh'
+import { defineConfig, globalIgnores } from 'eslint/config'
+
+export default defineConfig([
+  globalIgnores(['dist']),
+  {
+    files: ['**/*.{js,jsx}'],
+    extends: [
+      js.configs.recommended,
+      reactHooks.configs.flat.recommended,
+      reactRefresh.configs.vite,
+    ],
+    languageOptions: {
+      ecmaVersion: 2020,
+      globals: globals.browser,
+      parserOptions: {
+        ecmaVersion: 'latest',
+        ecmaFeatures: { jsx: true },
+        sourceType: 'module',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+    },
+  },
+])
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\index.html
+================================================================================
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>dashboard</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\package.json
+================================================================================
+
+{
+  "name": "dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.13.4",
+    "framer-motion": "^12.33.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-hot-toast": "^2.6.0",
+    "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "vite": "^7.2.4"
+  }
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

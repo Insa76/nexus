@@ -1,0 +1,2628 @@
+
+
+========== packages/documents/src/documents/context_resolver.py ==========
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.access import DocumentsAccess
+from documents.context_relevance import (
+    DocumentContextMatch,
+)
+from documents.context_relevance_resolver import (
+    DocumentContextRelevanceResolver,
+)
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+@dataclass(frozen=True)
+class DocumentContextSelection:
+    """
+    Selección contextual utilizada para resolver documentos.
+    """
+
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DocumentContext:
+    """
+    Documentos relevantes para un contexto operativo.
+
+    La selección que originó los documentos queda preservada
+    para mantener trazabilidad.
+
+    `documents` se mantiene como acceso directo compatible.
+    `matches` agrega la relevancia contextual de cada documento.
+    """
+
+    selection: DocumentContextSelection
+    documents: tuple[Document, ...]
+    matches: tuple[DocumentContextMatch, ...]
+
+    @classmethod
+    def empty(
+        cls,
+        selection: DocumentContextSelection,
+    ) -> DocumentContext:
+        return cls(
+            selection=selection,
+            documents=(),
+            matches=(),
+        )
+
+    def ordered_matches(
+        self,
+    ) -> tuple[DocumentContextMatch, ...]:
+        return tuple(
+            sorted(
+                self.matches,
+                key=lambda match: match.relevance,
+                reverse=True,
+            )
+        )
+
+    def ordered_documents(self) -> tuple[Document, ...]:
+        return tuple(
+            match.document
+            for match in self.ordered_matches()
+        )
+
+    def documents_by_mime_type(
+        self,
+        mime_type: str,
+    ) -> tuple[Document, ...]:
+        return tuple(
+            document
+            for document in self.documents
+            if document.mime_type == mime_type
+        )
+
+    def documents_by_name(
+        self,
+        name: str,
+    ) -> tuple[Document, ...]:
+        normalized_name = name.strip().lower()
+
+        return tuple(
+            document
+            for document in self.documents
+            if normalized_name in document.name.lower()
+        )
+
+    def filter(
+        self,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+    ) -> tuple[Document, ...]:
+        normalized_name = (
+            name.strip().lower()
+            if name is not None
+            else None
+        )
+
+        return tuple(
+            document
+            for document in self.documents
+            if (
+                normalized_name is None
+                or normalized_name in document.name.lower()
+            )
+            and (
+                mime_type is None
+                or document.mime_type == mime_type
+            )
+        )
+
+    def query(
+        self,
+        *,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentQueryResult:
+        normalized_name = (
+            name.strip().lower()
+            if name is not None
+            else None
+        )
+
+        if offset < 0:
+            raise ValueError(
+                "offset must be greater than or equal to zero"
+            )
+
+        if limit is not None and limit < 0:
+            raise ValueError(
+                "limit must be greater than or equal to zero"
+            )
+
+        matched_documents = tuple(
+            match.document
+            for match in self.matches
+            if (
+                normalized_name is None
+                or normalized_name in match.document.name.lower()
+            )
+            and (
+                mime_type is None
+                or match.document.mime_type == mime_type
+            )
+        )
+
+        matched_document_ids = {
+            document.id
+            for document in matched_documents
+        }
+
+        matches = tuple(
+            match
+            for match in self.matches
+            if match.document.id in matched_document_ids
+        )
+
+        total = len(matched_documents)
+
+        if limit is None:
+            paginated_documents = matched_documents[offset:]
+            paginated_ids = {
+                document.id
+                for document in paginated_documents
+            }
+        else:
+            paginated_documents = matched_documents[
+             offset:offset + limit
+            ]
+            paginated_ids = {
+                document.id
+                for document in paginated_documents
+            }
+
+        paginated_matches = tuple(
+            match
+            for match in matches
+            if match.document.id in paginated_ids
+        )
+
+        return DocumentQueryResult.from_documents(
+            paginated_documents,
+            total=total,
+            offset=offset,
+            limit=limit,
+            query={
+    key: value
+    for key, value in {
+        "name": name,
+        "mime_type": mime_type,
+        "offset": offset if offset != 0 else None,
+        "limit": limit,
+    }.items()
+    if value is not None
+},
+            matches=paginated_matches,
+        )
+
+class DocumentContextResolver:
+    """
+    Resuelve documentos relevantes para un contexto operativo.
+
+    No conoce AssistantContext, ContextStore ni Engine.
+    """
+
+    def __init__(
+        self,
+        access: DocumentsAccess,
+        relevance_resolver: DocumentContextRelevanceResolver | None = None,
+    ) -> None:
+        self._access = access
+        self._relevance_resolver = (
+            relevance_resolver
+            or DocumentContextRelevanceResolver()
+        )
+
+    def resolve(
+        self,
+        *,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_ids: tuple[str, ...] = (),
+    ) -> DocumentContext:
+        selection = DocumentContextSelection(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=tuple(project_ids),
+        )
+
+        if not user_id and not organization_id and not project_ids:
+            return DocumentContext.empty(selection)
+
+        # ---------------------------------------------------------
+        # DOCUMENTS
+        # ---------------------------------------------------------
+        #
+        # `documents` mantiene la semántica de resolución
+        # contextual exacta.
+        #
+        # Cuando hay proyectos explícitos:
+        #
+        #   USER + ORGANIZATION + PROJECT
+        #
+        # Cuando no hay proyectos:
+        #
+        #   USER + ORGANIZATION
+        #
+        # Los resultados se deduplican preservando el orden.
+        #
+
+        documents: list[Document] = []
+
+        if project_ids:
+            for project_id in project_ids:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        user_id=user_id,
+                        organization_id=organization_id,
+                        project_id=project_id,
+                    )
+                )
+        else:
+            if user_id is not None:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        user_id=user_id,
+                    )
+                )
+
+            if organization_id is not None:
+                documents.extend(
+                    self._access.list_documents_for_context(
+                        organization_id=organization_id,
+                    )
+                )
+
+        unique_documents: list[Document] = []
+
+        for document in documents:
+            if document not in unique_documents:
+                unique_documents.append(document)
+
+        # ---------------------------------------------------------
+        # MATCH DOCUMENTS
+        # ---------------------------------------------------------
+        #
+        # Para calcular relevancia necesitamos considerar todos
+        # los niveles del contexto:
+        #
+        #   USER
+        #   ORGANIZATION
+        #   PROJECT
+        #
+        # Esto es deliberadamente diferente de `documents`.
+        #
+        # `documents` representa la resolución documental.
+        # `matches` representa la clasificación contextual.
+        #
+
+        match_documents: list[Document] = []
+
+        if user_id is not None:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    user_id=user_id,
+                )
+            )
+
+        if organization_id is not None:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    organization_id=organization_id,
+                )
+            )
+
+        for project_id in project_ids:
+            match_documents.extend(
+                self._access.list_documents_for_context(
+                    project_id=project_id,
+                )
+            )
+
+        unique_match_documents: list[Document] = []
+
+        for document in match_documents:
+            if document not in unique_match_documents:
+                unique_match_documents.append(document)
+
+        # ---------------------------------------------------------
+        # RELEVANCE MATCHES
+        # ---------------------------------------------------------
+
+        matches = tuple(
+            match
+            for document in unique_match_documents
+            if (
+                match := self._relevance_resolver.resolve(
+                    document=document,
+                    selection=selection,
+                )
+            )
+            is not None
+        )
+
+        return DocumentContext(
+            selection=selection,
+            documents=tuple(unique_documents),
+            matches=matches,
+        )
+
+    def resolve_from_context(
+        self,
+        context,
+    ) -> DocumentContext:
+        user_id = (
+            context.user.id
+            if context.user is not None
+            else None
+        )
+
+        organization_id = (
+            context.organization.id
+            if context.organization is not None
+            else None
+        )
+
+        project_ids = tuple(
+            project.id
+            for project in context.projects
+        )
+
+        if (
+            user_id is None
+            and organization_id is None
+            and not project_ids
+        ):
+            return DocumentContext.empty(
+                DocumentContextSelection()
+            )
+
+        return self.resolve(
+            user_id=user_id,
+            organization_id=organization_id,
+            project_ids=project_ids,
+        )
+
+
+
+========== packages/documents/src/documents/services.py ==========
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.access import DocumentsAccess
+from documents.artifact_reader import ArtifactReader
+from documents.artifact_store import ArtifactStore
+from documents.artifact_type_resolver import ArtifactTypeResolver
+from documents.content_store import ContentStore
+from documents.content_version_store import DocumentContentVersionStore
+from documents.format_ingestion import FormatIngestionService
+from documents.format_reader_registry import FormatReaderRegistry
+from documents.ingestion_record_store import DocumentIngestionRecordStore
+from documents.ingestion_registry import IngestionRegistry
+from documents.ingestion_service import DocumentIngestionService
+from documents.local_artifact_reader import LocalArtifactReader
+from documents.service import DocumentService
+from documents.store import DocumentStore
+from documents.text_format_reader import TextFormatReader
+from documents.text_ingestion import TextIngestor
+from documents.type_resolver import DocumentTypeResolver
+from documents.rule_based_semantic_analyzer import RuleBasedSemanticAnalyzer
+from documents.semantic_analysis_service import DocumentSemanticAnalysisService
+from documents.rule_based_knowledge_extractor import (
+    RuleBasedDocumentKnowledgeExtractor,
+)
+from documents.knowledge_extraction_service import (
+    DocumentKnowledgeExtractionService,
+)
+from documents.knowledge_record_store import DocumentKnowledgeRecordStore
+from documents.context_access import DocumentContextAccess
+from documents.context_resolver import DocumentContextResolver
+
+
+@dataclass(slots=True)
+class DocumentServices:
+    document_store: DocumentStore
+    artifact_store: ArtifactStore
+    content_store: ContentStore
+
+    ingestion_registry: IngestionRegistry
+    type_resolver: DocumentTypeResolver
+    ingestion_service: DocumentIngestionService
+
+    artifact_type_resolver: ArtifactTypeResolver
+    format_reader_registry: FormatReaderRegistry
+    format_ingestion_service: FormatIngestionService
+    ingestion_record_store: DocumentIngestionRecordStore
+    content_version_store: DocumentContentVersionStore
+    semantic_analysis_service: DocumentSemanticAnalysisService
+    knowledge_extraction_service: DocumentKnowledgeExtractionService
+    knowledge_record_store: DocumentKnowledgeRecordStore
+
+    document_service: DocumentService
+    access: DocumentsAccess
+    context_access: DocumentContextAccess
+
+
+def build_document_services() -> DocumentServices:
+    document_store = DocumentStore()
+    artifact_store = ArtifactStore()
+    content_store = ContentStore()
+
+    ingestion_registry = IngestionRegistry()
+    type_resolver = DocumentTypeResolver()
+    artifact_type_resolver = ArtifactTypeResolver()
+
+    artifact_reader: ArtifactReader = LocalArtifactReader()
+
+    ingestion_record_store = DocumentIngestionRecordStore()
+    content_version_store = DocumentContentVersionStore()
+    knowledge_record_store = DocumentKnowledgeRecordStore()
+
+    semantic_analysis_service = DocumentSemanticAnalysisService(
+        analyzer=RuleBasedSemanticAnalyzer(),
+    )
+
+    knowledge_extraction_service = DocumentKnowledgeExtractionService(
+    extractor=RuleBasedDocumentKnowledgeExtractor(),
+    )
+
+    text_ingestor = TextIngestor(
+        reader=artifact_reader,
+    )
+
+    ingestion_registry.register(
+        "text/plain",
+        text_ingestor,
+    )
+
+    ingestion_service = DocumentIngestionService(
+        registry=ingestion_registry,
+        type_resolver=type_resolver,
+    )
+
+    format_reader_registry = FormatReaderRegistry()
+
+    text_format_reader = TextFormatReader(
+        artifact_reader=artifact_reader,
+    )
+
+    format_reader_registry.register(
+        "text/plain",
+        text_format_reader,
+    )
+
+    format_ingestion_service = FormatIngestionService(
+        reader_registry=format_reader_registry,
+        type_resolver=artifact_type_resolver,
+    )
+
+    document_service = DocumentService(
+        document_store=document_store,
+        artifact_store=artifact_store,
+        content_store=content_store,
+        ingestion_service=ingestion_service,
+        format_ingestion_service=format_ingestion_service,
+        ingestion_record_store=ingestion_record_store,
+        content_version_store=content_version_store,
+        semantic_analysis_service=semantic_analysis_service,
+        knowledge_extraction_service=knowledge_extraction_service,
+        knowledge_record_store=knowledge_record_store,
+    )
+
+    access = DocumentsAccess(
+        service=document_service,
+    )
+    context_resolver = DocumentContextResolver(
+        access,
+    )
+
+    context_access = DocumentContextAccess(
+        context_resolver,
+    )
+
+    return DocumentServices(
+        document_store=document_store,
+        artifact_store=artifact_store,
+        content_store=content_store,
+        ingestion_registry=ingestion_registry,
+        type_resolver=type_resolver,
+        ingestion_service=ingestion_service,
+        artifact_type_resolver=artifact_type_resolver,
+        format_reader_registry=format_reader_registry,
+        format_ingestion_service=format_ingestion_service,
+        ingestion_record_store=ingestion_record_store,
+        content_version_store=content_version_store,
+        semantic_analysis_service=semantic_analysis_service,
+        knowledge_extraction_service=knowledge_extraction_service,
+        knowledge_record_store=knowledge_record_store,
+        document_service=document_service,
+        access=access,
+        context_access=context_access,
+    )
+
+
+
+========== packages/documents/src/documents/models.py ==========
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+from documents.ingestion_evidence import DocumentIngestionEvidence
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class Document:
+    id: str
+    name: str
+    mime_type: str
+    source: str
+    description: str | None = None
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    artifact_id: str | None = None
+    content_id: str | None = None
+    metadata: dict[str, str] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=_utc_now)
+    updated_at: datetime = field(default_factory=_utc_now)
+    ingestion_evidence: DocumentIngestionEvidence | None = None
+
+    @classmethod
+    def create(
+        cls,
+        name: str,
+        mime_type: str,
+        source: str,
+        description: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+        artifact_id: str | None = None,
+        content_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> Document:
+        now = _utc_now()
+
+        normalized_metadata = {
+            str(key): str(value)
+            for key, value in (metadata or {}).items()
+        }
+
+        return cls(
+            id=str(uuid4()),
+            name=name,
+            mime_type=mime_type,
+            source=source,
+            description=description,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            artifact_id=artifact_id,
+            content_id=content_id,
+            metadata=normalized_metadata,
+            created_at=now,
+            updated_at=now,
+        )
+
+
+
+========== packages/bootstrap/src/bootstrap/bootstrap.py ==========
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+from core.kernel import Kernel
+
+from engine.engine import Engine
+
+from runtime.runtime import Runtime
+from runtime.executor import Executor
+
+
+from actions.registry import ActionRegistry
+
+from actions.manager import ActionManager
+
+from security import (
+    ActionAuthorization,
+    ActionPolicy,
+    ActionPolicyStore,
+    Actor,
+    ActorRoleAssignment,
+    AssignmentStore,
+    AuthorizationService,
+    Permission,
+    PermissionAction,
+    Role,
+)
+
+from security.sqlite_security_store import SQLiteSecurityStore
+from security.sqlite_stores import (
+    SQLiteAssignmentStore,
+    SQLiteRoleStore,
+)
+
+from actions.open_app import OpenAppAction
+
+from actions.set_volume import SetVolumeAction
+
+from actions.get_volume import GetVolumeAction
+
+from actions.get_time import GetTimeAction
+
+from actions.mute import MuteAction
+
+from actions.unmute import UnmuteAction
+
+from actions.close_app import CloseAppAction
+
+from actions.process_list import ProcessListAction
+
+from actions.screen_capture import ScreenCaptureAction
+
+from actions.get_volume_history import GetVolumeHistoryAction
+
+from actions.restore_previous_volume import RestorePreviousVolumeAction
+
+from actions.restore_previous_mute import RestorePreviousMuteAction
+
+from actions.get_mute import GetMuteAction
+
+from actions.get_recent_episodes import GetRecentEpisodesAction
+
+from actions.get_last_episode import GetLastEpisodeAction
+
+from actions.get_previous_episode import GetPreviousEpisodeAction
+
+from actions.inspect_capture import InspectCaptureAction
+
+from actions.inspect_screen import InspectScreenAction
+
+from actions.query_episode import QueryEpisodeAction
+
+
+from providers.provider_manager import ProviderManager
+
+from providers.local_provider import LocalProvider
+
+from providers.tool_registry import ToolRegistry
+
+
+from planner.intent_recognizer import IntentRecognizer
+
+from planner.rule_intent_provider import RuleIntentProvider
+
+from planner.ollama_intent_provider import OllamaIntentProvider
+
+from planner.hybrid_intent_provider import HybridIntentProvider
+
+
+from memory import WorkingMemory
+
+from memory.state_history import StateHistory
+
+from memory.episode_memory import EpisodeMemory
+
+
+from context import (
+    AssistantContext,
+    AssistantSession,
+    AssistantSessionManager,
+)
+
+
+from documents import (
+    DocumentCapability,
+    DocumentCognitiveAccess,
+    DocumentServices,
+    build_document_services as compose_document_services,
+)
+
+
+from processes.capability import ProcessCapability
+
+from processes.cognitive import ProcessCognitiveAccess
+
+from processes.resolver import ProcessResolver
+
+from processes.store import ProcessStore
+
+
+from rules.capability import RuleCapability
+
+from rules.cognitive import RuleCognitiveAccess
+
+from rules.resolver import RuleResolver
+
+from rules.store import RuleStore
+
+
+from bootstrap.assistant_services import (
+    AssistantServices,
+    build_assistant_services,
+)
+
+
+from bootstrap.assistant_services_lifecycle import (
+    AssistantServicesLifecycle,
+)
+
+
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+
+
+def build_document_services() -> DocumentServices:
+    """
+    Construye el subsistema Documents de NEXUS.
+
+    Documents mantiene sus propias dependencias y no conoce
+    Runtime, Engine ni Scheduler.
+    """
+
+    return compose_document_services()
+
+
+def build_engine(
+    assistant_context: AssistantContext | None = None,
+    assistant_session: AssistantSession | None = None,
+) -> Engine:
+    """
+    Construye y configura completamente NEXUS.
+
+    El AssistantContext es opcional para mantener compatibilidad
+    con el arranque actual de NEXUS.
+    """
+
+    security_context = (
+        assistant_session.context
+        if assistant_session is not None
+        else assistant_context
+    )
+
+    security_user = getattr(
+        security_context,
+        "user",
+        None,
+    )
+
+    security_actor_id = getattr(
+        security_user,
+        "id",
+        None,
+    )
+
+    local_console_actor = Actor.system(
+        "local-console",
+        name="NEXUS Local Console",
+    )
+
+    if (
+        isinstance(security_actor_id, str)
+        and security_actor_id.strip()
+    ):
+        security_actor = Actor.user(
+            security_actor_id.strip()
+        )
+    else:
+        security_actor = local_console_actor
+
+    #
+    # Working Memory
+    #
+
+    # Una única instancia compartida por todos
+    # los componentes que necesiten memoria.
+
+    memory = WorkingMemory()
+
+    episode_memory = EpisodeMemory(
+        memory
+    )
+
+    #
+    # State History
+    #
+
+    state_history = StateHistory(
+        memory
+    )
+
+    #
+    # Kernel
+    #
+
+    kernel = Kernel()
+
+    #
+    # Runtime
+    #
+
+    runtime = Runtime(
+        kernel=kernel
+    )
+
+    #
+    # Provider Manager
+    #
+
+    provider_manager = ProviderManager()
+
+    provider_manager.register(
+        LocalProvider()
+    )
+
+    #
+    # Action Registry
+    #
+
+    registry = ActionRegistry()
+
+    #
+    # Applications
+    #
+
+    registry.register(
+        OpenAppAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        CloseAppAction()
+    )
+
+    registry.register(
+        ProcessListAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        ScreenCaptureAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        InspectScreenAction()
+    )
+
+    registry.register(
+        InspectCaptureAction()
+    )
+
+    registry.register(GetTimeAction())
+
+    #
+    # Episodic Memory
+    #
+
+    registry.register(
+        QueryEpisodeAction(
+            episode_memory
+        )
+    )
+
+    #
+    # Volume
+    #
+
+    registry.register(
+        SetVolumeAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        GetVolumeAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        GetVolumeHistoryAction(
+            state_history
+        )
+    )
+
+    registry.register(
+        GetRecentEpisodesAction(
+            episode_memory
+        )
+    )
+
+    registry.register(
+        GetPreviousEpisodeAction(
+            episode_memory
+        )
+    )
+
+    registry.register(
+        GetLastEpisodeAction(
+            episode_memory
+        )
+    )
+
+    registry.register(
+        RestorePreviousVolumeAction(
+            provider_manager,
+            state_history,
+        )
+    )
+
+    #
+    # Mute / Unmute
+    #
+
+    registry.register(
+        MuteAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        UnmuteAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        GetMuteAction(
+            provider_manager
+        )
+    )
+
+    registry.register(
+        RestorePreviousMuteAction(
+            provider_manager,
+            state_history,
+        )
+    )
+
+    #
+    # Action Manager
+    #
+
+        #
+    # Security: permisos de ejecución.
+    #
+
+    action_names = registry.list()
+
+    permissions = frozenset(
+        Permission(
+            resource=action_name,
+            action=PermissionAction.EXECUTE,
+        )
+        for action_name in action_names
+    )
+
+
+    local_role = Role(
+        id="local_operator",
+        name="Local Operator",
+        permissions=permissions,
+    )
+
+    security_db_path = os.environ.get(
+        "NEXUS_SECURITY_DB_PATH",
+        str(Path.home() / ".nexus" / "security.db"),
+    )
+
+    security_database = SQLiteSecurityStore(security_db_path)
+    role_store = SQLiteRoleStore(security_database)
+    assignment_store = SQLiteAssignmentStore(security_database)
+
+    stored_role = role_store.get(local_role.id)
+
+    if stored_role is None:
+        role_store.add(local_role)
+    elif stored_role != local_role:
+        role_store.update(local_role)
+
+    persisted_local_role = role_store.get(local_role.id)
+
+    if persisted_local_role is None:
+        raise RuntimeError(
+            "No se pudo recuperar el rol local desde SQLite."
+        )
+
+    assignment_store.add(
+        ActorRoleAssignment(
+            actor=local_console_actor,
+            role=persisted_local_role,
+        )
+    )
+
+
+    policy_store = ActionPolicyStore()
+
+    for action_name in action_names:
+        policy_store.register(
+            ActionPolicy(
+                action_name=action_name,
+                permission=Permission(
+                    resource=action_name,
+                    action=PermissionAction.EXECUTE,
+                ),
+            )
+        )
+
+    authorization_service = AuthorizationService(
+        assignment_store
+    )
+
+    action_authorization = ActionAuthorization(
+        policy_store=policy_store,
+        authorization=authorization_service,
+    )
+
+    manager = ActionManager(
+        registry,
+        action_authorization=action_authorization,
+    )
+
+    runtime.configure_actions(
+        registry,
+        manager
+    )
+
+    #
+    # Tool Registry
+    #
+
+    tool_registry = ToolRegistry()
+
+    tool_registry.register_many(
+        provider_manager.tools()
+    )
+
+    tool_registry.register_many(
+        registry.describe()
+    )
+
+    #
+    # Exponer Tool Registry al Runtime
+    #
+
+    runtime.tool_registry = tool_registry
+
+    #
+    # Intent Providers
+    #
+
+    rule_provider = RuleIntentProvider(
+        IntentRecognizer()
+    )
+
+    ollama_provider = OllamaIntentProvider(
+        model="llama3:latest"
+    )
+
+    intent_provider = HybridIntentProvider(
+        rule_provider=rule_provider,
+        ollama_provider=ollama_provider,
+    )
+
+    #
+    # Executor
+    #
+
+    executor = Executor(
+        runtime
+    )
+
+    runtime.configure_executor(
+        executor
+    )
+
+    session_manager = AssistantSessionManager()
+
+    if assistant_session is not None:
+        active_session = assistant_session
+
+    elif assistant_context is not None:
+        active_session = session_manager.start(
+            assistant_context
+        )
+
+    else:
+        active_session = None
+
+    if active_session is not None:
+        assistant_context = active_session.context
+
+    #
+    # Documents Capability
+    #
+
+    document_services = build_document_services()
+
+    document_capability = DocumentCapability(
+        context_access=document_services.context_access,
+    )
+
+    document_cognitive_access = DocumentCognitiveAccess(
+        document_capability
+    )
+
+    #
+    # Processes Capability
+    #
+
+    process_store = ProcessStore()
+
+    process_resolver = ProcessResolver(
+        process_store,
+    )
+
+    process_capability = ProcessCapability(
+        store=process_store,
+        resolver=process_resolver,
+    )
+
+    process_cognitive_access = ProcessCognitiveAccess(
+        process_capability,
+    )
+
+    #
+    # Rules Capability
+    #
+
+    rule_store = RuleStore()
+
+    rule_resolver = RuleResolver(
+        rule_store
+    )
+
+    rule_capability = RuleCapability(
+        store=rule_store,
+        resolver=rule_resolver,
+    )
+
+    rule_cognitive_access = RuleCognitiveAccess(
+        rule_capability
+    )
+
+    #
+    # Cognitive Capability Router
+    #
+
+    cognitive_capability_router = CognitiveCapabilityRouter(
+        document_access=document_cognitive_access,
+        process_access=process_cognitive_access,
+        rule_access=rule_cognitive_access,
+    )
+
+    #
+    # Engine
+    #
+
+    return Engine(
+        runtime,
+        intent_provider=intent_provider,
+        memory=memory,
+        assistant_context=assistant_context,
+        document_capability=document_capability,
+        document_cognitive_access=document_cognitive_access,
+        cognitive_capability_router=cognitive_capability_router,
+        process_capability=process_capability,
+        process_cognitive_access=process_cognitive_access,
+        rule_capability=rule_capability,
+        rule_cognitive_access=rule_cognitive_access,
+        default_actor_id=security_actor.id,
+        default_actor_type=security_actor.actor_type.value,
+    )
+
+
+def build_assistant_runtime(
+    assistant_context: AssistantContext | None = None,
+    assistant_session: AssistantSession | None = None,
+) -> tuple[
+    Engine,
+    AssistantServices,
+    AssistantServicesLifecycle,
+]:
+    """
+    Construye el Engine cognitivo, los servicios del Assistant Layer
+    y su lifecycle.
+
+    El Engine, los servicios y su ciclo de vida mantienen
+    responsabilidades separadas.
+    """
+
+    engine = build_engine(
+        assistant_context=assistant_context,
+        assistant_session=assistant_session,
+    )
+
+    services = build_assistant_services()
+
+    lifecycle = AssistantServicesLifecycle(
+        services
+    )
+
+    return engine, services, lifecycle
+
+
+def _print_result(result) -> None:
+    """
+    Presenta el resultado de una ejecución
+    de NEXUS de forma legible.
+    """
+
+
+    if result.success:
+
+        print("NEXUS >", end=" ")
+
+        response = (
+            result.metadata.get("response")
+            if isinstance(result.metadata, dict)
+            else None
+        )
+
+        if response:
+            print(response)
+        elif result.message and result.message != "Execution completed successfully.":
+            print(result.message)
+        elif result.output:
+            print(result.output)
+        else:
+            print("Listo.")
+
+        return
+
+    print(
+        f"NEXUS > {result.message}"
+    )
+
+
+
+async def _interactive_loop(
+    engine: Engine,
+) -> None:
+    """
+    Loop interactivo persistente de NEXUS.
+
+    El Engine y el event loop permanecen vivos
+    durante toda la sesión.
+    """
+
+    print()
+
+    print("Escribí una instrucción.")
+
+    print("Escribí 'salir' para cerrar NEXUS.")
+
+    print()
+
+    while True:
+
+        try:
+
+            text = input(
+                "Usuario > "
+            ).strip()
+
+        except (
+            EOFError,
+            KeyboardInterrupt,
+        ):
+
+            print()
+
+            break
+
+        if not text:
+            continue
+
+        if text.lower() in {
+            "salir",
+            "exit",
+            "quit",
+        }:
+
+            break
+
+        try:
+
+            result = await engine.execute(
+                text
+            )
+
+            _print_result(
+                result
+            )
+
+        except Exception as exc:
+
+            print(
+                f"NEXUS > Error interno: {exc}"
+            )
+
+        print()
+
+
+async def _main_async() -> None:
+    """
+    Inicializa NEXUS y mantiene una sesión
+    interactiva persistente.
+    """
+
+    print()
+
+    print("=" * 50)
+
+    print("          NEXUS Cognitive OS")
+
+    print("=" * 50)
+
+    print()
+
+    engine = build_engine()
+
+    print("✓ Kernel")
+
+    print("✓ Runtime")
+
+    print("✓ Providers")
+
+    print("✓ Actions")
+
+    print("✓ Intent Providers")
+
+    print("✓ Executor")
+
+    print("✓ Engine")
+
+    print()
+
+    print("=" * 50)
+
+    print("NEXUS READY")
+
+    print("=" * 50)
+
+    await _interactive_loop(
+        engine
+    )
+
+    print()
+
+    print("NEXUS detenido.")
+
+
+def main() -> None:
+    """
+    Punto de entrada de NEXUS.
+    """
+
+    import asyncio
+
+    asyncio.run(
+        _main_async()
+    )
+
+
+
+========== packages/engine/src/engine/engine.py ==========
+
+from __future__ import annotations
+
+import time
+import re
+from memory import WorkingMemory
+from memory.episode import Episode
+from memory.episode_memory import EpisodeMemory
+from memory.semantic_knowledge_extractor import (
+    SemanticKnowledgeExtractor,
+)
+from memory.semantic_memory import SemanticMemory
+from memory.semantic_retriever import SemanticRetriever
+
+from planner.intent_provider import IntentProvider
+from planner.objective_factory import ObjectiveFactory
+from planner.planner import Planner
+from planner.execution_context import ExecutionContext
+from planner.context_builder import ContextBuilder
+from planner.decision import DecisionEngine
+
+from planner.verification import Verifier
+from context import AssistantContext
+
+from runtime.execution_result import ExecutionResult
+from runtime.runtime import Runtime
+from response.formatter import ResponseFormatter
+
+from presence.presence_event_bus import PresenceEventBus
+from documents.capability import DocumentCapability
+from documents.cognitive import DocumentCognitiveAccess
+from engine.cognitive_capabilities import CognitiveCapabilityRouter
+from processes.capability import ProcessCapability
+from processes.cognitive import ProcessCognitiveAccess
+from rules.capability import RuleCapability
+from rules.cognitive import RuleCognitiveAccess
+
+
+class Engine:
+    """
+    Motor principal de NEXUS.
+
+    Coordina el ciclo cognitivo completo:
+
+        REQUEST
+            ↓
+        MEMORY
+            ↓
+        CONTEXT
+            ↓
+        CAPABILITIES
+            ↓
+        INTENT
+            ↓
+        DECISION
+            ↓
+        OBJECTIVE
+            ↓
+        PLAN
+            ↓
+        EXECUTION CONTEXT
+            ↓
+        RUNTIME
+            ↓
+        VERIFICATION
+            ↓
+        EPISODIC MEMORY
+            ↓
+        SEMANTIC LEARNING
+            ↓
+        RESPONSE
+
+    El Engine coordina las capas.
+    No ejecuta Actions directamente.
+    """
+
+    def __init__(
+    self,
+    runtime: Runtime,
+    intent_provider: IntentProvider,
+    memory: WorkingMemory | None = None,
+    assistant_context: AssistantContext | None = None,
+    document_capability: DocumentCapability | None = None,
+    document_cognitive_access: DocumentCognitiveAccess | None = None,
+    cognitive_capability_router: CognitiveCapabilityRouter | None = None,
+    process_capability: ProcessCapability | None = None,
+    process_cognitive_access: ProcessCognitiveAccess | None = None,
+    rule_capability: RuleCapability | None = None,
+    rule_cognitive_access: RuleCognitiveAccess | None = None,
+    default_actor_id: str | None = None,
+    default_actor_type: str | None = None,
+) -> None:
+
+        self._runtime = runtime
+        self._intent_provider = intent_provider
+        self._assistant_context = assistant_context
+        self._document_capability = document_capability
+        self._document_cognitive_access = document_cognitive_access
+        self._cognitive_capability_router = cognitive_capability_router
+        self._process_capability = process_capability
+        self._process_cognitive_access = process_cognitive_access
+        self._rule_capability = rule_capability
+        self._rule_cognitive_access = rule_cognitive_access
+        self._default_actor_id = default_actor_id
+        self._default_actor_type = default_actor_type
+        self._objective_factory = ObjectiveFactory()
+
+        self._memory = (
+            memory
+            if memory is not None
+            else WorkingMemory()
+        )
+
+        #
+        # ---------------------------------------------------------
+        # MEMORIA EPISÓDICA
+        # ---------------------------------------------------------
+        #
+
+        self._episode_memory = EpisodeMemory(
+            self._memory
+        )
+
+        #
+        # ---------------------------------------------------------
+        # CONSULTA EPISÓDICA
+        # ---------------------------------------------------------
+        #
+
+        from memory.episode_query_engine import (
+            EpisodeQueryEngine,
+        )
+
+        self._episode_query_engine = (
+            EpisodeQueryEngine(
+                self._episode_memory
+            )
+        )
+
+        #
+        # ---------------------------------------------------------
+        # MEMORIA SEMÁNTICA
+        # ---------------------------------------------------------
+        #
+
+        self._semantic_memory = SemanticMemory()
+
+        self._semantic_knowledge_extractor = (
+            SemanticKnowledgeExtractor(
+                self._semantic_memory
+            )
+        )
+
+        self._semantic_retriever = (
+            SemanticRetriever(
+                self._semantic_memory
+            )
+        )
+
+        #
+        # ---------------------------------------------------------
+        # CONTEXTO COGNITIVO
+        # ---------------------------------------------------------
+        #
+
+        self._context_builder = ContextBuilder(
+            semantic_retriever=self._semantic_retriever,
+            assistant_context=self._assistant_context,
+        )
+
+        #
+        # ---------------------------------------------------------
+        # RESPONSE FORMATTER
+        # ---------------------------------------------------------
+        #
+
+        self._response_formatter = ResponseFormatter()
+
+        #
+        # ---------------------------------------------------------
+        # DECISION ENGINE
+        # ---------------------------------------------------------
+        #
+
+        self._decision_engine = DecisionEngine()
+
+        #
+        # ---------------------------------------------------------
+        # VERIFIER
+        # ---------------------------------------------------------
+        #
+
+        self._verifier = Verifier()
+
+        #
+        # ---------------------------------------------------------
+        # PLANNER
+        # ---------------------------------------------------------
+        #
+
+        self._planner = Planner(
+            tool_resolver=(
+                self._runtime.tool_registry.resolve
+            )
+        )
+
+        self._presence_events = PresenceEventBus()
+
+    @property
+    def response_formatter(self) -> ResponseFormatter:
+        """
+        Expone el formatter de respuestas de NEXUS.
+        """
+
+        return self._response_formatter
+
+    @property
+    def memory(self) -> WorkingMemory:
+        """
+        Expone la WorkingMemory del Engine.
+        """
+
+        return self._memory
+
+    @property
+    def semantic_memory(self) -> SemanticMemory:
+        """
+        Expone la memoria semántica de NEXUS.
+
+        Se utiliza para inspección y para las capas
+        cognitivas que necesiten consultar conocimiento.
+        """
+
+        return self._semantic_memory
+
+    @property
+    def semantic_retriever(self) -> SemanticRetriever:
+        """
+        Expone el recuperador semántico.
+        """
+
+        return self._semantic_retriever
+
+    @property
+    def decision_engine(self) -> DecisionEngine:
+        """
+        Expone el motor de decisión.
+        """
+
+        return self._decision_engine
+
+    @property
+    def verifier(self) -> Verifier:
+        """
+        Expone el verificador de objetivos.
+        """
+
+        return self._verifier
+
+    @property
+    def presence_events(self) -> PresenceEventBus:
+        """
+        Expone el bus de presencia de NEXUS.
+
+        Los consumidores externos pueden suscribirse
+        para observar transiciones reales del runtime.
+        """
+
+        return self._presence_events
+
+    @property
+    def document_capability(self) -> DocumentCapability | None:
+        """
+        Expone la capability cognitiva de documentos.
+
+        El Engine conoce la capability, pero no conoce
+        stores ni detalles internos del subsistema Documents.
+        """
+
+        return self._document_capability
+
+    @property
+    def document_cognitive_access(self) -> DocumentCognitiveAccess | None:
+        """
+        Expone el acceso cognitivo a Documents.
+
+        El Engine recibe el contrato cognitivo ya compuesto
+        y no conoce stores ni detalles internos de Documents.
+        """
+        return self._document_cognitive_access
+
+    @property
+    def cognitive_capability_router(
+        self,
+    ) -> CognitiveCapabilityRouter | None:
+        """
+        Expone el router de capabilities cognitivas.
+
+        El Engine recibe el router ya compuesto y no conoce
+        stores ni detalles internos de las capabilities.
+        """
+        return self._cognitive_capability_router
+
+    @property
+    def process_capability(self) -> ProcessCapability | None:
+        return self._process_capability
+
+
+    @property
+    def process_cognitive_access(self) -> ProcessCognitiveAccess | None:
+        return self._process_cognitive_access
+
+    @property
+    def rule_capability(self) -> RuleCapability | None:
+        return self._rule_capability
+
+    @property
+    def rule_cognitive_access(self) -> RuleCognitiveAccess | None:
+        return self._rule_cognitive_access
+
+    async def execute(
+        self,
+        text: str,
+    ) -> ExecutionResult:
+
+        total_started_at = time.perf_counter()
+
+        timings: dict[str, float] = {}
+
+        #
+        # ---------------------------------------------------------
+        # 1. MEMORY
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        self._memory.add(
+            "user_request",
+            {
+                "text": text,
+            },
+        )
+
+        self._presence_events.emit_state(
+        "listening",
+        message="NEXUS recibió una solicitud.",
+        )
+
+        timings["memory"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 2. CONTEXTO COGNITIVO
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        memory_context = (
+    self._context_builder.build(
+        self._memory,
+        semantic_query=text,
+    )
+)
+
+        timings["cognitive_context"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "cognitive_context",
+            memory_context,
+        )
+
+        self._presence_events.emit_state(
+            "understanding",
+            message="NEXUS recuperó el contexto relevante.",
+        )
+
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        capabilities = self._runtime.tool_registry.describe()
+
+        if self._cognitive_capability_router is not None:
+            cognitive_operations = (
+                self._cognitive_capability_router.available_operations()
+            )
+
+            capabilities = [
+                *capabilities,
+                *[
+                    {
+                        "action": operation.action,
+                        "capability": operation.capability,
+                        "operation": operation.operation,
+                        "type": "cognitive",
+                    }
+                    for operation in cognitive_operations
+                ],
+            ]
+
+        timings["capabilities"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 4. INTENT
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        self._presence_events.emit_state(
+            "thinking",
+            message="NEXUS está interpretando la solicitud.",
+        )
+
+        intent = (
+            await self._intent_provider.recognize(
+                text,
+                capabilities,
+                memory_context,
+            )
+        )
+
+        timings["intent"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "intent",
+            {
+                "action": intent.action,
+                "confidence": intent.confidence,
+                "parameters": intent.parameters,
+                "original_text": intent.original_text,
+            },
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 5. DECISION
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        self._presence_events.emit_state(
+            "deciding",
+            message="NEXUS está evaluando la acción.",
+            data={
+                "intent": intent.action,
+                "confidence": intent.confidence,
+            },
+        )
+
+        cognitive_capability = None
+        cognitive_capability_result = None
+
+        if self._cognitive_capability_router is not None:
+            cognitive_capability = self._cognitive_capability_router.select(
+                action=intent.action,
+                parameters=intent.parameters,
+            )
+
+        if cognitive_capability is not None:
+            self._memory.add(
+                "cognitive_capability",
+                {
+                    "capability": cognitive_capability.capability,
+                    "operation": cognitive_capability.operation,
+                    "parameters": dict(
+                        cognitive_capability.parameters,
+                    ),
+                },
+            )
+
+            cognitive_capability_result = (
+                self._cognitive_capability_router.invoke(
+                    cognitive_capability,
+                    context=memory_context,
+                    assistant_context=self._assistant_context,
+                )
+            )
+
+            self._memory.add(
+                "cognitive_capability_result",
+                {
+                    "operation": cognitive_capability.operation,
+                    "result": cognitive_capability_result,
+                },
+            )
+
+            cognitive_capability_summary = (
+                self._cognitive_capability_router.summarize_operation_result(
+                    result=cognitive_capability_result,
+                    operation=cognitive_capability.operation,
+                )
+            )
+
+            memory_context = {
+    **memory_context,
+    "cognitive_capability_result": cognitive_capability_result,
+    "cognitive_capability_summary": cognitive_capability_summary,
+    "cognitive_evidence": {
+    "operation": cognitive_capability_summary["operation"],
+    "status": cognitive_capability_summary["status"],
+    "has_results": cognitive_capability_summary["has_results"],
+    "result_count": cognitive_capability_summary["result_count"],
+},
+}
+
+        decision = self._decision_engine.decide(
+            intent=intent,
+            context=memory_context,
+            capabilities=capabilities,
+        )
+
+        timings["decision"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "decision",
+            {
+                "decision_id": decision.decision_id,
+                "selected_action": (
+                    decision.selected_action
+                ),
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "requires_execution": (
+                    decision.requires_execution
+                ),
+                "alternatives": list(
+                    decision.alternatives
+                ),
+                "metadata": dict(
+                    decision.metadata
+                ),
+            },
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 6. INTENT DESCONOCIDO
+        # ---------------------------------------------------------
+        #
+
+
+        if intent.action == "system.unknown":
+
+            normalized_text = re.sub(
+                r"[¿?¡!.,;:]+",
+                "",
+                text.lower().strip(),
+            )
+
+            greetings = {
+                "hola",
+                "hola nexus",
+                "buenas",
+                "buen día",
+                "buen dia",
+                "buenos días",
+                "buenos dias",
+                "buenas tardes",
+                "buenas noches",
+                "hey",
+                "qué tal",
+                "que tal",
+            }
+
+            is_greeting = normalized_text in greetings
+
+            if is_greeting:
+                message = (
+                    "¡Hola! Soy NEXUS. "
+                    "¿En qué puedo ayudarte?"
+                )
+            else:
+                message = (
+                    "NEXUS no pudo determinar "
+                    "qué acción realizar."
+                )
+
+            result = ExecutionResult(
+                success=is_greeting,
+                message=message,
+                output={},
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "decision": {
+                        "decision_id": decision.decision_id,
+                        "selected_action": decision.selected_action,
+                        "confidence": decision.confidence,
+                        "reason": decision.reason,
+                        "requires_execution": decision.requires_execution,
+                    },
+                    "timings": {
+                        **timings,
+                        "total": (
+                            time.perf_counter()
+                            - total_started_at
+                        ),
+                    },
+                },
+            )
+
+            result.metadata = {
+    **result.metadata,
+    "response": (
+        message
+        if is_greeting
+        else self._response_formatter.format(result)
+    ),
+}
+
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+
+            self._presence_events.emit_state(
+                "ready" if is_greeting else "failed",
+                message=message,
+                data={"action": intent.action},
+            )
+
+            return result
+
+        
+        # Las consultas cognitivas de Documents ya fueron resueltas
+        # por la capability. No deben volver a ejecutarse en Runtime.
+        if (
+            cognitive_capability is not None
+            and cognitive_capability.capability == "documents"
+            and cognitive_capability.operation == "find_relevant"
+            and (
+                decision.is_executable
+                or (
+                    isinstance(cognitive_capability_summary, dict)
+                    and cognitive_capability_summary.get("status") == "empty"
+                )
+            )
+        ):
+            query_result = getattr(
+                cognitive_capability_result,
+                "query",
+                None,
+            )
+            documents = getattr(
+                cognitive_capability_result,
+                "documents",
+                (),
+            )
+
+            document_items = [
+                {
+                    "name": getattr(document, "name", None),
+                    "mime_type": getattr(document, "mime_type", None),
+                    "description": getattr(document, "description", None),
+                    "source": getattr(document, "source", None),
+                }
+                for document in documents
+            ]
+
+            result = ExecutionResult(
+                success=True,
+                message="Consulta cognitiva de Documents completada.",
+                output={
+                    "operation": "documents.find_relevant",
+                    "status": (
+                        "found" if document_items else "empty"
+                    ),
+                    "documents": document_items,
+                    "total": getattr(
+                        query_result,
+                        "total",
+                        len(document_items),
+                    ),
+                    "offset": getattr(query_result, "offset", 0),
+                    "limit": getattr(query_result, "limit", None),
+                    "has_more": getattr(
+                        query_result,
+                        "has_more",
+                        False,
+                    ),
+                },
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "cognitive_summary": cognitive_capability_summary,
+                    "decision": {
+                        "decision_id": decision.decision_id,
+                        "selected_action": decision.selected_action,
+                        "confidence": decision.confidence,
+                        "reason": decision.reason,
+                        "requires_execution": decision.requires_execution,
+                    },
+                },
+            )
+
+            response_text = self._response_formatter.format(result)
+            total_time = time.perf_counter() - total_started_at
+
+            result.metadata = {
+                **result.metadata,
+                "response": response_text,
+                "timings": {
+                    **timings,
+                    "total": total_time,
+                },
+            }
+
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+
+            self._presence_events.emit_state(
+                "completed",
+                message="Consulta cognitiva de Documents completada.",
+                data={
+                    "action": intent.action,
+                    "result_count": len(document_items),
+                },
+            )
+
+            return result
+
+
+
+        #
+        # ---------------------------------------------------------
+        # 7. DECISION BLOCK
+        # ---------------------------------------------------------
+        #
+
+        if not decision.is_executable:
+
+            result = ExecutionResult(
+                success=False,
+                message=(
+                    "NEXUS decidió no ejecutar "
+                    "la acción solicitada."
+                ),
+                output={},
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "decision": {
+                        "decision_id": (
+                            decision.decision_id
+                        ),
+                        "selected_action": (
+                            decision.selected_action
+                        ),
+                        "confidence": (
+                            decision.confidence
+                        ),
+                        "reason": decision.reason,
+                        "requires_execution": (
+                            decision.requires_execution
+                        ),
+                        "alternatives": list(
+                            decision.alternatives
+                        ),
+                    },
+                    "timings": {
+                        **timings,
+                        "total": (
+                            time.perf_counter()
+                            - total_started_at
+                        ),
+                    },
+                },
+            )
+
+            result.metadata = {
+                **result.metadata,
+                "response": (
+                    self._response_formatter.format(
+                        result
+                    )
+                ),
+            }
+
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+
+            self._presence_events.emit_state(
+                "needs_confirmation",
+                message="NEXUS decidió no ejecutar la acción.",
+                data={
+                    "action": intent.action,
+                    "decision": decision.reason,
+                },
+            )
+
+            return result
+
+        #
+        # ---------------------------------------------------------
+        # 8. OBJECTIVE
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        objective = (
+            self._objective_factory.create(
+                intent
+            )
+        )
+
+        timings["objective"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "objective",
+            objective.model_dump(),
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 9. PLAN
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        plan = self._planner.create_plan(
+            objective,
+            intent,
+        )
+
+        timings["planner"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "plan",
+            plan.model_dump(),
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 10. EXECUTION CONTEXT
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        user = getattr(self._assistant_context, "user", None)
+        actor_id = getattr(user, "id", None)
+
+        if isinstance(actor_id, str) and actor_id.strip():
+            actor_id = actor_id.strip()
+            actor_type = "user"
+        else:
+            actor_id = self._default_actor_id
+            actor_type = self._default_actor_type
+
+        execution_context = ExecutionContext(
+            objective=objective,
+            plan=plan,
+            actor_id=actor_id,
+            actor_type=actor_type,
+        )
+
+        timings["execution_context"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 11. RUNTIME
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        self._presence_events.emit_state(
+            "executing",
+            message="NEXUS está ejecutando la acción.",
+            data={
+                "action": intent.action,
+            },
+        )
+
+        result = await self._runtime.execute(
+            execution_context
+        )
+
+        timings["runtime"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 12. VERIFICATION
+        # ---------------------------------------------------------
+        #
+
+        stage_started_at = time.perf_counter()
+
+        self._presence_events.emit_state(
+            "verifying",
+            message="NEXUS está verificando el resultado.",
+            data={
+                "action": intent.action,
+            },
+        )
+
+        verification = self._verifier.verify(
+            objective=objective,
+            plan=plan,
+            result=result,
+        )
+
+        timings["verification"] = (
+            time.perf_counter()
+            - stage_started_at
+        )
+
+        self._memory.add(
+            "verification",
+            {
+                "verified": verification.verified,
+                "confidence": (
+                    verification.confidence
+                ),
+                "reason": verification.reason,
+                "evidence": list(
+                    verification.evidence
+                ),
+                "metadata": dict(
+                    verification.metadata
+                ),
+            },
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 13. ESTADO FINAL DEL OBJECTIVE
+        # ---------------------------------------------------------
+        #
+
+        self._memory.add(
+            "objective",
+            objective.model_dump(),
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 14. ESTADO FINAL DEL PLAN
+        # ---------------------------------------------------------
+        #
+
+        self._memory.add(
+            "plan_final",
+            plan.model_dump(),
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 15. RESPONSE + EXECUTION RESULT
+        # ---------------------------------------------------------
+        #
+
+        total_time = (
+            time.perf_counter()
+            - total_started_at
+        )
+
+        timings["total"] = total_time
+
+        result.metadata = {
+            **result.metadata,
+            "decision": {
+                "decision_id": (
+                    decision.decision_id
+                ),
+                "selected_action": (
+                    decision.selected_action
+                ),
+                "confidence": decision.confidence,
+                "reason": decision.reason,
+                "requires_execution": (
+                    decision.requires_execution
+                ),
+                "alternatives": list(
+                    decision.alternatives
+                ),
+            },
+            "verification": {
+                "verified": (
+                    verification.verified
+                ),
+                "confidence": (
+                    verification.confidence
+                ),
+                "reason": verification.reason,
+                "evidence": list(
+                    verification.evidence
+                ),
+                "metadata": dict(
+                    verification.metadata
+                ),
+            },
+        }
+
+        response_text = (
+            self._response_formatter.format(
+                result
+            )
+        )
+
+        result.metadata = {
+            **result.metadata,
+            "response": response_text,
+            "timings": timings,
+        }
+
+        self._memory.add(
+            "execution_result",
+            {
+                "success": result.success,
+                "message": result.message,
+                "output": result.output,
+                "artifacts": result.artifacts,
+                "metadata": result.metadata,
+                "execution_time": result.execution_time,
+            },
+        )
+
+        #
+        # ---------------------------------------------------------
+        # 16. MEMORIA EPISÓDICA
+        # ---------------------------------------------------------
+        #
+        # Solamente registramos acciones externas
+        # exitosas Y verificadas.
+        #
+        # Esto es importante:
+        #
+        # ejecución exitosa
+        #        ≠
+        # objetivo confirmado
+        #
+        # El episodio pasa a memoria solamente cuando
+        # existe evidencia suficiente para considerar
+        # alcanzado el objetivo.
+        #
+
+        action = (
+            self._runtime.action_registry.get(
+                intent.action
+            )
+        )
+
+        if (
+            action is not None
+            and not action.internal
+            and result.success
+            and verification.verified
+        ):
+
+            episode = Episode(
+                action=intent.action,
+                parameters=intent.parameters.copy(),
+                original_text=text,
+                success=True,
+                output=result.output,
+            )
+
+            self._episode_memory.add(
+                episode
+            )
+
+            #
+            # -----------------------------------------------------
+            # APRENDIZAJE SEMÁNTICO
+            # -----------------------------------------------------
+            #
+            # Solamente aprendemos de experiencias
+            # externas exitosas y verificadas.
+            #
+
+            self._semantic_knowledge_extractor.extract(
+                episode
+            )
+
+        #
+        # ---------------------------------------------------------
+        # 17. ERROR
+        # ---------------------------------------------------------
+        #
+
+        if not result.success:
+
+            self._memory.add(
+                "error",
+                {
+                    "message": result.message,
+                    "action": intent.action,
+                    "original_text": text,
+                },
+            )
+
+        #
+        # ---------------------------------------------------------
+        # 18. VERIFICACIÓN FALLIDA
+        # ---------------------------------------------------------
+        #
+
+        elif not verification.verified:
+
+            self._memory.add(
+                "verification_failure",
+                {
+                    "action": intent.action,
+                    "original_text": text,
+                    "reason": verification.reason,
+                    "confidence": (
+                        verification.confidence
+                    ),
+                    "evidence": list(
+                        verification.evidence
+                    ),
+                },
+            )
+
+        if result.success and verification.verified:
+            self._presence_events.emit_state(
+                "completed",
+                message="NEXUS completó y verificó la acción.",
+                data={
+                    "action": intent.action,
+                    "verification_confidence": (
+                        verification.confidence
+                    ),
+                },
+            )
+        else:
+            self._presence_events.emit_state(
+                "failed",
+                message="NEXUS no pudo completar y verificar la acción.",
+                data={
+                    "action": intent.action,
+                    "verification_confidence": (
+                        verification.confidence
+                    ),
+                },
+            )
+
+        return result
+

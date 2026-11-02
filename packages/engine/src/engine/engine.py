@@ -88,11 +88,16 @@ class Engine:
     rule_cognitive_access: RuleCognitiveAccess | None = None,
     default_actor_id: str | None = None,
     default_actor_type: str | None = None,
+    semantic_memory: SemanticMemory | None = None,
 ) -> None:
 
         self._runtime = runtime
         self._intent_provider = intent_provider
-        self._assistant_context = assistant_context
+        self._assistant_context = (
+            assistant_context
+            if assistant_context is not None
+            else AssistantContext()
+        )
         self._document_capability = document_capability
         self._document_cognitive_access = document_cognitive_access
         self._cognitive_capability_router = cognitive_capability_router
@@ -142,7 +147,7 @@ class Engine:
         # ---------------------------------------------------------
         #
 
-        self._semantic_memory = SemanticMemory()
+        self._semantic_memory = semantic_memory if semantic_memory is not None else SemanticMemory()
 
         self._semantic_knowledge_extractor = (
             SemanticKnowledgeExtractor(
@@ -317,6 +322,200 @@ class Engine:
     def rule_cognitive_access(self) -> RuleCognitiveAccess | None:
         return self._rule_cognitive_access
 
+    def _handle_semantic_memory_intent(
+        self,
+        intent,
+        original_text: str,
+    ) -> ExecutionResult | None:
+        # Resuelve las intenciones explícitas de memoria semántica de V1.
+        supported_actions = {
+            "system.remember_fact",
+            "system.recall_fact",
+            "system.recall_last_fact",
+        }
+        sub_intents = getattr(intent, "sub_intents", None)
+
+        if isinstance(sub_intents, (list, tuple)) and sub_intents:
+            intents = list(sub_intents)
+        else:
+            intents = [intent]
+        # No interceptar compuestas que mezclen memoria con otras acciones.
+        if not all(item.action in supported_actions for item in intents):
+            return None
+
+        
+        # Validar todas las intenciones antes de modificar la memoria.
+        for item in intents:
+            parameters = item.parameters
+
+            if item.action == "system.remember_fact":
+                subject = parameters.get("subject")
+                predicate = parameters.get("predicate")
+                value = parameters.get("value")
+
+                if not all(
+                    isinstance(part, str) and part.strip()
+                    for part in (subject, predicate, value)
+                ):
+                    return None
+
+            elif item.action == "system.recall_fact":
+                subject = parameters.get("subject", "user")
+                predicate = parameters.get("predicate")
+
+                if (
+                    not isinstance(subject, str)
+                    or not isinstance(predicate, str)
+                    or not predicate.strip()
+                ):
+                    return None
+
+
+        operations: list[dict[str, object]] = []
+        responses: list[str] = []
+        for item in intents:
+            parameters = item.parameters
+            if item.action == "system.remember_fact":
+                subject = parameters.get("subject")
+                predicate = parameters.get("predicate")
+                value = parameters.get("value")
+                if not all(
+                    isinstance(part, str) and part.strip()
+                    for part in (subject, predicate, value)
+                ):
+                    return None
+                fact = self._semantic_memory.learn(
+                    subject=subject,
+                    predicate=predicate,
+                    value=value.strip(),
+                    source="user",
+                )
+                responses.append(f"Recordado: {fact.predicate} = {fact.value}.")
+                operations.append({
+                    "action": item.action,
+                    "status": "stored",
+                    "subject": fact.subject,
+                    "predicate": fact.predicate,
+                    "value": fact.value,
+                })
+                continue
+
+            if item.action == "system.recall_fact":
+                subject = parameters.get("subject", "user")
+                predicate = parameters.get("predicate")
+
+                if (
+                    not isinstance(subject, str)
+                    or not isinstance(predicate, str)
+                    or not predicate.strip()
+                ):
+                    return None
+
+                
+                if predicate == "__all__":
+                    user_facts = [
+                        known_fact
+                        for known_fact in self._semantic_memory.find_by_subject(
+                            subject
+                        )
+                        if known_fact.source == "user"
+                    ]
+
+                    if not user_facts:
+                        responses.append(
+                            "Todavía no tengo ningún dato que me hayas pedido recordar."
+                        )
+                        operations.append({
+                            "action": item.action,
+                            "status": "not_found",
+                        })
+                    else:
+                        facts_text = "; ".join(
+                            f"{known_fact.predicate} = {known_fact.value}"
+                            for known_fact in sorted(
+                                user_facts,
+                                key=lambda known_fact: known_fact.updated_at,
+                                reverse=True,
+                            )
+                        )
+                        responses.append(
+                            f"Tengo registrado sobre vos: {facts_text}."
+                        )
+                        operations.append({
+                            "action": item.action,
+                            "status": "found",
+                            "count": len(user_facts),
+                        })
+
+                    continue
+
+
+
+                # Priorizar la coincidencia exacta.
+                fact = self._semantic_memory.get(subject, predicate)
+
+                # Si no existe una coincidencia exacta, buscar semánticamente.
+                if fact is None:
+                    matches = self._semantic_retriever.search(
+                        original_text,
+                        limit=10,
+                    )
+                    fact = next(
+                        (
+                            match.fact
+                            for match in matches
+                            if match.fact.subject == subject
+                        ),
+                        None,
+                    )
+
+                if fact is None:
+                    responses.append(
+                        f"Todavía no tengo registrado ese dato: {predicate}."
+                    )
+                    operations.append({
+                        "action": item.action,
+                        "status": "not_found",
+                        "predicate": predicate,
+                    })
+                else:
+                    responses.append(
+                        f"Tengo registrado que {fact.predicate} es {fact.value}."
+                    )
+                    operations.append({
+                        "action": item.action,
+                        "status": "found",
+                        "predicate": fact.predicate,
+                        "value": fact.value,
+                    })
+
+                continue
+
+            user_facts = [
+                fact for fact in self._semantic_memory.find_by_subject("user")
+                if fact.source == "user"
+            ]
+            if not user_facts:
+                responses.append("Todavía no tengo ningún dato que me hayas pedido recordar.")
+                operations.append({"action": item.action, "status": "not_found"})
+            else:
+                fact = max(user_facts, key=lambda known_fact: known_fact.updated_at)
+                responses.append(f"Me pediste recordar: {fact.predicate} = {fact.value}.")
+                operations.append({
+                    "action": item.action,
+                    "status": "found",
+                    "predicate": fact.predicate,
+                    "value": fact.value,
+                })
+
+        message = " ".join(responses)
+        return ExecutionResult(
+            success=True,
+            message=message,
+            output={"operations": operations},
+            metadata={"action": intent.action, "original_text": original_text, "response": message},
+        )
+
     async def execute(
         self,
         text: str,
@@ -446,6 +645,31 @@ class Engine:
                 "original_text": intent.original_text,
             },
         )
+
+        semantic_memory_result = self._handle_semantic_memory_intent(intent, text)
+        if semantic_memory_result is not None:
+            semantic_memory_result.metadata = {
+                **semantic_memory_result.metadata,
+                "timings": {
+                    **timings,
+                    "total": time.perf_counter() - total_started_at,
+                },
+            }
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": semantic_memory_result.success,
+                    "message": semantic_memory_result.message,
+                    "output": semantic_memory_result.output,
+                    "metadata": semantic_memory_result.metadata,
+                },
+            )
+            self._presence_events.emit_state(
+                "completed",
+                message=semantic_memory_result.message,
+                data={"action": intent.action},
+            )
+            return semantic_memory_result
 
         #
         # ---------------------------------------------------------
@@ -645,6 +869,210 @@ class Engine:
             )
 
             return result
+
+
+        # Las consultas cognitivas de Rules y Processes ya fueron
+        # resueltas por sus capabilities. No deben volver a Runtime.
+        if (
+            cognitive_capability is not None
+            and cognitive_capability.capability in {"rules", "processes"}
+            and cognitive_capability.operation == "find_relevant"
+            and (
+                decision.is_executable
+                or (
+                    isinstance(cognitive_capability_summary, dict)
+                    and cognitive_capability_summary.get("status") == "empty"
+                )
+            )
+        ):
+            capability_name = cognitive_capability.capability
+            operation = f"{capability_name}.find_relevant"
+            collection_name = capability_name
+
+            items = getattr(
+                cognitive_capability_result,
+                collection_name,
+                (),
+            )
+
+            item_items = []
+            for item in items:
+                item_status = getattr(item, "status", None)
+                if hasattr(item_status, "value"):
+                    item_status = item_status.value
+                elif item_status is not None:
+                    item_status = str(item_status)
+
+                item_items.append(
+                    {
+                        "id": getattr(item, "id", None),
+                        "name": getattr(item, "name", None),
+                        "description": getattr(item, "description", None),
+                        "status": item_status,
+                    }
+                )
+
+            result = ExecutionResult(
+                success=True,
+                message=f"Consulta cognitiva de {capability_name.title()} completada.",
+                output={
+                    "operation": operation,
+                    "status": "found" if item_items else "empty",
+                    collection_name: item_items,
+                    "total": len(item_items),
+                },
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "cognitive_summary": cognitive_capability_summary,
+                    "decision": {
+                        "decision_id": decision.decision_id,
+                        "selected_action": decision.selected_action,
+                        "confidence": decision.confidence,
+                        "reason": decision.reason,
+                        "requires_execution": decision.requires_execution,
+                    },
+                },
+            )
+
+            response_text = self._response_formatter.format(result)
+            total_time = time.perf_counter() - total_started_at
+
+            result.metadata = {
+                **result.metadata,
+                "response": response_text,
+                "timings": {
+                    **timings,
+                    "total": total_time,
+                },
+            }
+
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+
+            self._presence_events.emit_state(
+                "completed",
+                message=result.message,
+                data={
+                    "action": intent.action,
+                    "result_count": len(item_items),
+                },
+            )
+
+            return result
+
+
+        # Las consultas cognitivas de Documents ya fueron resueltas
+        # por la capability. No deben volver a ejecutarse en Runtime.
+        if (
+            cognitive_capability is not None
+            and cognitive_capability.capability == "documents"
+            and cognitive_capability.operation == "find_relevant"
+            and (
+                decision.is_executable
+                or (
+                    isinstance(cognitive_capability_summary, dict)
+                    and cognitive_capability_summary.get("status") == "empty"
+                )
+            )
+        ):
+            query_result = getattr(
+                cognitive_capability_result,
+                "query",
+                None,
+            )
+            documents = getattr(
+                cognitive_capability_result,
+                "documents",
+                (),
+            )
+
+            document_items = [
+                {
+                    "name": getattr(document, "name", None),
+                    "mime_type": getattr(document, "mime_type", None),
+                    "description": getattr(document, "description", None),
+                    "source": getattr(document, "source", None),
+                }
+                for document in documents
+            ]
+
+            result = ExecutionResult(
+                success=True,
+                message="Consulta cognitiva de Documents completada.",
+                output={
+                    "operation": "documents.find_relevant",
+                    "status": (
+                        "found" if document_items else "empty"
+                    ),
+                    "documents": document_items,
+                    "total": getattr(
+                        query_result,
+                        "total",
+                        len(document_items),
+                    ),
+                    "offset": getattr(query_result, "offset", 0),
+                    "limit": getattr(query_result, "limit", None),
+                    "has_more": getattr(
+                        query_result,
+                        "has_more",
+                        False,
+                    ),
+                },
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "cognitive_summary": cognitive_capability_summary,
+                    "decision": {
+                        "decision_id": decision.decision_id,
+                        "selected_action": decision.selected_action,
+                        "confidence": decision.confidence,
+                        "reason": decision.reason,
+                        "requires_execution": decision.requires_execution,
+                    },
+                },
+            )
+
+            response_text = self._response_formatter.format(result)
+            total_time = time.perf_counter() - total_started_at
+
+            result.metadata = {
+                **result.metadata,
+                "response": response_text,
+                "timings": {
+                    **timings,
+                    "total": total_time,
+                },
+            }
+
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+
+            self._presence_events.emit_state(
+                "completed",
+                message="Consulta cognitiva de Documents completada.",
+                data={
+                    "action": intent.action,
+                    "result_count": len(document_items),
+                },
+            )
+
+            return result
+
 
 
         #

@@ -1,0 +1,1514 @@
+﻿
+================================================================================
+ARCHIVO: backend\workflows\engine.py
+================================================================================
+
+import asyncio
+import uuid
+from datetime import datetime
+import json
+
+from core.database import get_connection
+from actions.system_actions import execute_action
+from realtime.ws import manager
+from events.bus import bus
+from workflows.repository import get_workflow_by_name
+from workflows.types import validate_type
+
+
+# ==========================================================
+# RUN WORKFLOW (ENTRYPOINT OFICIAL)
+# ==========================================================
+
+async def run_workflow(
+    name,
+    tenant_id=None,
+    workspace_id=None,
+    job_id=None,
+    user=None,
+    shared_context=None
+):
+
+    wf = get_workflow_by_name(
+        name,
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+    if not wf:
+        raise Exception("Workflow no encontrado")
+
+    context = shared_context if shared_context is not None else {}
+    history = []
+
+    for step in wf["steps"]:
+        result = await execute_step(
+            step,
+            user,
+            context,
+            workflow_name=name,
+            tenant_id=tenant_id,
+            workspace_id=workspace_id,
+            job_id=job_id
+        )
+        history.extend(result)
+
+    return history
+
+
+# ==========================================================
+# EXECUTE STEP (MOTOR REAL)
+# ==========================================================
+
+async def execute_step(
+    step,
+    user,
+    context,
+    workflow_name=None,
+    tenant_id=None,
+    workspace_id=None,
+    job_id=None
+):
+
+    history = []
+    step_type = step.get("type", "action")
+
+    try:
+
+        # ==================================================
+        # 1️⃣ ACCIÓN NORMAL
+        # ==================================================
+
+        if step_type == "action":
+
+            value = resolve_variables(step.get("value"), context)
+
+            if step.get("input_type"):
+                if not validate_type(value, step.get("input_type")):
+                    raise Exception(
+                        f"Input inválido para {step['action']}"
+                    )
+
+            await bus.publish("step.start", {
+                "workflow": workflow_name,
+                "step": step["action"],
+                "job_id": job_id
+            })
+
+            out = execute_action(
+                step["action"],
+                value,
+                user
+            )
+
+            # 🔥 FIX IMPORTANTE (si la acción es async)
+            if asyncio.iscoroutine(out):
+                out = await out
+
+            if step.get("output_type"):
+                if not validate_type(out, step.get("output_type")):
+                    raise Exception(
+                        f"Output inválido en {step['action']}"
+                    )
+
+            if step.get("assign"):
+                context[step["assign"]] = out
+
+            history.append({
+                "type": "action",
+                "action": step["action"],
+                "result": out
+            })
+
+            # 🔥 LOG DEL STEP
+            log_step(job_id, step["action"], "success", out)
+
+            await bus.publish("step.success", {
+                "workflow": workflow_name,
+                "step": step["action"],
+                "job_id": job_id
+            })
+
+            await manager.broadcast({
+                "type": "workflow_step",
+                "action": step["action"]
+            })
+
+            await manager.broadcast({
+                "type": "workflow_result",
+                "action": step["action"],
+                "result": out
+            })
+
+            for child in step.get("next", []):
+                child_result = await execute_step(
+                    child,
+                    user,
+                    context,
+                    workflow_name,
+                    tenant_id,
+                    workspace_id,
+                    job_id
+                )
+                history.extend(child_result)
+
+            return history
+
+
+        # ==================================================
+        # 2️⃣ CONDICIÓN
+        # ==================================================
+
+        if step_type == "condition":
+
+            test_value = resolve_variables(
+                step.get("value"),
+                context
+            )
+
+            test_result = execute_action(
+                step["if_action"],
+                test_value,
+                user
+            )
+
+            if asyncio.iscoroutine(test_result):
+                test_result = await test_result
+
+            condition_met = evaluate_condition(
+                test_result,
+                step.get("operator"),
+                step.get("compare")
+            )
+
+            history.append({
+                "type": "condition",
+                "result": condition_met
+            })
+
+            branch = step.get("then") if condition_met else step.get("else_")
+
+            if branch:
+                for s in branch:
+                    branch_result = await execute_step(
+                        s,
+                        user,
+                        context,
+                        workflow_name,
+                        tenant_id,
+                        workspace_id,
+                        job_id
+                    )
+                    history.extend(branch_result)
+
+            return history
+
+
+        # ==================================================
+        # 3️⃣ SUBWORKFLOW
+        # ==================================================
+
+        if step_type == "subworkflow":
+
+            sub_name = step.get("name")
+
+            await manager.broadcast({
+                "type": "workflow_sub_start",
+                "workflow": sub_name
+            })
+
+            sub_history = await run_workflow(
+                sub_name,
+                tenant_id=tenant_id,
+                workspace_id=workspace_id,
+                job_id=job_id,
+                user=user,
+                shared_context=context
+            )
+
+            history.append({
+                "type": "subworkflow",
+                "workflow": sub_name,
+                "result": sub_history
+            })
+
+            await manager.broadcast({
+                "type": "workflow_sub_end",
+                "workflow": sub_name
+            })
+
+            return history
+
+        return history
+
+
+    except Exception as e:
+
+        error = str(e)
+
+        print("🔥 ERROR REAL:", repr(e))
+
+        await bus.publish("step.error", {
+            "workflow": workflow_name,
+            "step": step.get("action"),
+            "error": error,
+            "job_id": job_id,
+            "tenant_id": tenant_id,
+            "workspace_id": workspace_id
+        })
+
+        await manager.broadcast({
+            "type": "workflow_error",
+            "error": error
+        })
+
+        history.append({
+            "type": "error",
+            "step": step.get("action"),
+            "error": error
+        })
+
+        log_step(job_id, step.get("action"), "error", str(e))
+
+        raise
+
+
+# ==========================================================
+# VARIABLE RESOLUTION
+# ==========================================================
+
+def resolve_variables(value, context):
+
+    if value is None:
+        return value
+
+    if isinstance(value, str):
+        for key, val in context.items():
+            placeholder = "{{" + key + "}}"
+            if placeholder in value:
+                value = value.replace(
+                    placeholder,
+                    str(val)
+                )
+        return value
+
+    if isinstance(value, dict):
+        return {
+            k: resolve_variables(v, context)
+            for k, v in value.items()
+        }
+
+    return value
+
+
+# ==========================================================
+# CONDITION EVALUATOR
+# ==========================================================
+
+def evaluate_condition(result, operator, compare):
+
+    if operator == "contains":
+        return str(compare) in str(result)
+
+    if operator == "equals":
+        return str(result) == str(compare)
+
+    if operator == "not_equals":
+        return str(result) != str(compare)
+
+    if operator == "gt":
+        try:
+            return float(result) > float(compare)
+        except:
+            return False
+
+    if operator == "lt":
+        try:
+            return float(result) < float(compare)
+        except:
+            return False
+
+    return False
+
+
+# ==========================================================
+# STEP LOG
+# ==========================================================
+
+def log_step(job_id, step, status, result):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO job_steps
+        (job_id, step, status, result, timestamp)
+        VALUES (%s, %s, %s, %s, %s)
+    """, (
+        job_id,
+        step,
+        status,
+        json.dumps(result) if result else "",
+        datetime.utcnow()
+    ))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\models.py
+================================================================================
+
+from pydantic import BaseModel
+from typing import List, Optional, Union
+
+
+class StepModel(BaseModel):
+    action: Optional[str] = None
+    value: Optional[dict] = None
+    type: Optional[str] = "action"
+
+    # condición
+    if_action: Optional[str] = None
+    operator: Optional[str] = None
+    compare: Optional[str] = None
+
+    then: Optional[List[dict]] = None
+    else_: Optional[List[dict]] = None
+
+
+class WorkflowModel(BaseModel):
+    name: str
+    trigger: str
+    steps: List[dict]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\recovery.py
+================================================================================
+
+from core.database import get_connection
+from datetime import datetime, timedelta
+
+
+FAIL_THRESHOLD = 5
+COOLDOWN_MINUTES = 10
+
+
+def check_workflow_health(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT COUNT(*) as fails
+        FROM jobs
+        WHERE workflow=%s
+        AND status='error'
+        AND updated_at > datetime('now','-10 minutes')
+    """,(workflow_name,))
+
+    row = cur.fetchone()
+
+    conn.close()
+
+    if row["fails"] >= FAIL_THRESHOLD:
+        return False
+
+    return True
+
+
+def disable_workflow(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE workflows
+        SET active=0
+        WHERE name=%s
+    """,(workflow_name,))
+
+    conn.commit()
+    conn.close()
+
+
+def enable_workflow(workflow_name):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE workflows
+        SET active=1
+        WHERE name=%s
+    """,(workflow_name,))
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\repository.py
+================================================================================
+
+import json
+from datetime import datetime, timezone
+
+from core.database import get_connection
+
+
+# ==========================================================
+# SAVE WORKFLOW VERSION
+# ==========================================================
+
+def save_workflow_version(
+    name,
+    trigger,
+    steps,
+    tenant_id="default",
+    workspace_id="main"
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    # 1️⃣ Obtener versión actual
+    cur.execute("""
+        SELECT MAX(version)
+        FROM workflows
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+    """, (name, tenant_id, workspace_id))
+
+    row = cur.fetchone()
+    current_version = row[0] if row and row[0] else 0
+    new_version = current_version + 1
+
+    # 2️⃣ Desactivar versiones anteriores
+    cur.execute("""
+        UPDATE workflows
+        SET active = FALSE
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+    """, (name, tenant_id, workspace_id))
+
+    # 3️⃣ Crear definición
+    definition = {
+        "name": name,
+        "trigger": trigger,
+        "steps": steps
+    }
+
+    now = datetime.now(timezone.utc)
+
+    # 4️⃣ Insertar nueva versión activa
+    cur.execute("""
+        INSERT INTO workflows
+        (name, version, definition, created_at, tenant_id, workspace_id, active)
+        VALUES (%s, %s, %s, %s, %s, %s, TRUE)
+    """, (
+        name,
+        new_version,
+        json.dumps(definition),
+        now,
+        tenant_id,
+        workspace_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return new_version
+
+
+# ==========================================================
+# GET WORKFLOW ACTIVO
+# ==========================================================
+
+def get_workflow_by_name(name, tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT definition
+        FROM workflows
+        WHERE name = %s
+        AND tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+        ORDER BY version DESC
+        LIMIT 1
+    """, (name, tenant_id, workspace_id))
+
+    row = cur.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    definition = row[0]
+
+    if not definition:
+        raise Exception("Workflow definition vacía en DB")
+
+    return json.loads(definition)
+
+
+# ==========================================================
+# LIST WORKFLOWS
+# ==========================================================
+
+def load_workflows(tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT name, version
+        FROM workflows
+        WHERE tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+    """, (tenant_id, workspace_id))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [
+        {
+            "name": r[0],
+            "version": r[1]
+        }
+        for r in rows
+    ]
+
+
+# ==========================================================
+# GET WORKFLOWS BY TRIGGER
+# ==========================================================
+
+def get_workflows_by_trigger(trigger, tenant_id="default", workspace_id="main"):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT definition
+        FROM workflows
+        WHERE tenant_id = %s
+        AND workspace_id = %s
+        AND active = 1
+    """, (tenant_id, workspace_id))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    matched = []
+
+    for row in rows:
+        wf = json.loads(row[0])
+        if wf.get("trigger") == trigger:
+            matched.append(wf)
+
+    return matched
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\routes.py
+================================================================================
+
+from fastapi import APIRouter, HTTPException, Depends
+from typing import List
+
+from workflows.engine import run_workflow
+from workflows.repository import (
+    load_workflows,
+    save_workflow_version
+)
+from workflows.schema import WorkflowModel
+from workflows.ai_generator import generate_workflow 
+from auth.deps import get_current_user
+from audit.service import log_event
+
+
+router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+
+# ==========================================================
+# LIST WORKFLOWS
+# ==========================================================
+
+@router.get("/")
+def list_workflows(user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+    workspace_id = user.get("workspace_id", "main")  # fallback seguro
+
+    return load_workflows(
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+
+# ==========================================================
+# SAVE WORKFLOW (VERSIONADO REAL)
+# ==========================================================
+
+@router.post("/save")
+def save(data: dict, user=Depends(get_current_user)):
+
+    tenant_id = user["tenant_id"]
+    workspace_id = user.get("workspace_id", "main")
+
+    version = save_workflow_version(
+        name=data["name"],
+        trigger=data["trigger"],
+        steps=data["steps"],
+        tenant_id=tenant_id,
+        workspace_id=workspace_id
+    )
+
+    log_event(
+        user,
+        action="workflow_saved",
+        entity="workflow",
+        entity_id=data["name"],
+        metadata={
+            "version": version,
+            "steps_count": len(data["steps"])
+        }
+    )
+
+    return {"ok": True, "version": version}
+
+
+# ==========================================================
+# RUN WORKFLOW
+# ==========================================================
+
+@router.post("/run")
+async def run(data: dict, user=Depends(get_current_user)):
+
+    # 🔥 IMPORTANTE: el engine debe respetar tenant internamente
+    result = await run_workflow(
+        name=data["name"],
+        user=user
+    )
+
+    return {"result": result}
+
+
+# ==========================================================
+# GENERATE WORKFLOW (IA)
+# ==========================================================
+
+@router.post("/generate")
+def generate(data: dict, user=Depends(get_current_user)):  # 🔒 protegido
+
+    raw = generate_workflow(data["prompt"])
+
+    if "error" in raw:
+        raise HTTPException(status_code=400, detail=raw["error"])
+
+    try:
+        validated = WorkflowModel(**raw)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return validated.dict()
+
+
+# ==========================================================
+# LIST PACKS (placeholder)
+# ==========================================================
+
+@router.get("/packs")
+def list_packs(user=Depends(get_current_user)):
+    return []
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\schema.py
+================================================================================
+
+from pydantic import BaseModel, Field, validator
+from typing import List, Optional, Any
+
+
+ALLOWED_ACTIONS = {
+    "open_app",
+    "open_url",
+    "list_dir",
+    "read_file",
+    "write_file",
+    "delete_file",
+    "copy_file",
+    "rename_file",
+    "create_folder",
+    "move_files",
+    "list_processes",
+    "kill_process",
+    "get_time",
+    "run_cmd",
+    "sleep"
+}
+
+
+class StepModel(BaseModel):
+    action: str
+    value: Optional[Any] = None
+
+    @validator("action")
+    def validate_action(cls, v):
+        if v not in ALLOWED_ACTIONS:
+            raise ValueError(f"Acción no permitida: {v}")
+        return v
+
+
+class WorkflowModel(BaseModel):
+    name: str
+    trigger: str = Field(default="manual")
+    fail_fast: bool = Field(default=False)  # 🔥 NUEVO
+    steps: List[StepModel]
+
+    @validator("steps")
+    def validate_steps_not_empty(cls, v):
+        if not v:
+            raise ValueError("Workflow sin pasos")
+        return v
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\bar.json
+================================================================================
+
+[
+  {
+    "name": "Abrir BarSync",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_url","value":"http://localhost:5173"}
+    ]
+  },
+  {
+    "name": "Exportar ventas",
+    "trigger": "manual",
+    "steps": [
+      {"action":"run_cmd","value":"echo Exportando ventas..."}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\hotel.json
+================================================================================
+
+[
+  {
+    "name": "Abrir sistema hotel",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_url","value":"http://localhost:3000"},
+      {"action":"open_app","value":"chrome"}
+    ]
+  },
+  {
+    "name": "Backup reportes diarios",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"backup"},
+      {"action":"move_files","value":{"ext":".csv","to":"backup"}}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates\office.json
+================================================================================
+
+[
+  {
+    "name": "Ordenar Descargas PDF",
+    "trigger": "manual",
+    "steps": [
+      {"action":"create_folder","value":"pdfs"},
+      {"action":"move_files","value":{"ext":".pdf","to":"pdfs"}}
+    ]
+  },
+  {
+    "name": "Abrir apps trabajo",
+    "trigger": "manual",
+    "steps": [
+      {"action":"open_app","value":"chrome"},
+      {"action":"open_app","value":"notepad"}
+    ]
+  }
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\templates_loader.py
+================================================================================
+
+import json
+from pathlib import Path
+from workflows.engine import load_workflows, save_workflows
+
+TEMPLATES_DIR = Path("workflows/templates")
+
+
+def list_templates():
+
+    return [f.stem for f in TEMPLATES_DIR.glob("*.json")]
+
+
+def load_template(name):
+
+    file = TEMPLATES_DIR / f"{name}.json"
+
+    if not file.exists():
+        return None
+
+    return json.loads(file.read_text())
+
+
+def import_template(name):
+
+    tpl = load_template(name)
+
+    if not tpl:
+        return False
+
+    current = load_workflows()
+
+    merged = current + tpl
+
+    save_workflows(merged)
+
+    return True
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\types.py
+================================================================================
+
+from typing import Any
+
+
+TYPE_MAP = {
+    "string": str,
+    "int": int,
+    "float": float,
+    "bool": bool,
+    "list": list,
+    "dict": dict
+}
+
+
+def validate_type(value: Any, declared_type: str):
+
+    if not declared_type:
+        return True
+
+    py_type = TYPE_MAP.get(declared_type)
+
+    if not py_type:
+        return True  # tipo desconocido → no bloquea
+
+    return isinstance(value, py_type)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\workflows\validator.py
+================================================================================
+
+VALID_ACTIONS = {
+    "create_folder",
+    "move_files",
+    "list_dir",
+    "read_file",
+    "write_file",
+    "delete_file",
+    "run_cmd",
+    "open_url"
+}
+
+# acciones que requieren confirmación humana
+DANGEROUS_ACTIONS = {
+    "delete_file",
+    "run_cmd"
+}
+
+MAX_STEPS = 25
+
+
+def validate_workflow(workflow):
+
+    if not workflow:
+        raise Exception("Workflow vacío")
+
+    if "steps" not in workflow:
+        raise Exception("Workflow sin steps")
+
+    steps = workflow["steps"]
+
+    if not isinstance(steps, list):
+        raise Exception("Steps debe ser una lista")
+
+    if len(steps) > MAX_STEPS:
+        raise Exception("Workflow demasiado grande")
+
+    for step in steps:
+        validate_step(step)
+
+    return workflow
+
+
+def validate_step(step):
+
+    if not isinstance(step, dict):
+        raise Exception("Step inválido")
+
+    if "action" not in step and step.get("type") != "condition":
+        raise Exception("Step sin acción")
+
+    # =========================
+    # ACTION STEPS
+    # =========================
+
+    if "action" in step:
+
+        action = step["action"]
+
+        if action not in VALID_ACTIONS:
+            raise Exception(f"Acción no válida: {action}")
+
+        # advertencia acciones peligrosas
+        if action in DANGEROUS_ACTIONS:
+            print(f"⚠ Acción peligrosa detectada: {action}")
+
+        value = step.get("value")
+
+        # ---------------------
+        # autocorrecciones
+        # ---------------------
+
+        if action == "move_files":
+
+            if isinstance(value, str):
+
+                step["value"] = {
+                    "ext": ".pdf",
+                    "to": "PDF"
+                }
+
+        if action == "list_dir":
+
+            if not value:
+                step["value"] = "."
+
+    # =========================
+    # SUBSTEPS (next)
+    # =========================
+
+    if "next" in step:
+
+        if not isinstance(step["next"], list):
+            raise Exception("next debe ser lista")
+
+        for s in step["next"]:
+            validate_step(s)
+
+    # =========================
+    # CONDITIONS
+    # =========================
+
+    if step.get("type") == "condition":
+
+        for branch in ["then", "else_"]:
+
+            if branch in step:
+
+                if not isinstance(step[branch], list):
+                    raise Exception(f"{branch} debe ser lista")
+
+                for s in step[branch]:
+                    validate_step(s)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173248\main.js
+================================================================================
+
+const { app, BrowserWindow } = require("electron")
+
+let win
+
+function createWindow() {
+
+  win = new BrowserWindow({
+    width: 320,
+    height: 320,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+
+  win.loadURL("http://127.0.0.1:5173/assistant")
+}
+
+/* =========================
+   AUTO START
+========================= */
+
+app.whenReady().then(() => {
+
+  // 🔥 Auto iniciar al prender la PC
+  app.setLoginItemSettings({
+    openAtLogin: true
+  })
+
+  createWindow()
+})
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173248\main.tsx
+================================================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173258\main.js
+================================================================================
+
+const { app, BrowserWindow } = require("electron")
+
+let win
+
+function createWindow() {
+
+  win = new BrowserWindow({
+    width: 320,
+    height: 320,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+
+  win.loadURL("http://127.0.0.1:5173/assistant")
+}
+
+/* =========================
+   AUTO START
+========================= */
+
+app.whenReady().then(() => {
+
+  // 🔥 Auto iniciar al prender la PC
+  app.setLoginItemSettings({
+    openAtLogin: true
+  })
+
+  createWindow()
+})
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173258\main.tsx
+================================================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173548\main.js
+================================================================================
+
+const { app, BrowserWindow } = require("electron")
+
+let win
+
+function createWindow() {
+
+  win = new BrowserWindow({
+    width: 320,
+    height: 320,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true
+    }
+  })
+
+  win.loadURL("http://127.0.0.1:5173/assistant")
+}
+
+/* =========================
+   AUTO START
+========================= */
+
+app.whenReady().then(() => {
+
+  // 🔥 Auto iniciar al prender la PC
+  app.setLoginItemSettings({
+    openAtLogin: true
+  })
+
+  createWindow()
+})
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173548\main.tsx
+================================================================================
+
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+import "./index.css";
+
+ReactDOM.createRoot(document.getElementById("root")!).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>,
+);
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\assistant-presence-20261029_173548\preload.js
+================================================================================
+
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("nexusDesktop", {
+  setExpanded(expanded) {
+    ipcRenderer.send("nexus-assistant:set-expanded", Boolean(expanded));
+  },
+});
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\auditoria_integral_20261028_201256\nexus_http_security.py
+================================================================================
+
+"""Origin and Host validation for the local NEXUS HTTP API.
+
+The API can execute local actions, so browser callers are restricted to the
+known local development UIs. Non-browser clients without an Origin header
+remain supported; Host is still restricted to loopback names.
+"""
+from __future__ import annotations
+
+from urllib.parse import urlsplit
+
+ALLOWED_BROWSER_ORIGINS = frozenset(
+    {
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    }
+)
+ALLOWED_HOST_NAMES = frozenset({"localhost", "127.0.0.1"})
+API_PORT = 8765
+MAX_REQUEST_BODY_BYTES = 1_048_576  # 1 MiB por solicitud JSON
+
+
+def is_allowed_browser_origin(origin: str | None) -> bool:
+    """Allow non-browser clients and only the known local browser origins."""
+    if origin is None or not origin.strip():
+        return True
+    return origin.strip() in ALLOWED_BROWSER_ORIGINS
+
+
+def cors_origin_for(origin: str | None) -> str | None:
+    """Return an origin to echo in CORS headers, never a wildcard."""
+    if origin is None:
+        return None
+    normalized = origin.strip()
+    return normalized if normalized in ALLOWED_BROWSER_ORIGINS else None
+
+
+def is_allowed_host(host_header: str | None) -> bool:
+    """Reject non-loopback Host headers (including DNS-rebinding domains)."""
+    if host_header is None or not host_header.strip():
+        # Preserve compatibility with HTTP/1.0 clients that omit Host.
+        return True
+    try:
+        parsed = urlsplit("//" + host_header.strip())
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError:
+        return False
+    return hostname in ALLOWED_HOST_NAMES and port in (None, API_PORT)
+
+
+def is_allowed_content_length(content_length: int) -> bool:
+    """Accept non-empty request bodies up to the configured safety limit."""
+    return 0 < content_length <= MAX_REQUEST_BODY_BYTES
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\auditoria_integral_20261028_201256\packages\actions\src\actions\get_time.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from actions.base import Action
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class GetTimeAction(Action):
+    """Acción para consultar la fecha y hora local del equipo."""
+
+    name = "system.get_time"
+    description = "Consultar la fecha y hora local del sistema."
+    internal = True
+
+    produces = ["date", "time"]
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+        now = datetime.now()
+        current_date = now.strftime("%d/%m/%Y")
+        current_time = now.strftime("%H:%M")
+
+        context.add_result("date", current_date)
+        context.add_result("time", current_time)
+        context.add_result("status", "read")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\auditoria_integral_20261028_201256\packages\actions\tests\test_get_time.py
+================================================================================
+
+from unittest.mock import patch
+
+import pytest
+
+from actions.get_time import GetTimeAction
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective
+from planner.plan import ExecutionPlan, PlanStep
+
+
+@pytest.mark.asyncio
+async def test_get_time_action_records_local_time() -> None:
+    objective = Objective(
+        id="objective-time",
+        title="Consultar la hora",
+        description="Consultar la hora",
+    )
+    step = PlanStep(
+        id="step-time",
+        name="Consultar hora",
+        description="Obtener la hora local",
+        action="system.get_time",
+    )
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=[step],
+    )
+    context = ExecutionContext(
+        objective=objective,
+        plan=plan,
+    )
+
+    with patch("actions.get_time.datetime") as mocked_datetime:
+        mocked_datetime.now.return_value.strftime.side_effect = [
+            "28/10/2026",
+            "14:35",
+        ]
+        await GetTimeAction().execute(context, step)
+
+    assert context.results["date"] == "28/10/2026"
+    assert context.results["time"] == "14:35"
+    assert context.results["status"] == "read"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\auditoria_integral_20261028_201256\packages\bootstrap\tests\test_get_time_integration.py
+================================================================================
+
+import pytest
+
+from bootstrap.bootstrap import build_engine
+
+
+@pytest.mark.asyncio
+async def test_engine_executes_get_time() -> None:
+    engine = build_engine()
+
+    result = await engine.execute("¿Qué hora es?")
+
+    assert result.success, result.message
+    assert isinstance(result.output, dict)
+    assert result.output.get("status") == "read"
+    assert isinstance(result.output.get("date"), str)
+    assert len(result.output["date"]) == 10
+    assert result.output["date"][2] == "/"
+    assert isinstance(result.output.get("time"), str)
+    assert len(result.output["time"]) == 5
+    assert result.output["time"][2] == ":"
+    assert result.metadata.get("response") == (
+        f"Hoy es {result.output['date']} y son las {result.output['time']}."
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backups\auditoria_integral_20261028_201256\packages\planner\tests\test_time_intent.py
+================================================================================
+
+import pytest
+
+from planner.intent_recognizer import IntentRecognizer
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "¿Qué hora es?",
+        "Que hora es",
+        "Decime la hora",
+        "Decíme la hora",
+        "Dime la hora",
+        "Decime qué hora es",
+        "¿Qué hora tenemos?",
+        "¿Me decís la hora?",
+        "Decime la fecha y hora actual del sistema.",
+    ],
+)
+def test_recognizes_time_intent(phrase: str) -> None:
+    intent = IntentRecognizer().recognize(phrase)
+
+    assert intent.action == "system.get_time"
+    assert intent.parameters == {}
+    assert intent.original_text == phrase
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

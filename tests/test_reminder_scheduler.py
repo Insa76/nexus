@@ -403,3 +403,45 @@ def test_reconcile_does_not_duplicate_existing_schedule() -> None:
     assert scheduler.one_shots() == [
         f"reminder:{reminder.id}",
     ]
+
+
+def test_reschedule_while_scheduler_is_running_executes_new_time() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+    store = ReminderStore()
+
+    reminder = Reminder.create(
+        message="Reprogramar durante la espera",
+        trigger_at=datetime.now(timezone.utc) + timedelta(seconds=0.15),
+    )
+    store.add(reminder)
+
+    reminder_scheduler = ReminderScheduler(
+        scheduler_adapter=adapter,
+        reminder_store=store,
+    )
+    reminder_scheduler.schedule(reminder)
+
+    async def run() -> None:
+        task = asyncio.create_task(scheduler.start())
+
+        # Permite que el scheduler comience a esperar el horario original.
+        await asyncio.sleep(0.03)
+
+        new_trigger_at = datetime.now(timezone.utc) + timedelta(seconds=0.15)
+        assert reminder_scheduler.reschedule(
+            reminder.id,
+            new_trigger_at,
+        ) is True
+
+        # Espera más allá del nuevo horario.
+        await asyncio.sleep(0.22)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    stored = reminder_scheduler.get(reminder.id)
+    assert stored is not None
+    assert stored.status is ReminderStatus.TRIGGERED

@@ -1,3 +1,4 @@
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 
@@ -166,3 +167,157 @@ def test_clear_removes_periodic_and_one_shot_tasks() -> None:
 
     assert scheduler.tasks() == []
     assert scheduler.one_shots() == []
+
+
+def test_cancel_one_shot_prevents_execution_after_scheduler_starts() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="cancelled-reminder",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(seconds=0.20)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        # Deja que el scheduler comience a esperar la ejecución.
+        await asyncio.sleep(0.03)
+
+        assert scheduler.cancel_one_shot(
+            "cancelled-reminder"
+        ) is True
+
+        # Espera más allá de la fecha programada originalmente.
+        await asyncio.sleep(0.25)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+def test_stop_cancels_future_one_shot_immediately() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="future-reminder",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(hours=2)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.02)
+
+        await asyncio.wait_for(
+            scheduler.stop(),
+            timeout=1.0,
+        )
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+        assert task.done()
+
+    asyncio.run(run())
+
+    assert executions == []
+
+
+def test_register_at_from_another_thread() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start(keep_alive=True)
+        )
+
+        await asyncio.sleep(0.03)
+
+        await asyncio.to_thread(
+            scheduler.register_at,
+            name="http-thread-reminder",
+            execute_at=(
+                datetime.now(timezone.utc)
+                + timedelta(seconds=0.10)
+            ),
+            callback=callback,
+        )
+
+        await asyncio.sleep(0.20)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == ["executed"]
+
+
+def test_cancel_one_shot_from_another_thread() -> None:
+    scheduler = Scheduler()
+    executions: list[str] = []
+
+    async def callback() -> None:
+        executions.append("executed")
+
+    scheduler.register_at(
+        name="http-thread-cancel",
+        execute_at=(
+            datetime.now(timezone.utc)
+            + timedelta(seconds=0.30)
+        ),
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start(keep_alive=True)
+        )
+
+        await asyncio.sleep(0.03)
+
+        cancelled = await asyncio.to_thread(
+            scheduler.cancel_one_shot,
+            "http-thread-cancel",
+        )
+
+        assert cancelled is True
+
+        await asyncio.sleep(0.35)
+
+        await scheduler.stop()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())
+
+    assert executions == []
+

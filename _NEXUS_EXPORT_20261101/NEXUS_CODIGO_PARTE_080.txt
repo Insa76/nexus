@@ -1,0 +1,2086 @@
+﻿
+================================================================================
+ARCHIVO: tests\test_core_regression.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import traceback
+from pathlib import Path
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap del proyecto
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+from bootstrap.bootstrap import build_engine
+
+# ---------------------------------------------------------------------------
+# Fixture de regresión
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def engine():
+    return build_engine()
+
+
+
+# ---------------------------------------------------------------------------
+# Utilidades
+# ---------------------------------------------------------------------------
+
+class RegressionFailure(Exception):
+    pass
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise RegressionFailure(message)
+
+
+def output_of(result):
+    output = result.output
+    if output is None:
+        return {}
+    return output
+
+
+async def execute(engine, text: str):
+    return await engine.execute(text)
+
+
+# ---------------------------------------------------------------------------
+# Pruebas
+# ---------------------------------------------------------------------------
+
+async def test_open_app(engine):
+    print("[1/13] Acción simple: abrir aplicación")
+
+    result = await execute(engine, "abrí notepad")
+
+    check(
+        result.success,
+        f"Falló abrir aplicación: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de abrir aplicación no es un diccionario.",
+    )
+
+    check(
+        output.get("status") == "opened",
+        f"La aplicación no quedó marcada como abierta: {output}",
+    )
+
+    check(
+        output.get("application") == "notepad",
+        f"Aplicación inesperada en output: {output}",
+    )
+
+    print("      OK")
+
+
+async def test_close_app(engine):
+    print("[2/13] Acción simple: cerrar aplicación")
+
+    result = await execute(engine, "cerrá notepad")
+
+    check(
+        result.success,
+        f"Falló cerrar aplicación: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de cerrar aplicación no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_process_list(engine):
+    print("[3/13] Acción simple: listar procesos")
+
+    result = await execute(engine, "mostrame los procesos")
+
+    check(
+        result.success,
+        f"Falló listar procesos: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de procesos no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_volume(engine):
+    print("[4/13] Acción simple: consultar volumen")
+
+    result = await execute(engine, "decime el volumen actual")
+
+    check(
+        result.success,
+        f"Falló consultar volumen: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de volumen no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_mute_state(engine):
+    print("[5/13] Acción simple: consultar mute")
+
+    result = await execute(engine, "decime si está silenciado")
+
+    check(
+        result.success,
+        f"Falló consultar mute: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de mute no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_screen_capture(engine):
+    print("[6/13] Acción simple: captura de pantalla")
+
+    result = await execute(engine, "capturá la pantalla")
+
+    check(
+        result.success,
+        f"Falló captura de pantalla: {result.message}",
+    )
+
+    artifacts = result.artifacts or {}
+
+    check(
+        "image" in artifacts,
+        "La captura no produjo el artifact 'image'.",
+    )
+
+    image = artifacts["image"]
+
+    check(
+        image is not None,
+        "El artifact 'image' es None.",
+    )
+
+    check(
+        hasattr(image, "size"),
+        "El artifact 'image' no tiene dimensiones.",
+    )
+
+    width, height = image.size
+
+    check(
+        width > 0,
+        "El ancho de la captura es inválido.",
+    )
+
+    check(
+        height > 0,
+        "El alto de la captura es inválido.",
+    )
+
+    print(f"      OK ({width} × {height})")
+
+
+async def test_compound_capture_inspection(engine):
+    print("[7/13] Acción compuesta: captura → inspección")
+
+    result = await execute(
+        engine,
+        "capturá la pantalla e inspeccionala",
+    )
+
+    check(
+        result.success,
+        f"Falló acción compuesta: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        output.get("status") == "inspected",
+        "La acción compuesta no terminó con status='inspected'.",
+    )
+
+    inspection = output.get("capture_inspection")
+
+    check(
+        isinstance(inspection, dict),
+        "No existe 'capture_inspection' como diccionario.",
+    )
+
+    width = inspection.get("width")
+    height = inspection.get("height")
+
+    check(
+        isinstance(width, int) and width > 0,
+        "Ancho de inspección inválido.",
+    )
+
+    check(
+        isinstance(height, int) and height > 0,
+        "Alto de inspección inválido.",
+    )
+
+    check(
+        "image" in (result.artifacts or {}),
+        "La acción compuesta perdió el artifact 'image'.",
+    )
+
+    metadata = result.metadata or {}
+
+    response = metadata.get("response")
+
+    check(
+        isinstance(response, str),
+        "La respuesta humana no está presente en metadata.",
+    )
+
+    check(
+        "Inspeccioné la pantalla" in response,
+        f"ResponseFormatter no produjo la respuesta esperada: {response}",
+    )
+
+    print(f"      OK ({width} × {height})")
+
+
+async def test_recent_episodes(engine):
+    print("[8/13] Memoria: episodios recientes")
+
+    # Esta frase coincide explícitamente con IntentRecognizer.
+    result = await execute(
+        engine,
+        "qué hice recientemente",
+    )
+
+    check(
+        result.success,
+        f"Falló recuperación de episodios: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output de episodios no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_last_episode(engine):
+    print("[9/13] Memoria: último episodio")
+
+    # Esta frase coincide explícitamente con IntentRecognizer.
+    result = await execute(
+        engine,
+        "qué hice recién",
+    )
+
+    check(
+        result.success,
+        f"Falló recuperación del último episodio: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        "El output del último episodio no es un diccionario.",
+    )
+
+    print("      OK")
+
+
+async def test_result_serialization_contract(engine):
+    print("[10/13] Contrato: resultado estructurado + respuesta humana")
+
+    result = await execute(
+        engine,
+        "capturá la pantalla e inspeccionala",
+    )
+
+    check(
+        result.success,
+        f"Falló prueba de contrato: {result.message}",
+    )
+
+    output = output_of(result)
+
+    # El resultado estructurado debe permanecer intacto.
+    check(
+        output.get("status") == "inspected",
+        "El resultado estructurado fue alterado.",
+    )
+
+    check(
+        "capture_inspection" in output,
+        "Falta capture_inspection en el resultado.",
+    )
+
+    # La presentación humana debe vivir separadamente.
+    metadata = result.metadata or {}
+
+    response = metadata.get("response")
+
+    check(
+        isinstance(response, str) and response.strip(),
+        "No existe respuesta humana válida.",
+    )
+
+    # El artifact de imagen debe seguir existiendo.
+    artifacts = result.artifacts or {}
+
+    check(
+        "image" in artifacts,
+        "El artifact image desapareció del resultado.",
+    )
+
+    print("      OK")
+
+
+async def test_memory_growth(engine):
+    print("[11/13] Memoria: persistencia entre ejecuciones")
+
+    # WorkingMemory expone count(), no __len__().
+    before = engine.memory.count()
+
+    result = await execute(
+        engine,
+        "decime el volumen actual",
+    )
+
+    check(
+        result.success,
+        f"Falló ejecución para comprobar memoria: {result.message}",
+    )
+
+    after = engine.memory.count()
+
+    check(
+        after > before,
+        (
+            "La memoria no aumentó después de una ejecución. "
+            f"Antes={before}, después={after}"
+        ),
+    )
+
+    print(f"      OK ({before} → {after})")
+
+
+async def test_contextual_volume_reference(engine):
+    print("[12/13] Memoria contextual: referencia al volumen")
+
+    """
+    Verifica que NEXUS pueda interpretar una referencia
+    contextual al volumen a partir de una interacción anterior.
+    """
+
+    first = await execute(
+        engine,
+        "poné el volumen al 30%",
+    )
+
+    check(
+        first.success,
+        "La primera modificación de volumen debería ser exitosa.",
+    )
+
+    second = await execute(
+        engine,
+        "ahora ponelo al 50%",
+    )
+
+    check(
+        second.success,
+        "La referencia contextual al volumen debería resolverse.",
+    )
+
+    intent_entries = engine.memory.find("intent")
+
+    check(
+        bool(intent_entries),
+        "La intención contextual no quedó registrada en memoria.",
+    )
+
+    latest_intent = intent_entries[-1].data
+
+    check(
+        latest_intent.get("action") == "system.set_volume",
+        "La segunda intención debería ser system.set_volume.",
+    )
+
+    parameters = latest_intent.get(
+        "parameters",
+        {},
+    )
+
+    check(
+        parameters.get("level") == 50,
+        "La referencia contextual debería conservar el nivel 50.",
+    )
+
+    print("      OK")
+
+
+async def test_contextual_close_app(engine):
+    print("[13/13] Memoria contextual: referencia a aplicación")
+
+    """
+    Verifica el flujo completo:
+
+        abrir aplicación
+            ↓
+        memoria contextual
+            ↓
+        "cerralo"
+            ↓
+        system.close_app
+
+    La aplicación se abre dentro de esta misma prueba para que
+    la referencia contextual dependa de una interacción real
+    inmediatamente anterior.
+    """
+
+    opened = await execute(
+        engine,
+        "abrí notepad",
+    )
+
+    check(
+        opened.success,
+        f"Falló la apertura previa de notepad: {opened.message}",
+    )
+
+    opened_output = output_of(opened)
+
+    check(
+        opened_output.get("status") == "opened",
+        f"Notepad no quedó marcado como abierto: {opened_output}",
+    )
+
+    closed = await execute(
+        engine,
+        "cerralo",
+    )
+
+    check(
+        closed.success,
+        f"Falló el cierre contextual de notepad: {closed.message}",
+    )
+
+    closed_output = output_of(closed)
+
+    check(
+        isinstance(closed_output, dict),
+        "El output del cierre contextual no es un diccionario.",
+    )
+
+    intent_entries = engine.memory.find("intent")
+
+    check(
+        bool(intent_entries),
+        "El cierre contextual no dejó una intención registrada.",
+    )
+
+    latest_intent = intent_entries[-1].data
+
+    check(
+        latest_intent.get("action") == "system.close_app",
+        (
+            "La referencia 'cerralo' no se resolvió como "
+            "system.close_app."
+        ),
+    )
+
+    parameters = latest_intent.get(
+        "parameters",
+        {},
+    )
+
+    check(
+        parameters.get("application") == "notepad",
+        (
+            "La referencia contextual no recuperó "
+            f"notepad: {parameters}"
+        ),
+    )
+
+    print("      OK")
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+async def run_regression():
+    print()
+    print("=" * 72)
+    print("NEXUS CORE REGRESSION TEST")
+    print("=" * 72)
+    print()
+
+    engine = build_engine()
+
+    tests = [
+        test_open_app,
+        test_close_app,
+        test_process_list,
+        test_volume,
+        test_mute_state,
+        test_screen_capture,
+        test_compound_capture_inspection,
+        test_recent_episodes,
+        test_last_episode,
+        test_result_serialization_contract,
+        test_memory_growth,
+        test_contextual_volume_reference,
+        test_contextual_close_app,
+    ]
+
+    passed = 0
+    failed = 0
+
+    for test in tests:
+        try:
+            await test(engine)
+            passed += 1
+
+        except Exception as exc:
+            failed += 1
+
+            print("      FAILED")
+            print(f"      {type(exc).__name__}: {exc}")
+            print()
+
+            traceback.print_exc()
+
+    print()
+    print("=" * 72)
+    print("REGRESSION RESULT")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {failed}")
+    print("=" * 72)
+    print()
+
+    if failed:
+        raise SystemExit(1)
+
+    print("NEXUS CORE REGRESSION: PASS")
+    print()
+
+
+def main():
+    asyncio.run(run_regression())
+
+
+if __name__ == "__main__":
+    main()
+
+
+async def test_process_list(engine):
+    print("Regresión: listar procesos de Windows")
+
+    result = await execute(
+        engine,
+        "Lista los procesos que están ejecutándose actualmente en Windows.",
+    )
+
+    check(
+        result.success,
+        f"Falló listar procesos: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        f"El output de procesos no es un diccionario: {output}",
+    )
+
+    check(
+        output.get("status") == "ok",
+        f"La acción de listar procesos no terminó correctamente: {output}",
+    )
+
+    check(
+        isinstance(output.get("processes"), list),
+        f"No se recibió una lista de procesos: {output}",
+    )
+
+    check(
+        output.get("count") == len(output["processes"]),
+        f"El contador no coincide con la lista de procesos: {output}",
+    )
+
+    print("      OK")
+
+
+async def test_unmute_windows(engine):
+    print("Regresión: restaurar sonido de Windows")
+
+    result = await execute(
+        engine,
+        "Activa nuevamente el sonido de Windows.",
+    )
+
+    check(
+        result.success,
+        f"Falló restaurar el sonido: {result.message}",
+    )
+
+    output = output_of(result)
+
+    check(
+        isinstance(output, dict),
+        f"El output de restaurar sonido no es un diccionario: {output}",
+    )
+
+    check(
+        output.get("status") == "unmuted",
+        f"El sonido no quedó activado: {output}",
+    )
+
+    check(
+        output.get("muted") is False,
+        f"Windows continúa silenciado: {output}",
+    )
+
+    print("      OK")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_decision_engine.py
+================================================================================
+
+from planner.decision import DecisionEngine
+from planner.intent import Intent
+
+
+def test_known_action_without_capability_list():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=0.95,
+        parameters={"application": "Chrome"},
+        original_text="Abrí Chrome",
+    )
+
+    decision = engine.decide(intent)
+
+    assert decision.selected_action == "system.open_app"
+    assert decision.requires_execution is True
+    assert decision.is_executable is True
+    assert decision.confidence == 0.95
+
+
+def test_unknown_intent_does_not_execute():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.unknown",
+        original_text="Hacé algo",
+    )
+
+    decision = engine.decide(intent)
+
+    assert decision.selected_action is None
+    assert decision.requires_execution is False
+    assert decision.is_executable is False
+    assert decision.confidence == 0.0
+
+
+def test_known_action_with_capabilities():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.set_volume",
+        confidence=0.9,
+        parameters={"level": 60},
+        original_text="Poné el volumen al 60",
+    )
+
+    capabilities = [
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        }
+    ]
+
+    decision = engine.decide(
+        intent,
+        capabilities=capabilities,
+    )
+
+    assert decision.selected_action == "system.set_volume"
+    assert decision.requires_execution is True
+    assert decision.metadata["status"] == "selected"
+
+
+def test_known_action_without_matching_capability():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=0.9,
+        parameters={"application": "Chrome"},
+        original_text="Abrí Chrome",
+    )
+
+    capabilities = [
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        }
+    ]
+
+    decision = engine.decide(
+        intent,
+        capabilities=capabilities,
+    )
+
+    assert decision.selected_action is None
+    assert decision.requires_execution is False
+    assert decision.metadata["status"] == "unavailable"
+
+
+def test_compound_intent_selects_first_available_action():
+    engine = DecisionEngine()
+
+    first = Intent(
+        action="system.open_app",
+        confidence=0.9,
+        parameters={"application": "Chrome"},
+        original_text="Abrí Chrome",
+    )
+
+    second = Intent(
+        action="system.set_volume",
+        confidence=0.9,
+        parameters={"level": 50},
+        original_text="poné el volumen al 50",
+    )
+
+    compound = Intent(
+        action="compound",
+        confidence=0.9,
+        original_text="Abrí Chrome y poné el volumen al 50",
+        sub_intents=[first, second],
+    )
+
+    capabilities = [
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        }
+    ]
+
+    decision = engine.decide(
+        compound,
+        capabilities=capabilities,
+    )
+
+    assert decision.selected_action == "system.set_volume"
+    assert decision.requires_execution is True
+    assert decision.alternatives == []
+    assert decision.metadata["compound"] is True
+
+
+def test_compound_intent_keeps_alternatives():
+    engine = DecisionEngine()
+
+    first = Intent(
+        action="system.open_app",
+        confidence=0.9,
+        original_text="Abrí Chrome",
+    )
+
+    second = Intent(
+        action="system.set_volume",
+        confidence=0.9,
+        original_text="poné el volumen al 50",
+    )
+
+    compound = Intent(
+        action="compound",
+        confidence=0.9,
+        original_text="Abrí Chrome y poné el volumen al 50",
+        sub_intents=[first, second],
+    )
+
+    capabilities = [
+        {
+            "name": "windows.open_app",
+            "action": "system.open_app",
+        },
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        },
+    ]
+
+    decision = engine.decide(
+        compound,
+        capabilities=capabilities,
+    )
+
+    assert decision.selected_action == "system.open_app"
+    assert decision.alternatives == ["system.set_volume"]
+
+
+def test_compound_without_available_actions_does_not_execute():
+    engine = DecisionEngine()
+
+    first = Intent(
+        action="system.open_app",
+        original_text="Abrí Chrome",
+    )
+
+    second = Intent(
+        action="system.set_volume",
+        original_text="poné el volumen al 50",
+    )
+
+    compound = Intent(
+        action="compound",
+        original_text="Abrí Chrome y poné el volumen al 50",
+        sub_intents=[first, second],
+    )
+
+    capabilities = [
+        {
+            "name": "windows.capture_screen",
+            "action": "system.screen_capture",
+        }
+    ]
+
+    decision = engine.decide(
+        compound,
+        capabilities=capabilities,
+    )
+
+    assert decision.selected_action is None
+    assert decision.requires_execution is False
+    assert decision.metadata["status"] == "unavailable"
+
+
+def test_decision_preserves_intent_and_context_metadata():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.mute",
+        confidence=0.87,
+        original_text="Silenciá el audio",
+    )
+
+    decision = engine.decide(
+        intent,
+        context={"last_request": "subí el volumen"},
+    )
+
+    assert decision.intent is intent
+    assert decision.selected_action == "system.mute"
+    assert decision.metadata["context_available"] is True
+    assert decision.decision_id.startswith("decision-")
+
+
+if __name__ == "__main__":
+    tests = [
+        test_known_action_without_capability_list,
+        test_unknown_intent_does_not_execute,
+        test_known_action_with_capabilities,
+        test_known_action_without_matching_capability,
+        test_compound_intent_selects_first_available_action,
+        test_compound_intent_keeps_alternatives,
+        test_compound_without_available_actions_does_not_execute,
+        test_decision_preserves_intent_and_context_metadata,
+    ]
+
+    for test in tests:
+        test()
+
+    print(f"DECISION ENGINE PASSED : {len(tests)} FAILED : 0")
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_document_model.py
+================================================================================
+
+from datetime import timezone
+
+from documents import Document
+
+
+def test_document_create() -> None:
+    document = Document.create(
+        name="Contrato.pdf",
+        mime_type="application/pdf",
+        source="local:/documents/contrato.pdf",
+    )
+
+    assert document.id
+    assert document.name == "Contrato.pdf"
+    assert document.mime_type == "application/pdf"
+    assert document.source == "local:/documents/contrato.pdf"
+    assert document.description is None
+    assert document.user_id is None
+    assert document.organization_id is None
+    assert document.project_id is None
+    assert document.metadata == {}
+    assert document.created_at.tzinfo == timezone.utc
+    assert document.updated_at.tzinfo == timezone.utc
+
+
+def test_document_create_with_context_and_metadata() -> None:
+    document = Document.create(
+        name="Informe.pdf",
+        mime_type="application/pdf",
+        source="local:/documents/informe.pdf",
+        description="Informe mensual",
+        user_id="user-1",
+        organization_id="org-1",
+        project_id="project-1",
+        metadata={
+            "department": "finance",
+            "year": "2026",
+        },
+    )
+
+    assert document.description == "Informe mensual"
+    assert document.user_id == "user-1"
+    assert document.organization_id == "org-1"
+    assert document.project_id == "project-1"
+    assert document.metadata == {
+        "department": "finance",
+        "year": "2026",
+    }
+
+
+def test_document_is_immutable() -> None:
+    document = Document.create(
+        name="Documento.txt",
+        mime_type="text/plain",
+        source="memory:test",
+    )
+
+    try:
+        document.name = "Otro.txt"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError(
+            "Document should be immutable"
+        )
+
+
+def test_document_create_copies_metadata() -> None:
+    metadata = {
+        "category": "legal",
+    }
+
+    document = Document.create(
+        name="Contrato.txt",
+        mime_type="text/plain",
+        source="local:/documents/contrato.txt",
+        metadata=metadata,
+    )
+
+    metadata["category"] = "finance"
+
+    assert document.metadata == {
+        "category": "legal",
+    }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_document_store.py
+================================================================================
+
+import pytest
+
+from documents import Document, DocumentStore
+
+
+def create_document(
+    name: str = "Documento.pdf",
+) -> Document:
+    return Document.create(
+        name=name,
+        mime_type="application/pdf",
+        source=f"local:/documents/{name}",
+    )
+
+
+def test_add_and_get_document() -> None:
+    store = DocumentStore()
+    document = create_document()
+
+    result = store.add(document)
+
+    assert result == document
+    assert store.get(document.id) == document
+
+
+def test_get_unknown_document_returns_none() -> None:
+    store = DocumentStore()
+
+    assert store.get("unknown") is None
+
+
+def test_list_documents() -> None:
+    store = DocumentStore()
+
+    first = create_document("uno.pdf")
+    second = create_document("dos.pdf")
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == [first, second]
+
+
+def test_update_document() -> None:
+    store = DocumentStore()
+
+    document = create_document()
+
+    store.add(document)
+
+    updated = Document(
+        **{
+            **document.__dict__,
+            "name": "Documento actualizado.pdf",
+        }
+    )
+
+    result = store.update(updated)
+
+    assert result == updated
+    assert store.get(document.id) == updated
+
+
+def test_update_unknown_document_raises() -> None:
+    store = DocumentStore()
+    document = create_document()
+
+    with pytest.raises(KeyError):
+        store.update(document)
+
+
+def test_remove_document() -> None:
+    store = DocumentStore()
+    document = create_document()
+
+    store.add(document)
+
+    result = store.remove(document.id)
+
+    assert result == document
+    assert store.get(document.id) is None
+
+
+def test_remove_unknown_document_returns_none() -> None:
+    store = DocumentStore()
+
+    assert store.remove("unknown") is None
+
+
+def test_clear_documents() -> None:
+    store = DocumentStore()
+
+    store.add(create_document("uno.pdf"))
+    store.add(create_document("dos.pdf"))
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+def test_count_documents() -> None:
+    store = DocumentStore()
+
+    assert store.count() == 0
+
+    store.add(create_document("uno.pdf"))
+    store.add(create_document("dos.pdf"))
+
+    assert store.count() == 2
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_engine_assistant_context.py
+================================================================================
+
+from context import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+from memory import WorkingMemory
+
+from planner.context_builder import ContextBuilder
+
+
+def test_engine_context_builder_receives_assistant_context():
+    organization = OrganizationProfile.create(
+        name="NEXUS Labs",
+        industry="Software",
+        description="Organización de desarrollo.",
+        areas=["Technology"],
+        rules=["Security first"],
+        priorities=["Reliability"],
+    )
+
+    user = UserProfile.create(
+        name="Carlos",
+        role="Founder",
+        organization_id=organization.id,
+        preferences={
+            "language": "es",
+        },
+        responsibilities=[
+            "Product",
+            "Architecture",
+        ],
+        priorities=[
+            "NEXUS",
+        ],
+    )
+
+    project = ProjectContext.create(
+        name="NEXUS",
+        organization_id=organization.id,
+        description="Cognitive runtime.",
+        status="active",
+        responsible_user_ids=[
+            user.id,
+        ],
+    )
+
+    assistant_context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=[project],
+    )
+
+    builder = ContextBuilder(
+        assistant_context=assistant_context
+    )
+
+    memory = WorkingMemory()
+
+    memory.add(
+        "user_request",
+        {
+            "text": "Abrí Chrome",
+        },
+    )
+
+    context = builder.build(
+        memory,
+        semantic_query="Abrí Chrome",
+    )
+
+    assistant = context["assistant_context"]
+
+    assert assistant is not None
+
+    assert assistant["user"]["id"] == user.id
+    assert assistant["user"]["name"] == "Carlos"
+
+    assert (
+        assistant["organization"]["id"]
+        == organization.id
+    )
+
+    assert (
+        assistant["organization"]["name"]
+        == "NEXUS Labs"
+    )
+
+    assert (
+        assistant["projects"][0]["id"]
+        == project.id
+    )
+
+    assert (
+        assistant["projects"][0]["name"]
+        == "NEXUS"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_engine_compound_verification.py
+================================================================================
+
+from __future__ import annotations
+
+import asyncio
+
+from planner.execution_context import ExecutionContext
+from planner.intent import Intent
+from planner.objective import Objective
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+from runtime.execution_result import ExecutionResult
+
+
+def check(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+class FakeAction:
+    def __init__(
+        self,
+        action: str,
+        output: dict,
+        artifact: tuple[str, object] | None = None,
+    ):
+        self.action = action
+        self.output = output
+        self.artifact = artifact
+        self.internal = False
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        for key, value in self.output.items():
+            context.add_result(
+                key,
+                value,
+            )
+
+        if self.artifact is not None:
+            key, value = self.artifact
+
+            context.add_artifact(
+                key,
+                value,
+            )
+
+
+class FakeActionManager:
+    def __init__(self, actions: dict[str, FakeAction]):
+        self.actions = actions
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> None:
+
+        step = context.current_plan_step()
+
+        if step is None:
+            return
+
+        action = self.actions.get(step.action)
+
+        if action is None:
+            context.add_error(
+                f"Unknown action: {step.action}"
+            )
+            return
+
+        step.status = StepStatus.RUNNING
+
+        results_before = dict(
+            context.results
+        )
+
+        artifacts_before = dict(
+            context.artifacts
+        )
+
+        try:
+            await action.execute(
+                context,
+                step,
+            )
+
+            step.status = (
+                StepStatus.COMPLETED
+            )
+
+            context.record_step_evidence(
+                step,
+                status="completed",
+                results_before=(
+                    results_before
+                ),
+                artifacts_before=(
+                    artifacts_before
+                ),
+            )
+
+        except Exception as exc:
+            step.status = StepStatus.FAILED
+
+            context.add_error(
+                str(exc)
+            )
+
+            context.record_step_evidence(
+                step,
+                status="failed",
+                results_before=(
+                    results_before
+                ),
+                artifacts_before=(
+                    artifacts_before
+                ),
+            )
+
+
+class FakeRuntime:
+    def __init__(
+        self,
+        actions: dict[str, FakeAction],
+    ):
+        self.action_manager = (
+            FakeActionManager(actions)
+        )
+
+
+def make_step(
+    step_id: str,
+    action: str,
+    depends_on: list[str] | None = None,
+) -> PlanStep:
+
+    return PlanStep(
+        id=step_id,
+        name=step_id,
+        description=step_id,
+        action=action,
+        status=StepStatus.PENDING,
+        depends_on=(
+            depends_on
+            if depends_on is not None
+            else []
+        ),
+        consumes=[],
+        produces=[],
+        metadata={},
+    )
+
+
+def make_compound_context() -> ExecutionContext:
+
+    objective = Objective(
+        id="objective-compound",
+        title="compound",
+        metadata={
+            "application": "Chrome",
+            "level": 60,
+        },
+    )
+
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=[
+            make_step(
+                "step-1",
+                "system.open_app",
+            ),
+            make_step(
+                "step-2",
+                "system.set_volume",
+                depends_on=["step-1"],
+            ),
+        ],
+        current_step=0,
+        completed=False,
+        metadata={},
+    )
+
+    return ExecutionContext(
+        objective=objective,
+        plan=plan,
+        variables={},
+        artifacts={},
+        results={},
+        errors=[],
+        current_step=0,
+        finished=False,
+        step_evidence={},
+    )
+
+
+async def execute_compound_plan(
+    context: ExecutionContext,
+) -> ExecutionResult:
+
+    runtime = FakeRuntime(
+        {
+            "system.open_app": FakeAction(
+                "system.open_app",
+                {
+                    "application": "Chrome",
+                    "status": "opened",
+                },
+            ),
+            "system.set_volume": FakeAction(
+                "system.set_volume",
+                {
+                    "volume": 60,
+                    "status": "set",
+                },
+            ),
+        }
+    )
+
+    while not context.finished:
+
+        step = context.current_plan_step()
+
+        if step is None:
+            break
+
+        await runtime.action_manager.execute(
+            context
+        )
+
+        if context.has_errors():
+            context.finished = True
+            break
+
+        completed = all(
+            current.status
+            == StepStatus.COMPLETED
+            for current
+            in context.plan.steps
+        )
+
+        if completed:
+            context.plan.completed = True
+            context.finished = True
+            break
+
+        context.current_step += 1
+
+    return ExecutionResult(
+        success=(
+            context.plan.completed
+            and not context.has_errors()
+        ),
+        message=(
+            "Execution completed successfully."
+            if context.plan.completed
+            else "Execution failed."
+        ),
+        output=dict(
+            context.results
+        ),
+        artifacts=dict(
+            context.artifacts
+        ),
+        metadata={
+            "step_evidence": (
+                context.all_step_evidence()
+            ),
+        },
+    )
+
+
+def test_engine_compound_execution_produces_step_evidence():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    check(
+        result.success,
+        "Compound execution must succeed.",
+    )
+
+    step_evidence = (
+        result.metadata.get(
+            "step_evidence"
+        )
+    )
+
+    check(
+        isinstance(
+            step_evidence,
+            dict,
+        ),
+        "ExecutionResult must contain step_evidence.",
+    )
+
+    check(
+        set(step_evidence.keys())
+        == {
+            "step-1",
+            "step-2",
+        },
+        "Every compound step must have individual evidence.",
+    )
+
+
+def test_engine_compound_execution_preserves_step_outputs():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    step_evidence = (
+        result.metadata[
+            "step_evidence"
+        ]
+    )
+
+    step_1 = step_evidence[
+        "step-1"
+    ]
+
+    step_2 = step_evidence[
+        "step-2"
+    ]
+
+    check(
+        step_1["results"][
+            "application"
+        ]
+        == "Chrome",
+        "Step 1 evidence must contain its own application result.",
+    )
+
+    check(
+        step_1["results"][
+            "status"
+        ]
+        == "opened",
+        "Step 1 evidence must contain its own execution status.",
+    )
+
+    check(
+        step_2["results"][
+            "volume"
+        ]
+        == 60,
+        "Step 2 evidence must contain its own volume result.",
+    )
+
+    check(
+        step_2["results"][
+            "status"
+        ]
+        == "set",
+        "Step 2 evidence must contain its own execution status.",
+    )
+
+
+def test_engine_compound_execution_does_not_collapse_evidence_into_global_output():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    step_evidence = (
+        result.metadata[
+            "step_evidence"
+        ]
+    )
+
+    check(
+        step_evidence[
+            "step-1"
+        ]["results"]
+        != result.output,
+        "Step 1 evidence must remain distinct from global output.",
+    )
+
+    check(
+        step_evidence[
+            "step-2"
+        ]["results"]
+        != result.output,
+        "Step 2 evidence must remain distinct from global output.",
+    )
+
+
+def test_engine_compound_execution_respects_dependencies():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    check(
+        result.success,
+        "Compound execution must succeed.",
+    )
+
+    check(
+        context.plan.steps[
+            0
+        ].status
+        == StepStatus.COMPLETED,
+        "First step must complete.",
+    )
+
+    check(
+        context.plan.steps[
+            1
+        ].status
+        == StepStatus.COMPLETED,
+        "Dependent step must complete.",
+    )
+
+    check(
+        context.plan.completed,
+        "Compound plan must be completed.",
+    )
+
+
+def test_engine_compound_execution_fails_without_complete_step_evidence():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    step_evidence = (
+        result.metadata[
+            "step_evidence"
+        ]
+    )
+
+    del step_evidence[
+        "step-2"
+    ]
+
+    check(
+        "step-2"
+        not in step_evidence,
+        "The test must be able to represent missing evidence.",
+    )
+
+    check(
+        result.success,
+        "Execution itself should still be successful; verification must detect the missing evidence.",
+    )
+
+
+def test_engine_compound_result_is_ready_for_verifier():
+    context = (
+        make_compound_context()
+    )
+
+    result = asyncio.run(
+        execute_compound_plan(
+            context
+        )
+    )
+
+    check(
+        result.success,
+        "ExecutionResult must report successful execution.",
+    )
+
+    check(
+        context.plan.completed,
+        "Execution plan must be completed.",
+    )
+
+    check(
+        len(
+            result.metadata[
+                "step_evidence"
+            ]
+        )
+        == len(
+            context.plan.steps
+        ),
+        "ExecutionResult must expose evidence for every plan step.",
+    )
+
+
+if __name__ == "__main__":
+
+    tests = [
+        (
+            name,
+            func,
+        )
+        for name, func in globals().items()
+        if name.startswith("test_")
+        and callable(func)
+    ]
+
+    passed = 0
+
+    for name, test in tests:
+        try:
+            test()
+
+            print(
+                f"PASS: {name}"
+            )
+
+            passed += 1
+
+        except Exception as exc:
+
+            print(
+                f"FAIL: {name}"
+            )
+
+            print(
+                f"      {type(exc).__name__}: {exc}"
+            )
+
+    print()
+
+    print(
+        "ENGINE COMPOUND VERIFICATION: "
+        f"{passed}/{len(tests)} PASSED"
+    )
+
+    if passed != len(tests):
+        raise SystemExit(1)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_engine_decision_integration.py
+================================================================================
+
+from planner.decision import DecisionEngine
+from planner.intent import Intent
+
+
+def test_engine_decision_layer_is_available():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=0.95,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    decision = engine.decide(intent)
+
+    assert decision.is_executable is True
+    assert decision.selected_action == "system.open_app"
+
+
+def test_unknown_intent_is_blocked():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.unknown",
+        original_text="Hacé algo que no conozco",
+    )
+
+    decision = engine.decide(intent)
+
+    assert decision.is_executable is False
+    assert decision.selected_action is None
+
+
+def test_decision_preserves_traceability():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.set_volume",
+        confidence=0.91,
+        parameters={
+            "level": 60,
+        },
+        original_text="Poné el volumen al 60",
+    )
+
+    decision = engine.decide(
+        intent,
+        context={
+            "last_request": "subí el volumen",
+        },
+    )
+
+    assert decision.decision_id
+    assert decision.reason
+    assert decision.confidence == 0.91
+    assert decision.metadata["status"] == "selected"
+
+
+def test_decision_never_executes_an_action():
+    engine = DecisionEngine()
+
+    execution_happened = False
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=1.0,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    decision = engine.decide(intent)
+
+    assert decision.is_executable is True
+    assert execution_happened is False
+
+
+def test_decision_respects_capabilities():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.open_app",
+        confidence=0.9,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    capabilities = [
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        }
+    ]
+
+    decision = engine.decide(
+        intent,
+        capabilities=capabilities,
+    )
+
+    assert decision.is_executable is False
+    assert decision.selected_action is None
+    assert decision.metadata["status"] == "unavailable"
+
+
+def test_compound_decision_preserves_available_actions():
+    engine = DecisionEngine()
+
+    first = Intent(
+        action="system.open_app",
+        confidence=0.9,
+        parameters={
+            "application": "Chrome",
+        },
+        original_text="Abrí Chrome",
+    )
+
+    second = Intent(
+        action="system.set_volume",
+        confidence=0.9,
+        parameters={
+            "level": 50,
+        },
+        original_text="poné el volumen al 50",
+    )
+
+    compound = Intent(
+        action="compound",
+        confidence=0.9,
+        original_text=(
+            "Abrí Chrome y poné el volumen al 50"
+        ),
+        sub_intents=[
+            first,
+            second,
+        ],
+    )
+
+    capabilities = [
+        {
+            "name": "windows.open_app",
+            "action": "system.open_app",
+        },
+        {
+            "name": "windows.set_volume",
+            "action": "system.set_volume",
+        },
+    ]
+
+    decision = engine.decide(
+        compound,
+        capabilities=capabilities,
+    )
+
+    assert decision.is_executable is True
+    assert decision.selected_action == "system.open_app"
+    assert decision.alternatives == [
+        "system.set_volume"
+    ]
+
+
+def test_compound_without_capabilities_is_blocked():
+    engine = DecisionEngine()
+
+    first = Intent(
+        action="system.open_app",
+        original_text="Abrí Chrome",
+    )
+
+    second = Intent(
+        action="system.set_volume",
+        original_text="poné el volumen al 50",
+    )
+
+    compound = Intent(
+        action="compound",
+        original_text=(
+            "Abrí Chrome y poné el volumen al 50"
+        ),
+        sub_intents=[
+            first,
+            second,
+        ],
+    )
+
+    capabilities = [
+        {
+            "name": "windows.capture_screen",
+            "action": "system.screen_capture",
+        }
+    ]
+
+    decision = engine.decide(
+        compound,
+        capabilities=capabilities,
+    )
+
+    assert decision.is_executable is False
+    assert decision.selected_action is None
+
+
+def test_decision_context_is_recorded():
+    engine = DecisionEngine()
+
+    intent = Intent(
+        action="system.mute",
+        confidence=0.87,
+        original_text="Silenciá el audio",
+    )
+
+    decision = engine.decide(
+        intent,
+        context={
+            "last_request": "subí el volumen",
+        },
+    )
+
+    assert decision.metadata["context_available"] is True
+
+
+if __name__ == "__main__":
+    tests = [
+        test_engine_decision_layer_is_available,
+        test_unknown_intent_is_blocked,
+        test_decision_preserves_traceability,
+        test_decision_never_executes_an_action,
+        test_decision_respects_capabilities,
+        test_compound_decision_preserves_available_actions,
+        test_compound_without_capabilities_is_blocked,
+        test_decision_context_is_recorded,
+    ]
+
+    for test in tests:
+        test()
+
+    print(
+        f"ENGINE DECISION INTEGRATION PASSED : "
+        f"{len(tests)} FAILED : 0"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

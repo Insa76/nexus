@@ -112,6 +112,92 @@ class ResponseFormatter:
                 "de forma natural."
             )
 
+                # Búsqueda cognitiva de documentos
+        if output.get("operation") == "documents.find_relevant":
+            documents = output.get("documents", [])
+
+            if not documents:
+                return "No encontré documentos que coincidan con tu búsqueda."
+
+            names = [
+                document.get("name")
+                for document in documents
+                if isinstance(document, dict) and document.get("name")
+            ]
+
+            if not names:
+                return f"Encontré {len(documents)} documento(s) relevante(s)."
+
+            if len(names) == 1:
+                return f"Encontré un documento relevante: {names[0]}."
+
+            return (
+                f"Encontré {len(names)} documentos relevantes: "
+                + ", ".join(names)
+                + "."
+            )
+
+        # Búsqueda cognitiva de reglas y procesos
+        operation = output.get("operation")
+
+        cognitive_collections = {
+            "rules.find_relevant": ("rules", "reglas"),
+            "processes.find_relevant": ("processes", "procesos"),
+        }
+
+        if operation in cognitive_collections:
+            collection_name, label = cognitive_collections[operation]
+            items = output.get(collection_name, [])
+
+            if not items:
+                return f"No encontré {label} relevantes para tu búsqueda."
+
+            names = [
+                item.get("name")
+                for item in items
+                if isinstance(item, dict) and item.get("name")
+            ]
+
+            if not names:
+                return (
+                    f"Encontré {len(items)} {label} relevantes, "
+                    "pero no tienen nombres disponibles."
+                )
+
+            if len(names) == 1:
+                response = f"Encontré una {label[:-1]} relevante: {names[0]}."
+            else:
+                response = (
+                    f"Encontré {len(names)} {label} relevantes: "
+                    + ", ".join(names)
+                    + "."
+                )
+
+            details = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+
+                name = item.get("name")
+                description = item.get("description")
+                status = item.get("status")
+
+                detail = name or "Sin nombre"
+                if description:
+                    detail += f" — {description}"
+                if status:
+                    detail += f" (estado: {status})"
+
+                details.append(detail)
+
+            if details:
+                response += "\n\n" + "\n".join(
+                    f"- {detail}" for detail in details
+                )
+
+            return response
+
+
         if not output:
             return "Listo."
 
@@ -411,6 +497,14 @@ class ResponseFormatter:
 
             if output["muted"] is False:
                 return "El sonido está activado."
+
+        #
+        # Hora actual
+        #
+        if output.get("status") == "read" and "time" in output:
+            if "date" in output:
+                return f"Hoy es {output['date']} y son las {output['time']}."
+            return f"Son las {output['time']}."
 
         #
         # Fallback

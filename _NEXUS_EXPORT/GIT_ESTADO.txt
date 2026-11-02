@@ -1,0 +1,94 @@
+﻿## main...origin/main [ahead 5]
+ M README.md
+ M docs/NEXUS_ROADMAP_V1.md
+ M packages/adapters/src/adapters/windows/app_launcher.py
+ M packages/adapters/src/adapters/windows/screen_capture.py
+ M packages/bootstrap/src/bootstrap/assistant_services.py
+ M packages/bootstrap/src/bootstrap/assistant_services_lifecycle.py
+ M packages/bootstrap/src/bootstrap/bootstrap.py
+ M packages/documents/src/documents/cognitive.py
+ M packages/documents/tests/test_document_cognitive.py
+ M packages/engine/src/engine/cognitive_capabilities.py
+ M packages/engine/src/engine/engine.py
+ M packages/engine/tests/test_engine_cognitive_capability_empty_context.py
+ M packages/engine/tests/test_engine_cognitive_found_decision_behavior.py
+ M packages/engine/tests/test_engine_cognitive_process_rule_read_operations.py
+ M packages/engine/tests/test_engine_process_cognitive_router_integration.py
+ M packages/engine/tests/test_engine_rule_cognitive_router_integration.py
+ M packages/memory/src/memory/semantic_memory.py
+ M packages/memory/src/memory/semantic_retriever.py
+ M packages/planner/src/planner/hybrid_intent_provider.py
+ M packages/planner/src/planner/intent_recognizer.py
+ M packages/planner/src/planner/ollama_intent_provider.py
+ M packages/processes/src/processes/cognitive.py
+ M packages/processes/tests/test_process_cognitive_operations.py
+ M packages/providers/src/providers/local_provider.py
+ M packages/response/src/response/formatter.py
+ M packages/rules/src/rules/cognitive.py
+ M packages/runtime/src/runtime/scheduler.py
+ M packages/tasks/src/tasks/reminder_store.py
+ M pyproject.toml
+ M tests/test_bootstrap_assistant_context.py
+ M tests/test_reminder_scheduler.py
+ M tests/test_response_formatter_episode_query.py
+ M tests/test_scheduler_one_shot.py
+?? Exportar-NEXUS.ps1
+?? NEXUS_APPS_TEXTO/
+?? NEXUS_ARCHIVOS_APERTURA_ACTUALES.txt
+?? NEXUS_AUDITORIA_FASE14.zip
+?? NEXUS_CONTRATOS_AUDITORIA.zip
+?? NEXUS_REFERENCIAS_V1.zip
+?? VERIFICAR_NEXUS_INTEGRACION.ps1
+?? _NEXUS_EXPORT/
+?? apps/
+?? backend/
+?? backups/
+?? bootstrap.py.txt
+?? capability.py.txt
+?? cognitive.py.txt
+?? cognitive_capabilities.txt
+?? context_access.txt
+?? dashboard/
+?? desktop/
+?? diagnose_documents_engine.py
+?? diagnostico_apertura_archivos.txt
+?? docker-compose.yml
+?? documents_engine_sources.txt
+?? electron/
+?? engine.py.txt
+?? estructura.txt
+?? exportar_apps.py
+?? exportar_apps_texto.py
+?? exportar_nexus.py
+?? index.html
+?? landing/
+?? nexus-mobile/
+?? nexus_http_security.py
+?? nexus_memory_v1_patch.py
+?? nexus_semantic_memory_thread_fix.py
+?? nexus_semantic_persistence_patch.py
+?? packages/actions/src/actions/get_time.py
+?? packages/actions/src/actions/open_file.py
+?? packages/actions/tests/test_get_time.py
+?? packages/adapters/src/adapters/windows/file_opener.py
+?? packages/adapters/tests/
+?? packages/bootstrap/src/bootstrap/bootstrap.py.bak-semantic-persistence-20261020-195006
+?? packages/bootstrap/tests/test_get_time_integration.py
+?? packages/engine/src/engine/engine.py.bak-20261020-183304
+?? packages/engine/src/engine/engine.py.bak-semantic-persistence-20261020-195006
+?? packages/engine/tests/test_engine_cognitive_capability_document_response.py
+?? packages/engine/tests/test_engine_semantic_memory.py
+?? packages/engine/tests/test_process_rule_contextual_reads.py
+?? packages/memory/src/memory/semantic_memory.py.bak-semantic-persistence-20261020-195006
+?? packages/memory/src/memory/semantic_memory.py.bak-thread-fix-20261020-200045
+?? packages/memory/tests/
+?? packages/planner/src/planner/intent_recognizer.py.bak-20261020-183304
+?? packages/planner/src/planner/ollama_intent_provider.py.bak-timeout-20261021
+?? packages/planner/tests/
+?? runtime_snapshot.txt
+?? server.py
+?? server.py.bak-before-reminders
+?? start-nexus-desktop-dev.ps1
+?? start-nexus.bat
+?? tests/test_http_origin_policy.py
+?? tests/test_reminder_store_persistence.py

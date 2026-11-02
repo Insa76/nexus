@@ -1,0 +1,2270 @@
+﻿
+================================================================================
+ARCHIVO: backend\core\agents.py
+================================================================================
+
+from core.ai_agent import ask_agent
+
+from core.agent_bus import (
+    send_message,
+    get_messages
+)
+
+# 🔥 LEARNING IMPORT
+from core.learning import (
+    load_patterns
+)
+
+
+# ==========================================================
+# PLANNER AGENT
+# ==========================================================
+class PlannerAgent:
+
+    def plan(
+        self,
+        goal,
+        tools,
+        memory=""
+    ):
+
+        # =========================
+        # SEND MESSAGE
+        # =========================
+        send_message(
+            "planner",
+            "supervisor",
+            f"Planning action for goal: {goal}"
+        )
+
+        # =========================
+        # LOAD MESSAGES
+        # =========================
+        messages = get_messages(
+            "planner"
+        )
+
+        message_context = "\n".join([
+
+            f"""
+FROM: {m['sender']}
+
+MESSAGE:
+{m['message']}
+"""
+
+            for m in messages
+        ])
+
+        # =========================
+        # PROMPT
+        # =========================
+        prompt = f"""
+You are a planning agent.
+
+Goal:
+{goal}
+
+Available tools:
+{tools}
+
+Memory:
+{memory}
+
+Agent Messages:
+{message_context}
+
+Create the next best action.
+
+Respond ONLY valid JSON:
+
+{{
+  "tool": "...",
+  "params": {{}}
+}}
+"""
+
+        # =========================
+        # ASK AGENT
+        # =========================
+        return ask_agent(prompt)
+
+
+# ==========================================================
+# SUPERVISOR AGENT
+# ==========================================================
+class SupervisorAgent:
+
+    def review(
+        self,
+        history
+    ):
+
+        # =========================
+        # LOAD MESSAGES
+        # =========================
+        messages = get_messages(
+            "supervisor"
+        )
+
+        message_context = "\n".join([
+
+            f"""
+FROM: {m['sender']}
+
+MESSAGE:
+{m['message']}
+"""
+
+            for m in messages
+        ])
+
+        # =========================
+        # PROMPT
+        # =========================
+        prompt = f"""
+You are a supervisor AI.
+
+Review this execution history:
+
+{history}
+
+Agent Messages:
+
+{message_context}
+
+Detect:
+- loops
+- repeated failures
+- dangerous behavior
+
+Respond ONLY:
+safe
+or
+stop
+"""
+
+        # =========================
+        # ASK AGENT
+        # =========================
+        return ask_agent(prompt)
+
+
+# ==========================================================
+# HEALING AGENT
+# ==========================================================
+class HealingAgent:
+
+    def heal(
+
+        self,
+
+        error,
+
+        node,
+
+        history=""
+    ):
+
+        # =========================
+        # LOAD LEARNED PATTERNS
+        # =========================
+        patterns = load_patterns()
+
+        # =========================
+        # BUILD PATTERN CONTEXT
+        # =========================
+        pattern_context = "\n".join([
+
+            f"""
+Pattern:
+{p["pattern"]}
+
+Solution:
+{p["solution"]}
+"""
+
+            for p in patterns
+        ])
+
+        # =========================
+        # PROMPT
+        # =========================
+        prompt = f"""
+You are a workflow healing AI.
+
+Node:
+{node}
+
+Error:
+{error}
+
+History:
+{history}
+
+Known Successful Repairs:
+
+{pattern_context}
+
+Suggest a repair.
+
+Respond ONLY valid JSON.
+
+{{
+  "action": "...",
+  "params": {{}}
+}}
+"""
+
+        # =========================
+        # ASK AGENT
+        # =========================
+        return ask_agent(prompt)
+
+
+# ==========================================================
+# RUNTIME SUPERVISOR AGENT
+# ==========================================================
+class RuntimeSupervisorAgent:
+
+    def analyze(
+
+        self,
+
+        jobs,
+        metrics,
+        logs
+    ):
+
+        prompt = f"""
+You are an AI runtime supervisor.
+
+Jobs:
+{jobs}
+
+Metrics:
+{metrics}
+
+Logs:
+{logs}
+
+Analyze:
+- failures
+- loops
+- overload
+- dangerous workflows
+- instability
+
+Detect:
+- dangerous tools
+- suspicious behavior
+- recursive loops
+- uncontrolled scaling
+
+Respond ONLY valid JSON.
+
+{{
+  "status": "healthy|warning|critical",
+
+  "recommendation": "...",
+
+  "action": "none|scale_up|pause_jobs"
+}}
+"""
+
+        return ask_agent(prompt)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\ai_agent.py
+================================================================================
+
+import requests
+
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+
+
+def ask_agent(
+    prompt,
+    model="llama3"
+):
+
+    payload = {
+
+        "model": model,
+
+        "prompt": prompt,
+
+        "stream": False
+    }
+
+    res = requests.post(
+        OLLAMA_URL,
+        json=payload
+    )
+
+    data = res.json()
+
+    return data.get(
+        "response",
+        ""
+    )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\anomaly_detector.py
+================================================================================
+
+class AnomalyDetector:
+
+    def detect(self, history):
+
+        if len(history) < 5:
+            return None
+
+        last = history[-1]
+        prev = history[-5]
+
+        # error spike
+        if last["error_rate"] > prev["error_rate"] * 2 and last["error_rate"] > 0.2:
+            return {
+                "type": "error_spike",
+                "message": "Estoy observando un aumento anormal de errores."
+            }
+
+        # queue growth
+        if last["queue_size"] > prev["queue_size"] + 10:
+            return {
+                "type": "queue_growth",
+                "message": "La cola de trabajos está creciendo rápidamente."
+            }
+
+        if len(last["open_circuits"]) >= 2:
+            return {
+                "type": "circuit_alert",
+                "message": "Varios circuit breakers están abiertos."
+            }
+
+        return None
+
+
+anomaly_detector = AnomalyDetector()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\database.py
+================================================================================
+
+import os
+import psycopg
+from psycopg.rows import dict_row
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_URL = os.getenv("DB_URL")
+
+
+def get_connection():
+    conn = psycopg.connect(DB_URL, row_factory=dict_row)
+    return conn
+
+
+def init_db():
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    print("INIT_DB EJECUTADO")
+
+    # =========================
+    # WORKFLOWS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS workflows (
+        id TEXT,
+        version INTEGER,
+        name TEXT,
+        tenant_id TEXT,
+        workspace_id TEXT,
+        trigger TEXT,
+        data TEXT,
+        definition JSONB,
+        active INTEGER,
+        created_at TIMESTAMP,
+        PRIMARY KEY (id, version, workspace_id)
+    )
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_workflow_active
+    ON workflows (id, active)
+    """)
+
+    # =========================
+    # JOBS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        workflow TEXT,
+        version INTEGER,
+        tenant_id TEXT,
+        workspace_id TEXT,
+        status TEXT,
+        payload JSONB,
+        result JSONB,
+        error TEXT,
+        active INTEGER DEFAULT 1,
+        created_at TIMESTAMP,
+        updated_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # SCHEDULES
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        workflow TEXT,
+        type TEXT,
+        expression TEXT,
+        enabled BOOLEAN,
+        last_run TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # TENANTS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS tenants (
+        id TEXT PRIMARY KEY,
+        name TEXT,
+        created_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # WORKSPACES
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT,
+        name TEXT,
+        created_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # USERS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE,
+        password_hash TEXT,
+        role TEXT,
+        tenant_id TEXT,
+        workspace_id TEXT,
+        created_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # AUDIT LOGS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT,
+        tenant_id TEXT,
+        workspace_id TEXT,
+        action TEXT,
+        entity TEXT,
+        entity_id TEXT,
+        metadata JSONB,
+        created_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # DEAD JOBS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS dead_jobs (
+        id TEXT PRIMARY KEY,
+        job_id TEXT,
+        workflow TEXT,
+        tenant_id TEXT,
+        workspace_id TEXT,
+        error TEXT,
+        payload JSONB,
+        created_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # STEP EXECUTIONS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS step_executions (
+        id TEXT PRIMARY KEY,
+        job_id TEXT,
+        workflow TEXT,
+        step_name TEXT,
+        status TEXT,
+        input JSONB,
+        output JSONB,
+        error TEXT,
+        started_at TIMESTAMP,
+        finished_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # CIRCUIT BREAKERS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS circuit_breakers (
+        workflow TEXT PRIMARY KEY,
+        state TEXT,
+        failure_count INTEGER,
+        last_failure TIMESTAMP,
+        opened_at TIMESTAMP
+    )
+    """)
+
+    # =========================
+    # JOB STEPS
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS job_steps (
+        id SERIAL PRIMARY KEY,
+        job_id TEXT,
+        step TEXT,
+        status TEXT,
+        result JSONB,
+        created_at TIMESTAMP DEFAULT NOW()
+    )
+    """)
+
+    # =========================
+    # NEXUS LEARNING
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS nexus_learning (
+        id SERIAL PRIMARY KEY,
+        timestamp TIMESTAMP,
+        type TEXT,
+        message TEXT,
+        workflow TEXT,
+        data JSONB
+    )
+    """)
+
+    # =========================
+    # DECISIONS LOG
+    # =========================
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS decisions_log (
+        id SERIAL PRIMARY KEY,
+        timestamp TIMESTAMP,
+        action TEXT,
+        reason TEXT
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS goals (
+    id TEXT PRIMARY KEY,
+    goal TEXT,
+    status TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\decision_engine.py
+================================================================================
+
+class DecisionEngine:
+
+    def decide(self, snapshot, risk, anomaly):
+
+        # riesgo alto
+        if risk == "HIGH":
+            return {
+                "action": "force_stable_mode",
+                "reason": "Riesgo alto detectado"
+            }
+
+        # anomalía detectada
+        if anomaly:
+            return {
+                "action": "investigate",
+                "reason": anomaly["message"]
+            }
+
+        # cola creciendo
+        if snapshot["queue_size"] > 20:
+            return {
+                "action": "scale_workers",
+                "reason": "Cola de trabajos elevada"
+            }
+
+        return None
+
+
+decision_engine = DecisionEngine()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\embeddings.py
+================================================================================
+
+import math
+
+
+def fake_embedding(text):
+
+    text = text.lower()
+
+    vector = []
+
+    for c in text[:128]:
+
+        vector.append(
+            ord(c) / 255
+        )
+
+    while len(vector) < 128:
+        vector.append(0)
+
+    return vector
+
+
+def cosine_similarity(a, b):
+
+    dot = sum(x*y for x,y in zip(a,b))
+
+    norm_a = math.sqrt(
+        sum(x*x for x in a)
+    )
+
+    norm_b = math.sqrt(
+        sum(x*x for x in b)
+    )
+
+    if norm_a == 0 or norm_b == 0:
+        return 0
+
+    return dot / (
+        norm_a * norm_b
+    )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\explainer.py
+================================================================================
+
+def explain_decision(decision, snapshot):
+
+    action = decision.get("action")
+
+    if action == "reduce_workers":
+
+        return (
+            f"He reducido los workers porque la tasa de error "
+            f"alcanzó {round(snapshot['error_rate']*100,2)}%."
+        )
+
+    if action == "scale_workers":
+
+        return (
+            f"He aumentado los workers porque la cola de trabajos "
+            f"llegó a {snapshot['queue_size']}."
+        )
+
+    if action == "force_stable_mode":
+
+        return (
+            "Activé modo estable porque hay circuit breakers abiertos."
+        )
+
+    if action == "investigate":
+
+        return decision.get("reason")
+
+    return "He tomado una acción automática para proteger el sistema."
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\governance.py
+================================================================================
+
+def evaluate_mode_request(requested_mode, metrics, circuit_state):
+
+    if requested_mode == "aggressive":
+
+        if any(state == "OPEN" for state in circuit_state.values()):
+            return "stable", "Riesgo sistémico detectado"
+
+        if metrics.get("error_rate", 0) > 0.2:
+            return "efficient", "Tasa de error elevada"
+
+    return requested_mode, None
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\learning.py
+================================================================================
+
+import uuid
+import json
+
+from core.database import get_connection
+
+
+def save_pattern(
+
+    pattern,
+    solution,
+    confidence=0.5,
+    metadata=None
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO learned_patterns
+        (
+            id,
+            pattern,
+            solution,
+            confidence,
+            metadata
+        )
+        VALUES (%s,%s,%s,%s,%s)
+    """, (
+        str(uuid.uuid4()),
+        pattern,
+        solution,
+        confidence,
+        json.dumps(metadata)
+        if metadata
+        else None
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def load_patterns(limit=20):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM learned_patterns
+        ORDER BY confidence DESC
+        LIMIT %s
+    """, (limit,))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\llm.py
+================================================================================
+
+import requests
+import re
+
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL = "llama3"
+
+
+SYSTEM_PROMPT = """
+Sos un generador de workflows para automatización de archivos en PC.
+RESPONDÉ SOLO JSON VÁLIDO.
+NO agregues texto antes ni después.
+NO expliques nada.
+
+IMPORTANTE:
+- NO busques en internet
+- NO uses open_url salvo que el usuario lo pida explícitamente
+- SIEMPRE priorizar acciones de sistema
+
+Formato obligatorio JSON:
+
+{
+  "steps": [
+    {
+      "action": "string",
+      "value": {}
+    }
+  ]
+}
+
+Acciones permitidas:
+- create_folder { "path": string }
+- move_files { "ext": string, "to": string }
+- open_url { "url": string }
+
+Ejemplo correcto:
+
+Usuario: ordenar pdf
+
+Respuesta:
+{
+  "steps": [
+    {
+      "action": "create_folder",
+      "value": {"path": "PDF"}
+    },
+    {
+      "action": "move_files",
+      "value": {"ext": ".pdf", "to": "PDF"}
+    }
+  ]
+}
+"""
+
+
+def extract_json(text):
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+
+    if match:
+        return match.group(0)
+
+    return None
+
+
+def generate_steps(prompt: str):
+
+    full_prompt = f"{SYSTEM_PROMPT}\n\nUsuario: {prompt}"
+
+    try:
+
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": MODEL,
+                "prompt": full_prompt,
+                "stream": False
+            },
+            timeout=60
+        )
+
+        print("🔌 STATUS:", response.status_code)
+        print("🔌 RAW RESPONSE:", response.text)
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        text = data.get("response", "").strip()
+
+        print("🧠 RAW LLM:", text)
+
+        return text
+
+    except Exception as e:
+
+        print("❌ LLM CONNECTION ERROR:", str(e))
+
+        raise Exception(f"Ollama error: {str(e)}")
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\logger.py
+================================================================================
+
+import logging
+import json
+from datetime import datetime
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record):
+
+        log_record = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+        }
+
+        if hasattr(record, "extra_data"):
+            log_record["data"] = record.extra_data
+
+        return json.dumps(log_record)
+
+
+logger = logging.getLogger("nexus")
+logger.setLevel(logging.INFO)
+
+handler = logging.StreamHandler()
+handler.setFormatter(JsonFormatter())
+
+logger.addHandler(handler)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\memory.py
+================================================================================
+
+from datetime import datetime
+
+class NexusMemory:
+
+    def __init__(self):
+        self.events = []
+
+    def remember(self, event):
+
+        self.events.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "event": event
+        })
+
+        if len(self.events) > 100:
+            self.events.pop(0)
+
+    def last_events(self):
+        return self.events[-10:]
+
+
+memory = NexusMemory()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\metrics.py
+================================================================================
+
+import time
+from datetime import datetime
+
+
+class Metrics:
+
+    def __init__(self):
+        self.start_time = time.time()
+
+        # contadores
+        self.counters = {}
+
+        # histogramas
+        self.histograms = {}
+
+        # gauges (estado actual)
+        self.gauges = {}
+
+        # métricas globales
+        self.total_workflows = 0
+        self.total_steps = 0
+        self.total_jobs = 0
+        self.total_errors = 0
+        self.active_jobs = 0
+
+    # =========================
+    # COUNTERS
+    # =========================
+
+    def inc(self, name):
+        self.counters[name] = self.counters.get(name, 0) + 1
+
+    def inc_job(self):
+        self.inc("jobs_created")
+        self.total_jobs += 1
+
+    def inc_error(self):
+        self.inc("jobs_failed")
+        self.total_errors += 1
+
+    # =========================
+    # HISTOGRAMS
+    # =========================
+
+    def observe(self, name, value):
+        if name not in self.histograms:
+            self.histograms[name] = []
+
+        self.histograms[name].append(value)
+
+    # =========================
+    # GAUGES
+    # =========================
+
+    def set_active_jobs(self, value):
+        self.active_jobs = value
+        self.gauges["active_jobs"] = value
+
+    def set_gauge(self, name, value):
+        self.gauges[name] = value
+
+    # =========================
+    # WORKFLOW METRICS
+    # =========================
+
+    def inc_workflow(self):
+        self.total_workflows += 1
+
+    def inc_step(self):
+        self.total_steps += 1
+
+    # =========================
+    # UPTIME
+    # =========================
+
+    def uptime(self):
+        return round(time.time() - self.start_time)
+
+    # =========================
+    # SNAPSHOT
+    # =========================
+
+    def snapshot(self):
+
+        return {
+            "uptime_seconds": self.uptime(),
+            "total_workflows_executed": self.total_workflows,
+            "total_steps_executed": self.total_steps,
+            "total_jobs_created": self.total_jobs,
+            "total_errors": self.total_errors,
+            "active_jobs": self.active_jobs,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+    # =========================
+    # CONCURRENCY INFO
+    # =========================
+
+    def concurrency_info(self, queue_size, workers):
+
+        return {
+            "queue_size": queue_size,
+            "max_workers": workers
+        }
+
+
+metrics = Metrics()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\mission_engine.py
+================================================================================
+
+import uuid
+
+from core.database import get_connection
+
+from core.workflow_generator import (
+    generate_workflow
+)
+
+from jobs.manager import manager
+
+
+async def create_mission(
+
+    goal,
+    model="llama3"
+):
+
+    mission_id = str(uuid.uuid4())
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO missions
+        (
+            id,
+            goal,
+            status
+        )
+        VALUES (%s,%s,%s)
+    """, (
+        mission_id,
+        goal,
+        "planning"
+    ))
+
+    conn.commit()
+
+    # =========================
+    # GENERATE DAG
+    # =========================
+    workflow = generate_workflow(
+        goal,
+        model
+    )
+
+    # =========================
+    # EXECUTE
+    # =========================
+    job_id = await manager.create_job(
+        workflow,
+        "system"
+    )
+
+    # =========================
+    # UPDATE
+    # =========================
+    cur.execute("""
+        UPDATE missions
+        SET status = %s,
+            result = %s
+        WHERE id = %s
+    """, (
+        "running",
+        str({
+            "job_id": job_id
+        }),
+        mission_id
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "mission_id": mission_id,
+        "job_id": job_id
+    }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\multimodal_memory.py
+================================================================================
+
+import uuid
+import json
+
+from core.database import get_connection
+
+
+def save_multimodal_memory(
+
+    agent,
+    image_path,
+    ocr_text,
+    objects,
+    metadata=None
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        INSERT INTO multimodal_memory
+        (
+            id,
+            agent,
+            image_path,
+            ocr_text,
+            objects,
+            metadata
+        )
+        VALUES (%s,%s,%s,%s,%s,%s)
+    """, (
+        str(uuid.uuid4()),
+        agent,
+        image_path,
+        ocr_text,
+        json.dumps(objects),
+        json.dumps(metadata)
+        if metadata
+        else None
+    ))
+
+    conn.commit()
+    conn.close()
+
+
+def load_recent_memories(
+    agent,
+    limit=10
+):
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT *
+        FROM multimodal_memory
+        WHERE agent = %s
+        ORDER BY created_at DESC
+        LIMIT %s
+    """, (
+        agent,
+        limit
+    ))
+
+    rows = cur.fetchall()
+
+    conn.close()
+
+    return [dict(r) for r in rows]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\nexus_state.py
+================================================================================
+
+from resilience.circuit import circuit
+from jobs import manager as manager_module
+
+class NexusState:
+
+    def __init__(self):
+        self.mode = "efficient"
+
+    def apply_mode(self, mode):
+
+        self.mode = mode
+
+        if mode == "stable":
+            circuit.threshold = 3
+            circuit.cooldown_seconds = 45
+            manager_module.manager.semaphore = manager_module.asyncio.Semaphore(2)
+
+        elif mode == "efficient":
+            circuit.threshold = 5
+            circuit.cooldown_seconds = 30
+            manager_module.manager.semaphore = manager_module.asyncio.Semaphore(4)
+
+        elif mode == "aggressive":
+            circuit.threshold = 8
+            circuit.cooldown_seconds = 15
+            manager_module.manager.semaphore = manager_module.asyncio.Semaphore(8)
+
+nexus_state = NexusState()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\object_detection.py
+================================================================================
+
+from ultralytics import YOLO
+
+import cv2
+
+
+model = YOLO("yolov8n.pt")
+
+
+def detect_objects(
+    image_path
+):
+
+    results = model(image_path)
+
+    detections = []
+
+    for r in results:
+
+        boxes = r.boxes
+
+        for box in boxes:
+
+            cls = int(box.cls[0])
+
+            conf = float(box.conf[0])
+
+            coords = box.xyxy[0].tolist()
+
+            label = model.names[cls]
+
+            detections.append({
+
+                "label": label,
+
+                "confidence": conf,
+
+                "x1": coords[0],
+
+                "y1": coords[1],
+
+                "x2": coords[2],
+
+                "y2": coords[3]
+            })
+
+    return detections
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\operator_agent.py
+================================================================================
+
+import asyncio
+import json
+import re
+
+import pyautogui
+
+from core.ai_agent import ask_agent
+
+from jobs.actions import execute_action
+
+from core.vision import (
+    detect_ui_elements
+)
+
+from core.object_detection import (
+    detect_objects
+)
+
+from core.multimodal_memory import (
+    save_multimodal_memory,
+    load_recent_memories
+)
+
+from core.vector_memory import (
+    save_vector_memory,
+    search_memory
+)
+
+from core.learning import (
+    load_patterns
+)
+
+from core.security import (
+    MAX_AUTONOMOUS_STEPS
+)
+
+
+class OperatorAgent:
+
+    def __init__(self):
+
+        self.running = False
+
+    async def execute_goal(
+
+        self,
+
+        goal,
+
+        max_steps=20
+    ):
+
+        # =========================
+        # SECURITY LIMIT
+        # =========================
+        max_steps = min(
+            max_steps,
+            MAX_AUTONOMOUS_STEPS
+        )
+
+        self.running = True
+
+        print(f"🧠 OPERATOR GOAL: {goal}")
+
+        # =========================
+        # LOAD MEMORIES
+        # =========================
+        visual_memories = load_recent_memories(
+            "operator_agent",
+            limit=5
+        )
+
+        semantic_memories = search_memory(
+            "main_agent",
+            goal
+        )
+
+        learned_patterns = load_patterns()
+
+        # =========================
+        # BUILD MEMORY CONTEXT
+        # =========================
+        visual_context = "\n".join([
+
+            f"""
+OCR:
+{m["ocr_text"]}
+
+Objects:
+{m["objects"]}
+"""
+
+            for m in visual_memories
+        ])
+
+        semantic_context = "\n".join([
+
+            m["memory"]["content"]
+
+            for m in semantic_memories
+        ])
+
+        patterns_context = "\n".join([
+
+            f"""
+Pattern:
+{p["pattern"]}
+
+Solution:
+{p["solution"]}
+"""
+
+            for p in learned_patterns
+        ])
+
+        # =========================
+        # EXECUTION LOOP
+        # =========================
+        for step in range(max_steps):
+
+            print(f"\n👁 OPERATOR STEP {step+1}")
+
+            try:
+
+                # =========================
+                # SCREENSHOT
+                # =========================
+                image = pyautogui.screenshot()
+
+                path = "operator_screen.png"
+
+                image.save(path)
+
+                # =========================
+                # OCR UI
+                # =========================
+                ui = detect_ui_elements(
+                    path
+                )
+
+                # =========================
+                # OBJECT DETECTION
+                # =========================
+                objects = detect_objects(
+                    path
+                )
+
+                # =========================
+                # BUILD UI TEXT
+                # =========================
+                ui_text = "\n".join([
+
+                    el["text"]
+
+                    for el in ui
+                ])
+
+                # =========================
+                # SAVE MULTIMODAL MEMORY
+                # =========================
+                save_multimodal_memory(
+
+                    "operator_agent",
+
+                    path,
+
+                    ui_text,
+
+                    objects,
+
+                    {
+                        "goal": goal,
+                        "step": step + 1
+                    }
+                )
+
+                # =========================
+                # PROMPT
+                # =========================
+                prompt = f"""
+You are an autonomous AI operator.
+
+Goal:
+{goal}
+
+Current Step:
+{step+1}
+
+Visible UI:
+{ui_text}
+
+Detected Objects:
+{objects}
+
+Previous Visual Memories:
+{visual_context}
+
+Semantic Memories:
+{semantic_context}
+
+Learned Repair Patterns:
+{patterns_context}
+
+You can use these actions:
+
+- open_url
+- vision_click
+- type_text
+- screenshot
+- focus_window
+- detect_objects
+- vision_read
+
+Rules:
+- Think step by step
+- Avoid loops
+- Be efficient
+- Complete the goal safely
+
+Respond ONLY valid JSON.
+
+Open URL:
+
+{{
+  "action": "open_url",
+  "params": {{
+    "url": "https://google.com"
+  }}
+}}
+
+Click:
+
+{{
+  "action": "vision_click",
+  "params": {{
+    "target": "Search"
+  }}
+}}
+
+Type:
+
+{{
+  "action": "type_text",
+  "params": {{
+    "text": "Hello"
+  }}
+}}
+
+Focus Window:
+
+{{
+  "action": "focus_window",
+  "params": {{
+    "title": "Chrome"
+  }}
+}}
+
+Done:
+
+{{
+  "action": "done"
+}}
+"""
+
+                # =========================
+                # ASK AGENT
+                # =========================
+                response = ask_agent(
+                    prompt
+                )
+
+                print(f"🧠 OPERATOR RESPONSE:\n{response}")
+
+                # =========================
+                # EXTRACT JSON
+                # =========================
+                match = re.search(
+                    r"\{.*\}",
+                    response,
+                    re.DOTALL
+                )
+
+                if not match:
+
+                    print("⚠️ INVALID JSON RESPONSE")
+
+                    continue
+
+                parsed = json.loads(
+                    match.group(0)
+                )
+
+                action = parsed.get(
+                    "action"
+                )
+
+                # =========================
+                # DONE
+                # =========================
+                if action == "done":
+
+                    print("✅ GOAL COMPLETE")
+
+                    save_vector_memory(
+
+                        "main_agent",
+
+                        f"""
+Goal completed:
+
+{goal}
+"""
+                    )
+
+                    return {
+                        "success": True,
+                        "goal": goal
+                    }
+
+                # =========================
+                # PARAMS
+                # =========================
+                params = parsed.get(
+                    "params",
+                    {}
+                )
+
+                print(
+                    f"⚙️ EXECUTING: {action}"
+                )
+
+                print(
+                    f"📦 PARAMS: {params}"
+                )
+
+                # =========================
+                # EXECUTE ACTION
+                # =========================
+                result = await execute_action(
+                    action,
+                    params
+                )
+
+                print(
+                    f"✅ RESULT: {result}"
+                )
+
+                # =========================
+                # SAVE EXPERIENCE
+                # =========================
+                save_vector_memory(
+
+                    "main_agent",
+
+                    f"""
+Goal:
+{goal}
+
+Action:
+{action}
+
+Params:
+{params}
+
+Result:
+{result}
+"""
+                )
+
+                # =========================
+                # SMALL DELAY
+                # =========================
+                await asyncio.sleep(2)
+
+            except Exception as e:
+
+                print(
+                    f"💥 OPERATOR ERROR: {e}"
+                )
+
+                save_vector_memory(
+
+                    "main_agent",
+
+                    f"""
+Operator error:
+
+{str(e)}
+"""
+                )
+
+                await asyncio.sleep(2)
+
+        # =========================
+        # MAX STEPS REACHED
+        # =========================
+        print("⚠️ MAX STEPS REACHED")
+
+        return {
+            "success": False,
+            "error": "Max steps reached"
+        }
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\persistent_agents.py
+================================================================================
+
+import asyncio
+import os
+import json
+import re
+
+from core.ai_agent import ask_agent
+
+from jobs.actions import execute_action
+
+
+class DesktopWatcherAgent:
+
+    def __init__(self):
+
+        self.running = True
+
+        self.previous_files = set()
+
+    async def loop(self):
+
+        print("👁 DesktopWatcher started")
+
+        while self.running:
+
+            try:
+
+                files = set(
+                    os.listdir(
+                        "C:/Users/cdi40/Desktop"
+                    )
+                )
+
+                new_files = (
+                    files
+                    - self.previous_files
+                )
+
+                if new_files:
+
+                    print(
+                        f"📄 NEW FILES: {new_files}"
+                    )
+
+                    await self.handle_new_files(
+                        list(new_files)
+                    )
+
+                self.previous_files = files
+
+                await asyncio.sleep(5)
+
+            except Exception as e:
+
+                print(
+                    f"Watcher error: {e}"
+                )
+
+                await asyncio.sleep(10)
+
+    async def handle_new_files(
+        self,
+        files
+    ):
+
+        prompt = f"""
+You are a desktop automation AI.
+
+New files:
+
+{files}
+
+Decide what to do.
+
+Respond ONLY valid JSON.
+
+{{
+  "action": "...",
+  "params": {{}}
+}}
+"""
+
+        response = ask_agent(
+            prompt
+        )
+
+        print(f"🧠 WATCHER: {response}")
+
+        match = re.search(
+           r"\{.*\}",
+           response,
+           re.DOTALL
+        )
+
+        if not match:
+          return
+
+        parsed = json.loads(
+           match.group(0)
+        )
+
+        action = parsed.get(
+          "action"
+        )
+
+        params = parsed.get(
+          "params",
+          {}
+        )
+
+        await execute_action(
+          action,
+          params
+        )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\security.py
+================================================================================
+
+BLOCKED_PATHS = [
+
+    "C:/Windows",
+    "C:/Program Files",
+    "C:/Users"
+]
+
+BLOCKED_DOMAINS = [
+
+    "malware",
+    "phishing",
+    "tor"
+]
+
+MAX_AUTONOMOUS_STEPS = 20
+
+
+def validate_action(
+    action,
+    params
+):
+
+    # =========================
+    # BLOCK DELETE
+    # =========================
+    if action == "delete_files":
+
+        return False, "delete_files blocked"
+
+    # =========================
+    # VALIDATE PATHS
+    # =========================
+    path = (
+        params.get("path")
+        or params.get("to")
+        or ""
+    )
+
+    for blocked in BLOCKED_PATHS:
+
+        if blocked.lower() in path.lower():
+
+            return False, (
+                f"Blocked path: {blocked}"
+            )
+
+    # =========================
+    # VALIDATE URLS
+    # =========================
+    url = params.get(
+        "url",
+        ""
+    )
+
+    for domain in BLOCKED_DOMAINS:
+
+        if domain in url.lower():
+
+            return False, (
+                f"Blocked domain: {domain}"
+            )
+
+    return True, "safe"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\self_model.py
+================================================================================
+
+from core.metrics import metrics
+from resilience.circuit import circuit
+from core.database import get_connection
+from datetime import datetime
+import json
+
+
+class SelfModel:
+
+    def __init__(self):
+        self.last_evaluation = None
+        self.history = []
+
+    # =========================
+    # SYSTEM SNAPSHOT
+    # =========================
+
+    def snapshot(self):
+
+        errors = metrics.counters.get("jobs_failed", 0)
+        done = metrics.counters.get("jobs_done", 0)
+
+        total = errors + done
+
+        error_rate = errors / total if total > 0 else 0
+
+        open_circuits = [
+            k for k, v in circuit.state.items()
+            if v == "OPEN"
+        ]
+
+        queue_size = metrics.gauges.get("active_jobs", 0)
+
+        snapshot = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "error_rate": error_rate,
+            "open_circuits": open_circuits,
+            "queue_size": queue_size,
+            "total_jobs": total
+        }
+
+        # guardar historial
+        self.history.append(snapshot)
+
+        # mantener historial corto (~5 minutos si loop es 10s)
+        if len(self.history) > 30:
+            self.history.pop(0)
+
+        return snapshot
+
+    # =========================
+    # RISK EVALUATION
+    # =========================
+
+    def evaluate_risk(self, snapshot):
+
+        if snapshot["open_circuits"]:
+            return "HIGH"
+
+        if snapshot["error_rate"] > 0.3:
+            return "MEDIUM"
+
+        return "LOW"
+
+    # =========================
+    # HEALTH SCORE
+    # =========================
+
+    def health_score(self, snapshot):
+
+        score = 100
+
+        # penalizar error rate
+        score -= snapshot["error_rate"] * 50
+
+        # penalizar circuit breakers abiertos
+        score -= len(snapshot["open_circuits"]) * 20
+
+        # penalizar cola grande
+        if snapshot["queue_size"] > 10:
+            score -= 10
+
+        if score < 0:
+            score = 0
+
+        return round(score, 2)
+
+    # =========================
+    # ANOMALY DETECTION
+    # =========================
+
+    def detect_anomaly(self):
+
+        if len(self.history) < 5:
+            return None
+
+        last = self.history[-1]
+        prev = self.history[-5]
+
+        # spike de errores
+        if last["error_rate"] > prev["error_rate"] * 2 and last["error_rate"] > 0.2:
+            return {
+                "type": "error_spike",
+                "message": "He detectado un aumento abrupto en la tasa de errores."
+            }
+
+        # crecimiento de cola
+        if last["queue_size"] > prev["queue_size"] + 10:
+            return {
+                "type": "queue_growth",
+                "message": "La cola de trabajos está creciendo rápidamente."
+            }
+
+        # múltiples circuitos abiertos
+        if len(last["open_circuits"]) >= 2:
+            return {
+                "type": "multiple_circuits",
+                "message": "Varios circuit breakers están abiertos."
+            }
+
+        return None
+
+    # =========================
+    # DECISION ENGINE
+    # =========================
+
+    def propose_action(self, snapshot, risk):
+
+        if risk == "HIGH":
+            return {
+                "action": "force_stable_mode",
+                "reason": "Circuitos abiertos detectados"
+            }
+
+        if risk == "MEDIUM":
+            return {
+                "action": "reduce_workers",
+                "reason": "Tasa de error elevada"
+            }
+
+        return None
+
+    # =========================
+    # DECISION LOG
+    # =========================
+
+    def log_decision(self, decision):
+
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO decisions_log
+            (timestamp, action, reason)
+            VALUES (%s, %s, %s)
+        """, (
+            datetime.utcnow(),
+            decision["action"],
+            decision["reason"]
+        ))
+
+        conn.commit()
+        conn.close()
+
+
+self_model = SelfModel()
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\system_agent.py
+================================================================================
+
+import asyncio
+
+from core.ai_agent import ask_agent
+
+from core.system_monitor import (
+    get_running_processes
+)
+
+from core.accessibility import (
+    get_active_window
+)
+
+
+class SystemAgent:
+
+    def __init__(self):
+
+        self.running = True
+
+    async def loop(self):
+
+        print("🧠 SYSTEM AGENT STARTED")
+
+        while self.running:
+
+            try:
+
+                processes = (
+                    get_running_processes()
+                )
+
+                active = (
+                    get_active_window()
+                )
+
+                prompt = f"""
+You are an AI operating system supervisor.
+
+Active Window:
+{active}
+
+Processes:
+{processes[:30]}
+
+Analyze user context.
+
+Explain:
+- what the user is doing
+- what applications are active
+- possible automations
+- possible assistance
+
+Respond briefly.
+"""
+
+                response = ask_agent(
+                    prompt
+                )
+
+                print(
+                    f"🧠 SYSTEM ANALYSIS:\n{response}"
+                )
+
+                await asyncio.sleep(30)
+
+            except Exception as e:
+
+                print(
+                    f"System agent error: {e}"
+                )
+
+                await asyncio.sleep(10)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: backend\core\system_monitor.py
+================================================================================
+
+import psutil
+
+
+def get_running_processes():
+
+    result = []
+
+    for p in psutil.process_iter([
+
+        "pid",
+        "name"
+    ]):
+
+        try:
+
+            result.append({
+
+                "pid": p.info["pid"],
+
+                "name": p.info["name"]
+            })
+
+        except:
+            pass
+
+    return result
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

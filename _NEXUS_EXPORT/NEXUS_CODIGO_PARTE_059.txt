@@ -1,0 +1,1716 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\tests\test_semantic_change.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentChange,
+    DocumentChangeType,
+    DocumentSemanticChange,
+)
+
+
+def build_source_change() -> DocumentChange:
+    return DocumentChange.modified(
+        before="El contrato tiene vigencia de 12 meses.",
+        after="El contrato tiene vigencia de 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+
+def test_semantic_change_preserves_source_change():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+    )
+
+    assert result.source_change == source_change
+    assert result.source_change.change_type == (
+        DocumentChangeType.MODIFIED
+    )
+
+
+def test_semantic_change_requires_meaning():
+    source_change = build_source_change()
+
+    with pytest.raises(
+        ValueError,
+        match="Semantic change meaning cannot be empty",
+    ):
+        DocumentSemanticChange(
+            source_change=source_change,
+            meaning="   ",
+        )
+
+
+def test_semantic_change_accepts_topics():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+        topics=(" contrato ", "vigencia", " "),
+    )
+
+    assert result.topics == (
+        "contrato",
+        "vigencia",
+    )
+
+
+def test_semantic_change_accepts_impact():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+        impact="Requiere revisión contractual.",
+    )
+
+    assert result.impact == (
+        "Requiere revisión contractual."
+    )
+
+
+def test_semantic_change_normalizes_empty_impact():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+        impact="   ",
+    )
+
+    assert result.impact is None
+
+
+def test_semantic_change_accepts_confidence():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+        confidence=0.92,
+    )
+
+    assert result.confidence == 0.92
+
+
+@pytest.mark.parametrize(
+    "confidence",
+    [-0.01, 1.01],
+)
+def test_semantic_change_rejects_invalid_confidence(
+    confidence,
+):
+    source_change = build_source_change()
+
+    with pytest.raises(
+        ValueError,
+        match="Semantic change confidence must be between 0 and 1",
+    ):
+        DocumentSemanticChange(
+            source_change=source_change,
+            meaning="La vigencia contractual fue modificada.",
+            confidence=confidence,
+        )
+
+
+def test_semantic_change_accepts_boundary_confidence_values():
+    source_change = build_source_change()
+
+    low = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="Cambio detectado.",
+        confidence=0.0,
+    )
+
+    high = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="Cambio detectado.",
+        confidence=1.0,
+    )
+
+    assert low.confidence == 0.0
+    assert high.confidence == 1.0
+
+
+def test_semantic_change_is_immutable():
+    source_change = build_source_change()
+
+    result = DocumentSemanticChange(
+        source_change=source_change,
+        meaning="La vigencia contractual fue modificada.",
+    )
+
+    with pytest.raises(AttributeError):
+        result.meaning = "Otro significado"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_text_ingestion.py
+================================================================================
+
+from documents import (
+    DocumentArtifact,
+    IngestionResult,
+    TextIngestor,
+)
+
+
+class FakeArtifactReader:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.received_artifact = None
+
+    def read(self, artifact: DocumentArtifact) -> str:
+        self.received_artifact = artifact
+        return self.text
+
+
+def test_text_ingestor_reads_artifact_and_creates_content():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/notes.txt",
+    )
+
+    reader = FakeArtifactReader(
+        "Este es el contenido del documento.",
+    )
+
+    ingestor = TextIngestor(reader)
+
+    result = ingestor.ingest(artifact)
+
+    assert isinstance(result, IngestionResult)
+    assert result.artifact is artifact
+    assert result.content.text == "Este es el contenido del documento."
+    assert result.content.content_type == "text/plain"
+    assert reader.received_artifact is artifact
+
+
+def test_text_ingestor_preserves_empty_text():
+    artifact = DocumentArtifact.create(
+        location="local:/documents/empty.txt",
+    )
+
+    reader = FakeArtifactReader("")
+
+    result = TextIngestor(reader).ingest(artifact)
+
+    assert result.content.text == ""
+    assert result.content.content_type == "text/plain"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_type_detection.py
+================================================================================
+
+import pytest
+
+from documents import (
+    ArtifactTypeResolver,
+    DocumentArtifact,
+    DocumentType,
+    ExtensionTypeDetectionStrategy,
+    DeclaredTypeDetectionStrategy,
+)
+
+
+def test_extension_strategy_resolves_txt():
+    strategy = ExtensionTypeDetectionStrategy()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = strategy.resolve(artifact)
+
+    assert result is not None
+    assert result.mime_type == "text/plain"
+
+
+def test_extension_strategy_returns_none_for_unknown_extension():
+    strategy = ExtensionTypeDetectionStrategy()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.xyz",
+    )
+
+    result = strategy.resolve(artifact)
+
+    assert result is None
+
+
+def test_extension_strategy_returns_none_for_empty_location():
+    strategy = ExtensionTypeDetectionStrategy()
+
+    artifact = DocumentArtifact.create(
+        location="   ",
+    )
+
+    result = strategy.resolve(artifact)
+
+    assert result is None
+
+
+def test_resolver_uses_registered_strategy():
+    class FakeStrategy:
+        def resolve(self, artifact):
+            return DocumentType.from_mime_type(
+                "application/custom"
+            )
+
+    resolver = ArtifactTypeResolver(
+        strategies=[FakeStrategy()]
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/unknown.xyz",
+    )
+
+    result = resolver.resolve(artifact)
+
+    assert result.mime_type == "application/custom"
+
+
+def test_resolver_uses_strategies_in_order():
+    calls = []
+
+    class FirstStrategy:
+        def resolve(self, artifact):
+            calls.append("first")
+            return None
+
+    class SecondStrategy:
+        def resolve(self, artifact):
+            calls.append("second")
+            return DocumentType.from_mime_type(
+                "application/custom"
+            )
+
+    resolver = ArtifactTypeResolver(
+        strategies=[
+            FirstStrategy(),
+            SecondStrategy(),
+        ]
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/unknown.xyz",
+    )
+
+    result = resolver.resolve(artifact)
+
+    assert result.mime_type == "application/custom"
+    assert calls == [
+        "first",
+        "second",
+    ]
+
+
+def test_resolver_stops_after_successful_strategy():
+    calls = []
+
+    class FirstStrategy:
+        def resolve(self, artifact):
+            calls.append("first")
+            return DocumentType.from_mime_type(
+                "text/plain"
+            )
+
+    class SecondStrategy:
+        def resolve(self, artifact):
+            calls.append("second")
+            return DocumentType.from_mime_type(
+                "application/pdf"
+            )
+
+    resolver = ArtifactTypeResolver(
+        strategies=[
+            FirstStrategy(),
+            SecondStrategy(),
+        ]
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    result = resolver.resolve(artifact)
+
+    assert result.mime_type == "text/plain"
+    assert calls == ["first"]
+
+
+def test_resolver_rejects_unresolved_artifact():
+    resolver = ArtifactTypeResolver(
+        strategies=[]
+    )
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.xyz",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot resolve document type",
+    ):
+        resolver.resolve(artifact)
+
+def test_resolver_prefers_declared_type_over_extension():
+    from documents import DeclaredTypeDetectionStrategy
+
+    declared_strategy = DeclaredTypeDetectionStrategy()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    declared_strategy.declare(
+        artifact,
+        "application/pdf",
+    )
+
+    resolver = ArtifactTypeResolver(
+        strategies=[
+            declared_strategy,
+            ExtensionTypeDetectionStrategy(),
+        ]
+    )
+
+    result = resolver.resolve(
+        artifact
+    )
+
+    assert result.mime_type == "application/pdf"
+
+
+def test_default_resolver_contains_declared_and_extension_strategies():
+    resolver = ArtifactTypeResolver()
+
+    strategies = resolver.strategies()
+
+    assert len(strategies) == 2
+    assert isinstance(
+        strategies[0],
+        DeclaredTypeDetectionStrategy,
+    )
+    assert isinstance(
+        strategies[1],
+        ExtensionTypeDetectionStrategy,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_type_detection_evidence.py
+================================================================================
+
+from documents import (
+    ArtifactTypeResolver,
+    DocumentArtifact,
+    DocumentTypeDetectionEvidence,
+    ExtensionTypeDetectionStrategy,
+)
+
+
+def test_resolver_returns_detection_evidence():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/example.txt",
+    )
+
+    result = resolver.resolve_with_evidence(
+        artifact
+    )
+
+    assert isinstance(
+        result,
+        DocumentTypeDetectionEvidence,
+    )
+
+    assert result.detected_type.mime_type == (
+        "text/plain"
+    )
+
+    assert result.strategy == (
+        "ExtensionTypeDetectionStrategy"
+    )
+
+
+def test_resolve_preserves_existing_contract():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/example.txt",
+    )
+
+    result = resolver.resolve(artifact)
+
+    assert result.mime_type == "text/plain"
+
+
+def test_detection_evidence_exposes_mime_type():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/example.txt",
+    )
+
+    result = resolver.resolve_with_evidence(
+        artifact
+    )
+
+    assert result.mime_type == "text/plain"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_type_validation.py
+================================================================================
+
+from documents import (
+    DocumentType,
+    DocumentTypeValidation,
+    DocumentTypeValidator,
+)
+
+
+def test_validation_reports_matching_types():
+    validator = DocumentTypeValidator()
+
+    result = validator.validate(
+        declared_type="text/plain",
+        detected_type=DocumentType.from_mime_type(
+            "text/plain"
+        ),
+    )
+
+    assert isinstance(
+        result,
+        DocumentTypeValidation,
+    )
+    assert result.matches
+    assert not result.mismatch
+
+
+def test_validation_reports_mismatching_types():
+    validator = DocumentTypeValidator()
+
+    result = validator.validate(
+        declared_type="text/plain",
+        detected_type=DocumentType.from_mime_type(
+            "application/pdf"
+        ),
+    )
+
+    assert not result.matches
+    assert result.mismatch
+
+
+def test_validation_accepts_document_type_as_declared_type():
+    validator = DocumentTypeValidator()
+
+    declared_type = DocumentType.from_mime_type(
+        "text/plain"
+    )
+
+    result = validator.validate(
+        declared_type=declared_type,
+        detected_type=declared_type,
+    )
+
+    assert result.matches
+
+
+def test_validation_normalizes_declared_mime_type():
+    validator = DocumentTypeValidator()
+
+    result = validator.validate(
+        declared_type=" TEXT/PLAIN ",
+        detected_type=DocumentType.from_mime_type(
+            "text/plain"
+        ),
+    )
+
+    assert result.matches
+
+
+def test_validation_exposes_both_types():
+    validator = DocumentTypeValidator()
+
+    result = validator.validate(
+        declared_type="text/plain",
+        detected_type=DocumentType.from_mime_type(
+            "application/pdf"
+        ),
+    )
+
+    assert (
+        result.declared_type.mime_type
+        == "text/plain"
+    )
+    assert (
+        result.detected_type.mime_type
+        == "application/pdf"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_version_comparison.py
+================================================================================
+
+from documents import (
+    DocumentContentVersion,
+    DocumentContentVersionStore,
+    DocumentVersionComparator,
+    DocumentVersionResolver,
+)
+
+
+def add_version(
+    store: DocumentContentVersionStore,
+    document_id: str,
+    version: int,
+    content_id: str,
+) -> DocumentContentVersion:
+    content_version = DocumentContentVersion.create(
+        document_id=document_id,
+        content_id=content_id,
+        version=version,
+        content_type="text/plain",
+    )
+    store.add(content_version)
+    return content_version
+
+
+def build_resolution(
+    document_id: str = "doc-1",
+    from_version: int = 1,
+    from_content_id: str = "content-1",
+    to_version: int = 2,
+    to_content_id: str = "content-2",
+):
+    store = DocumentContentVersionStore()
+
+    add_version(
+        store,
+        document_id=document_id,
+        version=from_version,
+        content_id=from_content_id,
+    )
+
+    add_version(
+        store,
+        document_id=document_id,
+        version=to_version,
+        content_id=to_content_id,
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    return resolver.resolve_pair(
+        document_id=document_id,
+        from_version=from_version,
+        to_version=to_version,
+    )
+
+
+def test_comparator_detects_changed_content():
+    resolution = build_resolution(
+        from_content_id="content-1",
+        to_content_id="content-2",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    result = comparator.compare(resolution)
+
+    assert result.document_id == "doc-1"
+    assert result.from_version == 1
+    assert result.to_version == 2
+    assert result.from_content_id == "content-1"
+    assert result.to_content_id == "content-2"
+    assert result.changed is True
+    assert result.unchanged is False
+
+
+def test_comparator_detects_unchanged_content():
+    resolution = build_resolution(
+        from_content_id="content-1",
+        to_content_id="content-1",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    result = comparator.compare(resolution)
+
+    assert result.changed is False
+    assert result.unchanged is True
+
+
+def test_comparator_preserves_document_identity():
+    resolution = build_resolution(
+        document_id="contract-123",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    result = comparator.compare(resolution)
+
+    assert result.document_id == "contract-123"
+
+
+def test_comparator_preserves_version_numbers():
+    resolution = build_resolution(
+        from_version=3,
+        from_content_id="content-3",
+        to_version=7,
+        to_content_id="content-7",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    result = comparator.compare(resolution)
+
+    assert result.from_version == 3
+    assert result.to_version == 7
+
+
+def test_comparator_preserves_content_ids():
+    resolution = build_resolution(
+        from_content_id="content-before",
+        to_content_id="content-after",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    result = comparator.compare(resolution)
+
+    assert result.from_content_id == "content-before"
+    assert result.to_content_id == "content-after"
+
+
+def test_comparator_is_deterministic():
+    resolution = build_resolution(
+        from_content_id="content-a",
+        to_content_id="content-b",
+    )
+
+    comparator = DocumentVersionComparator()
+
+    first = comparator.compare(resolution)
+    second = comparator.compare(resolution)
+
+    assert first == second
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_version_resolver.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentContentVersion,
+    DocumentContentVersionStore,
+    DocumentVersionResolver,
+)
+
+
+def build_store() -> DocumentContentVersionStore:
+    return DocumentContentVersionStore()
+
+
+def add_version(
+    store: DocumentContentVersionStore,
+    document_id: str,
+    version: int,
+    content_id: str,
+) -> DocumentContentVersion:
+    content_version = DocumentContentVersion.create(
+        document_id=document_id,
+        content_id=content_id,
+        version=version,
+        content_type="text/plain",
+    )
+    store.add(content_version)
+    return content_version
+
+
+def test_resolver_returns_specific_version():
+    store = build_store()
+
+    v1 = add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_version("doc-1", 1)
+
+    assert result == v1
+
+
+def test_resolver_raises_when_version_does_not_exist():
+    store = build_store()
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    with pytest.raises(
+        ValueError,
+        match="Document content version not found: doc-1 v2",
+    ):
+        resolver.resolve_version("doc-1", 2)
+
+
+def test_resolver_returns_latest_version():
+    store = build_store()
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    v2 = add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    v3 = add_version(
+        store,
+        document_id="doc-1",
+        version=3,
+        content_id="content-3",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_latest("doc-1")
+
+    assert result == v3
+    assert result != v2
+
+
+def test_resolver_raises_when_document_has_no_versions():
+    store = build_store()
+    resolver = DocumentVersionResolver(store)
+
+    with pytest.raises(
+        ValueError,
+        match="No content versions found for document: doc-1",
+    ):
+        resolver.resolve_latest("doc-1")
+
+
+def test_resolver_returns_previous_version():
+    store = build_store()
+
+    v1 = add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=3,
+        content_id="content-3",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_previous("doc-1", version=3)
+
+    assert result.version == 2
+    assert result.content_id == "content-2"
+
+
+def test_resolver_previous_defaults_to_latest():
+    store = build_store()
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    v2 = add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=3,
+        content_id="content-3",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_previous("doc-1")
+
+    assert result == v2
+
+
+def test_resolver_raises_when_previous_version_does_not_exist():
+    store = build_store()
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    with pytest.raises(
+        ValueError,
+        match="No previous content version found for document: doc-1 v1",
+    ):
+        resolver.resolve_previous("doc-1", version=1)
+
+
+def test_resolver_builds_explicit_version_pair():
+    store = build_store()
+
+    v1 = add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    v2 = add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_pair(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+    )
+
+    assert result.document_id == "doc-1"
+    assert result.from_version == v1
+    assert result.to_version == v2
+
+
+def test_resolver_builds_latest_pair():
+    store = build_store()
+
+    v1 = add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    v2 = add_version(
+        store,
+        document_id="doc-1",
+        version=2,
+        content_id="content-2",
+    )
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=3,
+        content_id="content-3",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_latest_pair("doc-1")
+
+    assert result.document_id == "doc-1"
+    assert result.from_version == v2
+    assert result.to_version.version == 3
+    assert result.to_version != v1
+
+
+def test_resolver_rejects_same_version_pair():
+    store = build_store()
+
+    add_version(
+        store,
+        document_id="doc-1",
+        version=1,
+        content_id="content-1",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    with pytest.raises(
+        ValueError,
+        match="Cannot resolve a version comparison pair with the same version",
+    ):
+        resolver.resolve_pair(
+            document_id="doc-1",
+            from_version=1,
+            to_version=1,
+        )
+
+
+def test_resolver_does_not_mix_versions_between_documents():
+    store = build_store()
+
+    doc_a_v1 = add_version(
+        store,
+        document_id="doc-a",
+        version=1,
+        content_id="content-a-1",
+    )
+
+    add_version(
+        store,
+        document_id="doc-b",
+        version=1,
+        content_id="content-b-1",
+    )
+
+    resolver = DocumentVersionResolver(store)
+
+    result = resolver.resolve_version("doc-a", 1)
+
+    assert result == doc_a_v1
+    assert result.document_id == "doc-a"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\pyproject.toml
+================================================================================
+
+[project]
+name = "engine"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "diego", email = "dinsaurralde@yahoo.com.ar" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "memory",
+    "response",
+]
+
+[project.scripts]
+engine = "engine:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+memory = { workspace = true }
+response = { workspace = true }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\src\engine\__init__.py
+================================================================================
+
+from .engine import Engine
+
+__all__ = [
+    "Engine",
+]
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\engine\src\engine\cognitive_capabilities.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from documents.cognitive import (
+    DocumentCognitiveAccess,
+    DocumentCognitiveResult,
+)
+from processes.cognitive import (
+    ProcessCognitiveAccess,
+    ProcessCognitiveResult,
+)
+from processes.models import Process
+from rules.cognitive import (
+    RuleCognitiveAccess,
+    RuleCognitiveResult,
+)
+from rules.models import Rule
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityContext:
+    """
+    Contexto disponible para una operación cognitiva.
+
+    Mantiene la información de entrada separada de las
+    implementaciones concretas de las capabilities.
+    """
+
+    context: object
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityInvocation:
+    """
+    Representa una capability cognitiva seleccionada,
+    pero todavía no ejecutada.
+    """
+
+    capability: str
+    operation: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityDescriptor:
+    """
+    Describe una capability cognitiva disponible.
+
+    El descriptor permite separar:
+
+    - qué capability existe
+    - qué operación expone
+    - qué acción puede seleccionarla
+
+    No contiene implementación ni ejecuta nada.
+    """
+
+    capability: str
+    operation: str
+    action: str
+
+
+@dataclass(frozen=True, slots=True)
+class CognitiveCapabilityOperation:
+    """
+    Describe una operación cognitiva disponible.
+
+    Representa la capacidad concreta que el Cognitive Core
+    puede utilizar.
+    """
+
+    capability: str
+    operation: str
+    action: str
+
+
+class CognitiveCapabilityRouter:
+    """
+    Punto de entrada para que el Cognitive Core utilice capabilities.
+
+    No conoce stores ni detalles internos de Documents, Processes o Rules.
+    """
+
+    def __init__(
+        self,
+        *,
+        document_access: DocumentCognitiveAccess | None = None,
+        process_access: ProcessCognitiveAccess | None = None,
+        rule_access: RuleCognitiveAccess | None = None,
+    ) -> None:
+        self._document_access = document_access
+        self._process_access = process_access
+        self._rule_access = rule_access
+
+    @property
+    def document_access(self) -> DocumentCognitiveAccess | None:
+        return self._document_access
+
+    @property
+    def process_access(self) -> ProcessCognitiveAccess | None:
+        return self._process_access
+
+    @property
+    def rule_access(self) -> RuleCognitiveAccess | None:
+        return self._rule_access
+
+    @property
+    def descriptors(self) -> tuple[CognitiveCapabilityDescriptor, ...]:
+        """
+        Devuelve las capabilities cognitivas actualmente disponibles.
+        """
+
+        descriptors: list[CognitiveCapabilityDescriptor] = []
+
+        if self._document_access is not None:
+            descriptors.append(
+                CognitiveCapabilityDescriptor(
+                    capability="documents",
+                    operation="find_relevant",
+                    action="documents.find_relevant",
+                )
+            )
+
+        if self._process_access is not None:
+            descriptors.extend(
+                (
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="find_relevant",
+                        action="processes.find_relevant",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="get",
+                        action="processes.get",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="list",
+                        action="processes.list",
+                    ),
+                )
+            )
+
+        if self._rule_access is not None:
+            descriptors.extend(
+                (
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="find_relevant",
+                        action="rules.find_relevant",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="get",
+                        action="rules.get",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="list",
+                        action="rules.list",
+                    ),
+                )
+            )
+
+        return tuple(descriptors)
+
+    def available_capabilities(self) -> tuple[str, ...]:
+        """
+        Devuelve los identificadores de las capabilities cognitivas
+        actualmente disponibles para el Cognitive Core.
+        """
+
+        return tuple(
+            descriptor.capability
+            for descriptor in self.descriptors
+        )
+
+    def available_operations(
+        self,
+    ) -> tuple[CognitiveCapabilityOperation, ...]:
+        """
+        Devuelve las operaciones cognitivas actualmente disponibles.
+        """
+
+        return tuple(
+            CognitiveCapabilityOperation(
+                capability=descriptor.capability,
+                operation=descriptor.operation,
+                action=descriptor.action,
+            )
+            for descriptor in self.descriptors
+        )
+
+    def find_operation(
+        self,
+        *,
+        action: str,
+    ) -> CognitiveCapabilityOperation | None:
+        """
+        Busca la operación cognitiva asociada a una acción.
+        """
+
+        for operation in self.available_operations():
+            if operation.action == action:
+                return operation
+
+        return None
+
+    @staticmethod
+    def summarize_operation_result(
+        result: (
+            DocumentCognitiveResult
+            | ProcessCognitiveResult
+            | RuleCognitiveResult
+            | Process
+            | tuple[Process, ...]
+            | Rule
+            | tuple[Rule, ...]
+            | None
+        ),
+        *,
+        operation: str,
+    ) -> dict[str, Any]:
+        if isinstance(result, DocumentCognitiveResult):
+            count = len(result.documents)
+
+            return {
+                "operation": "documents.find_relevant",
+                "result_count": count,
+                "document_count": count,
+                "query_count": len(result.query.documents),
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if isinstance(result, ProcessCognitiveResult):
+            count = len(result.processes)
+
+            return {
+                "operation": "processes.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if isinstance(result, RuleCognitiveResult):
+            count = len(result.rules)
+
+            return {
+                "operation": "rules.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "processes.get":
+            count = 1 if isinstance(result, Process) else 0
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "processes.list":
+            if not isinstance(result, tuple):
+                raise TypeError(
+                    f"Expected tuple result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            if result and not all(
+                isinstance(item, Process)
+                for item in result
+            ):
+                raise TypeError(
+                    f"Expected tuple[Process, ...] result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            count = len(result)
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "rules.get":
+            count = 1 if isinstance(result, Rule) else 0
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "rules.list":
+            if not isinstance(result, tuple):
+                raise TypeError(
+                    f"Expected tuple result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            if result and not all(
+                isinstance(item, Rule)
+                for item in result
+            ):
+                raise TypeError(
+                    f"Expected tuple[Rule, ...] result for {operation}, "
+                    f"got {type(result)!r}"
+                )
+
+            count = len(result)
+
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        raise TypeError(
+            f"Unsupported cognitive capability result type: {type(result)!r}"
+        )
+
+    def find_relevant_documents(
+        self,
+        *,
+        context: object,
+        name: str | None = None,
+        mime_type: str | None = None,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> DocumentCognitiveResult:
+        if self._document_access is None:
+            raise RuntimeError(
+                "Document cognitive capability is not available."
+            )
+
+        return self._document_access.find_relevant(
+            context=context,
+            name=name,
+            mime_type=mime_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    def find_relevant_processes(
+        self,
+        *,
+        context: object,
+    ) -> ProcessCognitiveResult:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.find_relevant(
+            context=context,
+        )
+
+    def get_process(
+        self,
+        *,
+        process_id: str,
+    ) -> Process | None:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.get(process_id)
+
+    def list_processes(self) -> tuple[Process, ...]:
+        if self._process_access is None:
+            raise RuntimeError(
+                "Process cognitive capability is not available."
+            )
+
+        return self._process_access.list()
+
+    def find_relevant_rules(
+        self,
+        *,
+        context: object,
+    ) -> RuleCognitiveResult:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.find_relevant(
+            context=context,
+        )
+
+    def get_rule(
+        self,
+        *,
+        rule_id: str,
+    ) -> Rule | None:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.get(rule_id)
+
+    def list_rules(self) -> tuple[Rule, ...]:
+        if self._rule_access is None:
+            raise RuntimeError(
+                "Rule cognitive capability is not available."
+            )
+
+        return self._rule_access.list()
+
+    def select(
+        self,
+        *,
+        action: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> CognitiveCapabilityInvocation | None:
+        """
+        Determina si una intención corresponde a una
+        capability cognitiva disponible.
+
+        La selección no ejecuta ninguna operación.
+        """
+
+        parameters = parameters or {}
+
+        for descriptor in self.descriptors:
+            if descriptor.action != action:
+                continue
+
+            return CognitiveCapabilityInvocation(
+                capability=descriptor.capability,
+                operation=descriptor.operation,
+                parameters=dict(parameters),
+            )
+
+        return None
+
+    def invoke(
+        self,
+        invocation: CognitiveCapabilityInvocation,
+        *,
+        context: object,
+        assistant_context: object | None = None,
+    ) -> (
+        DocumentCognitiveResult
+        | ProcessCognitiveResult
+        | RuleCognitiveResult
+        | Process
+        | tuple[Process, ...]
+        | Rule
+        | tuple[Rule, ...]
+        | None
+    ):
+        """
+        Ejecuta la operación cognitiva previamente seleccionada.
+
+        La invocación ocurre sobre el acceso cognitivo de la capability.
+        No ejecuta acciones del Runtime.
+        """
+
+        if invocation.capability == "documents":
+            if invocation.operation != "find_relevant":
+                raise ValueError(
+                    f"Unsupported documents operation: "
+                    f"{invocation.operation}"
+                )
+
+            if self._document_access is None:
+                raise RuntimeError(
+                    "Document cognitive capability is not available."
+                )
+
+
+            return self._document_access.find_relevant(
+    context=(
+        assistant_context
+        if assistant_context is not None
+        else context
+    ),
+    name=invocation.parameters.get("name"),
+    mime_type=invocation.parameters.get("mime_type"),
+    offset=invocation.parameters.get("offset", 0),
+    limit=invocation.parameters.get("limit"),
+)
+
+        if invocation.capability == "processes":
+            if self._process_access is None:
+                raise RuntimeError(
+                    "Process cognitive capability is not available."
+                )
+
+            if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.find_relevant requires 'assistant_context'."
+                    )
+
+                return self._process_access.find_relevant(
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "get":
+                process_id = invocation.parameters.get("process_id")
+
+                if not process_id:
+                    raise ValueError(
+                        "processes.get requires 'process_id'."
+                    )
+
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.get requires 'assistant_context'."
+                    )
+
+                return self._process_access.get(
+                    process_id,
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "list":
+                if assistant_context is None:
+                    raise ValueError(
+                        "processes.list requires 'assistant_context'."
+                    )
+
+                return self._process_access.list(
+                    context=assistant_context,
+                )
+
+            raise ValueError(
+                f"Unsupported processes operation: "
+                f"{invocation.operation}"
+            )
+
+
+        if invocation.capability == "rules":
+            if self._rule_access is None:
+                raise RuntimeError(
+                    "Rule cognitive capability is not available."
+                )
+
+            if invocation.operation == "find_relevant":
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.find_relevant requires 'assistant_context'."
+                    )
+
+                return self._rule_access.find_relevant(
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "get":
+                rule_id = invocation.parameters.get("rule_id")
+
+                if not rule_id:
+                    raise ValueError(
+                        "rules.get requires 'rule_id'."
+                    )
+
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.get requires 'assistant_context'."
+                    )
+
+                return self._rule_access.get(
+                    rule_id,
+                    context=assistant_context,
+                )
+
+            if invocation.operation == "list":
+                if assistant_context is None:
+                    raise ValueError(
+                        "rules.list requires 'assistant_context'."
+                    )
+
+                return self._rule_access.list(
+                    context=assistant_context,
+                )
+
+        raise ValueError(
+            f"Unsupported cognitive capability: "
+            f"{invocation.capability}"
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

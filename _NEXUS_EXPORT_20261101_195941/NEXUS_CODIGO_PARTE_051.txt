@@ -1,0 +1,1906 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\src\documents\version_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from documents.content_version import DocumentContentVersion
+from documents.content_version_store import DocumentContentVersionStore
+
+
+@dataclass(frozen=True)
+class DocumentVersionResolution:
+    document_id: str
+    from_version: DocumentContentVersion
+    to_version: DocumentContentVersion
+
+
+class DocumentVersionResolver:
+    def __init__(self, store: DocumentContentVersionStore):
+        self.store = store
+
+    def resolve_version(
+        self,
+        document_id: str,
+        version: int,
+    ) -> DocumentContentVersion:
+        versions = self.store.list_for_document(document_id)
+
+        for content_version in versions:
+            if content_version.version == version:
+                return content_version
+
+        raise ValueError(
+            f"Document content version not found: "
+            f"{document_id} v{version}"
+        )
+
+    def resolve_latest(
+        self,
+        document_id: str,
+    ) -> DocumentContentVersion:
+        latest = self.store.get_latest_for_document(document_id)
+
+        if latest is None:
+            raise ValueError(
+                f"No content versions found for document: {document_id}"
+            )
+
+        return latest
+
+    def resolve_previous(
+        self,
+        document_id: str,
+        version: int | None = None,
+    ) -> DocumentContentVersion:
+        versions = self.store.list_for_document(document_id)
+
+        if not versions:
+            raise ValueError(
+                f"No content versions found for document: {document_id}"
+            )
+
+        target_version = (
+            self.resolve_latest(document_id).version
+            if version is None
+            else version
+        )
+
+        previous = [
+            content_version
+            for content_version in versions
+            if content_version.version < target_version
+        ]
+
+        if not previous:
+            raise ValueError(
+                f"No previous content version found for document: "
+                f"{document_id} v{target_version}"
+            )
+
+        return max(previous, key=lambda item: item.version)
+
+    def resolve_pair(
+        self,
+        document_id: str,
+        from_version: int,
+        to_version: int,
+    ) -> DocumentVersionResolution:
+        if from_version == to_version:
+            raise ValueError(
+                "Cannot resolve a version comparison pair with "
+                "the same version"
+            )
+
+        from_content_version = self.resolve_version(
+            document_id,
+            from_version,
+        )
+        to_content_version = self.resolve_version(
+            document_id,
+            to_version,
+        )
+
+        return DocumentVersionResolution(
+            document_id=document_id,
+            from_version=from_content_version,
+            to_version=to_content_version,
+        )
+
+    def resolve_latest_pair(
+        self,
+        document_id: str,
+    ) -> DocumentVersionResolution:
+        latest = self.resolve_latest(document_id)
+        previous = self.resolve_previous(
+            document_id,
+            version=latest.version,
+        )
+
+        return DocumentVersionResolution(
+            document_id=document_id,
+            from_version=previous,
+            to_version=latest,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\__init__.py
+================================================================================
+
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_artifact_store.py
+================================================================================
+
+import pytest
+
+from documents import ArtifactStore, DocumentArtifact
+
+
+def test_add_and_get_artifact():
+    store = ArtifactStore()
+
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+
+    result = store.add(artifact)
+
+    assert result is artifact
+    assert store.get(artifact.id) is artifact
+
+
+def test_get_unknown_artifact_returns_none():
+    store = ArtifactStore()
+
+    assert store.get("missing") is None
+
+
+def test_list_artifacts():
+    store = ArtifactStore()
+
+    first = DocumentArtifact.create(
+        location="local:/documents/first.pdf",
+    )
+    second = DocumentArtifact.create(
+        location="local:/documents/second.pdf",
+    )
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == [first, second]
+
+
+def test_update_artifact():
+    store = ArtifactStore()
+
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+    store.add(artifact)
+
+    updated = DocumentArtifact(
+        id=artifact.id,
+        location=artifact.location,
+        size=2048,
+        checksum="abc123",
+        checksum_algorithm="sha256",
+        created_at=artifact.created_at,
+    )
+
+    result = store.update(updated)
+
+    assert result is updated
+    assert store.get(artifact.id) is updated
+
+
+def test_update_unknown_artifact_raises():
+    store = ArtifactStore()
+
+    artifact = DocumentArtifact.create(
+        location="local:/documents/unknown.pdf",
+    )
+
+    with pytest.raises(KeyError, match="Artifact not found"):
+        store.update(artifact)
+
+
+def test_remove_artifact():
+    store = ArtifactStore()
+
+    artifact = DocumentArtifact.create(
+        location="local:/documents/contrato.pdf",
+    )
+    store.add(artifact)
+
+    result = store.remove(artifact.id)
+
+    assert result is artifact
+    assert store.get(artifact.id) is None
+
+
+def test_remove_unknown_artifact_returns_none():
+    store = ArtifactStore()
+
+    assert store.remove("missing") is None
+
+
+def test_clear_artifacts():
+    store = ArtifactStore()
+
+    store.add(
+        DocumentArtifact.create(
+            location="local:/documents/first.pdf",
+        )
+    )
+    store.add(
+        DocumentArtifact.create(
+            location="local:/documents/second.pdf",
+        )
+    )
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+def test_count_artifacts():
+    store = ArtifactStore()
+
+    assert store.count() == 0
+
+    store.add(
+        DocumentArtifact.create(
+            location="local:/documents/contrato.pdf",
+        )
+    )
+
+    assert store.count() == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_artifact_type_resolver.py
+================================================================================
+
+import pytest
+
+from documents import (
+    ArtifactTypeResolver,
+    DocumentArtifact,
+)
+
+
+def test_resolves_txt_artifact():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.txt",
+    )
+
+    document_type = resolver.resolve(
+        artifact
+    )
+
+    assert document_type.mime_type == "text/plain"
+
+
+def test_resolves_markdown_artifact():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/readme.md",
+    )
+
+    document_type = resolver.resolve(
+        artifact
+    )
+
+    assert document_type.mime_type == "text/markdown"
+
+
+def test_resolves_json_artifact():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/data.json",
+    )
+
+    document_type = resolver.resolve(
+        artifact
+    )
+
+    assert document_type.mime_type == "application/json"
+
+
+def test_resolves_pdf_artifact():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.pdf",
+    )
+
+    document_type = resolver.resolve(
+        artifact
+    )
+
+    assert document_type.mime_type == "application/pdf"
+
+
+def test_resolves_extension_case_insensitively():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/MANUAL.PDF",
+    )
+
+    document_type = resolver.resolve(
+        artifact
+    )
+
+    assert document_type.mime_type == "application/pdf"
+
+
+def test_rejects_empty_location():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="   ",
+    )
+
+    with pytest.raises(ValueError):
+        resolver.resolve(
+            artifact
+        )
+
+
+def test_rejects_unknown_extension():
+    resolver = ArtifactTypeResolver()
+
+    artifact = DocumentArtifact.create(
+        location="C:/documents/manual.xyz",
+    )
+
+    with pytest.raises(ValueError):
+        resolver.resolve(
+            artifact
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_capability.py
+================================================================================
+
+from context import AssistantContext, OrganizationProfile, UserProfile
+
+from documents import (
+    DocumentCapability,
+    build_document_services,
+)
+from unittest.mock import MagicMock
+
+from documents.context_access import DocumentContextAccess
+
+def test_document_capability_is_public():
+    assert DocumentCapability is not None
+
+
+def test_document_capability_queries_using_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    document = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    capability = DocumentCapability(
+        context_access=services.context_access,
+    )
+
+    result = capability.query(
+        context=context,
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (document,)
+    assert result.total == 1
+    assert result.has_results
+
+
+def test_document_capability_preserves_pagination():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    first = services.access.create_document(
+        name="Contrato 1",
+        mime_type="application/pdf",
+        source="contrato-1.pdf",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    second = services.access.create_document(
+        name="Contrato 2",
+        mime_type="application/pdf",
+        source="contrato-2.pdf",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    capability = DocumentCapability(
+        context_access=services.context_access,
+    )
+
+    result = capability.query(
+        context=context,
+        name="contrato",
+        offset=1,
+        limit=1,
+    )
+
+    assert result.documents == (second,)
+    assert result.total == 2
+    assert result.offset == 1
+    assert result.limit == 1
+    assert result.has_more is False
+
+def test_document_capability_returns_relevant_matches():
+    context = MagicMock()
+    context_access = MagicMock(spec=DocumentContextAccess)
+
+    expected_matches = ("match-1", "match-2")
+    context_access.resolve_ordered_matches_from_context.return_value = (
+        expected_matches
+    )
+
+    capability = DocumentCapability(
+        context_access=context_access,
+    )
+
+    result = capability.relevant(
+        context=context,
+    )
+
+    assert result == expected_matches
+
+    context_access.resolve_ordered_matches_from_context.assert_called_once_with(
+        context,
+    )
+
+
+def test_document_capability_returns_relevant_documents():
+    context = MagicMock()
+    context_access = MagicMock(spec=DocumentContextAccess)
+
+    expected_documents = ("document-1", "document-2")
+    context_access.resolve_ordered_documents_from_context.return_value = (
+        expected_documents
+    )
+
+    capability = DocumentCapability(
+        context_access=context_access,
+    )
+
+    result = capability.relevant_documents(
+        context=context,
+    )
+
+    assert result == expected_documents
+
+    context_access.resolve_ordered_documents_from_context.assert_called_once_with(
+        context,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_change.py
+================================================================================
+
+from documents import DocumentChange, DocumentChangeType
+
+
+def test_added_change():
+    change = DocumentChange.added(
+        "Nueva línea",
+        line=3,
+    )
+
+    assert change.change_type == DocumentChangeType.ADDED
+    assert change.before is None
+    assert change.after == "Nueva línea"
+    assert change.before_line is None
+    assert change.after_line == 3
+
+
+def test_removed_change():
+    change = DocumentChange.removed(
+        "Línea eliminada",
+        line=4,
+    )
+
+    assert change.change_type == DocumentChangeType.REMOVED
+    assert change.before == "Línea eliminada"
+    assert change.after is None
+    assert change.before_line == 4
+    assert change.after_line is None
+
+
+def test_modified_change():
+    change = DocumentChange.modified(
+        "12 meses",
+        "24 meses",
+        before_line=2,
+        after_line=2,
+    )
+
+    assert change.change_type == DocumentChangeType.MODIFIED
+    assert change.before == "12 meses"
+    assert change.after == "24 meses"
+    assert change.before_line == 2
+    assert change.after_line == 2
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_change_detector.py
+================================================================================
+
+from documents import (
+    DocumentChangeDetector,
+    DocumentChangeType,
+    DocumentContentVersion,
+    DocumentContentVersionStore,
+    DocumentVersionComparator,
+    DocumentVersionResolver,
+)
+
+
+def add_version(
+    store: DocumentContentVersionStore,
+    document_id: str,
+    version: int,
+    content_id: str,
+) -> DocumentContentVersion:
+    content_version = DocumentContentVersion.create(
+        document_id=document_id,
+        content_id=content_id,
+        version=version,
+        content_type="text/plain",
+    )
+    store.add(content_version)
+    return content_version
+
+
+def build_comparison(
+    document_id: str = "doc-1",
+    from_content_id: str = "content-1",
+    to_content_id: str = "content-2",
+):
+    store = DocumentContentVersionStore()
+
+    add_version(
+        store,
+        document_id=document_id,
+        version=1,
+        content_id=from_content_id,
+    )
+
+    add_version(
+        store,
+        document_id=document_id,
+        version=2,
+        content_id=to_content_id,
+    )
+
+    resolver = DocumentVersionResolver(store)
+    resolution = resolver.resolve_pair(
+        document_id=document_id,
+        from_version=1,
+        to_version=2,
+    )
+
+    return DocumentVersionComparator().compare(resolution)
+
+
+def test_detector_detects_modified_line():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="El contrato tiene vigencia de 12 meses.",
+        after_text="El contrato tiene vigencia de 24 meses.",
+    )
+
+    assert result.changed is True
+    assert result.unchanged is False
+    assert len(result.changes) == 1
+
+    change = result.changes[0]
+
+    assert change.change_type == DocumentChangeType.MODIFIED
+    assert change.before == "El contrato tiene vigencia de 12 meses."
+    assert change.after == "El contrato tiene vigencia de 24 meses."
+    assert change.before_line == 1
+    assert change.after_line == 1
+
+
+def test_detector_detects_added_line():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="Primera línea.",
+        after_text="Primera línea.\nSegunda línea.",
+    )
+
+    assert result.changed is True
+    assert len(result.changes) == 1
+
+    change = result.changes[0]
+
+    assert change.change_type == DocumentChangeType.ADDED
+    assert change.before is None
+    assert change.after == "Segunda línea."
+    assert change.after_line == 2
+
+
+def test_detector_detects_removed_line():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="Primera línea.\nSegunda línea.",
+        after_text="Primera línea.",
+    )
+
+    assert result.changed is True
+    assert len(result.changes) == 1
+
+    change = result.changes[0]
+
+    assert change.change_type == DocumentChangeType.REMOVED
+    assert change.before == "Segunda línea."
+    assert change.after is None
+    assert change.before_line == 2
+
+
+def test_detector_detects_multiple_changes():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="A\nB\nC",
+        after_text="A\nX\nC\nD",
+    )
+
+    assert len(result.changes) == 2
+
+    modified = result.changes[0]
+    added = result.changes[1]
+
+    assert modified.change_type == DocumentChangeType.MODIFIED
+    assert modified.before == "B"
+    assert modified.after == "X"
+    assert modified.before_line == 2
+    assert modified.after_line == 2
+
+    assert added.change_type == DocumentChangeType.ADDED
+    assert added.after == "D"
+    assert added.after_line == 4
+
+
+def test_detector_returns_no_changes_for_identical_text():
+    comparison = build_comparison(
+        from_content_id="content-1",
+        to_content_id="content-1",
+    )
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="A\nB\nC",
+        after_text="A\nB\nC",
+    )
+
+    assert result.changed is False
+    assert result.unchanged is True
+    assert result.changes == ()
+
+
+def test_detector_preserves_comparison():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="Antes",
+        after_text="Después",
+    )
+
+    assert result.comparison == comparison
+
+
+def test_detector_returns_immutable_changes():
+    comparison = build_comparison()
+
+    detector = DocumentChangeDetector()
+
+    result = detector.detect(
+        comparison,
+        before_text="Antes",
+        after_text="Después",
+    )
+
+    assert isinstance(result.changes, tuple)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_content_store.py
+================================================================================
+
+import pytest
+
+from documents import ContentStore, DocumentContent
+
+
+def test_add_and_get_content():
+    store = ContentStore()
+
+    content = DocumentContent.create(
+        text="Contenido del documento.",
+    )
+
+    result = store.add(content)
+
+    assert result is content
+    assert store.get(content.id) is content
+
+
+def test_get_unknown_content_returns_none():
+    store = ContentStore()
+
+    assert store.get("missing") is None
+
+
+def test_list_contents():
+    store = ContentStore()
+
+    first = DocumentContent.create(
+        text="Primer contenido.",
+    )
+    second = DocumentContent.create(
+        text="Segundo contenido.",
+    )
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == [first, second]
+
+
+def test_update_content():
+    store = ContentStore()
+
+    content = DocumentContent.create(
+        text="Contenido original.",
+    )
+    store.add(content)
+
+    updated = DocumentContent(
+        id=content.id,
+        text="Contenido actualizado.",
+        content_type=content.content_type,
+        language=content.language,
+        created_at=content.created_at,
+    )
+
+    result = store.update(updated)
+
+    assert result is updated
+    assert store.get(content.id) is updated
+
+
+def test_update_unknown_content_raises():
+    store = ContentStore()
+
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+
+    with pytest.raises(KeyError, match="Content not found"):
+        store.update(content)
+
+
+def test_remove_content():
+    store = ContentStore()
+
+    content = DocumentContent.create(
+        text="Contenido.",
+    )
+    store.add(content)
+
+    result = store.remove(content.id)
+
+    assert result is content
+    assert store.get(content.id) is None
+
+
+def test_remove_unknown_content_returns_none():
+    store = ContentStore()
+
+    assert store.remove("missing") is None
+
+
+def test_clear_contents():
+    store = ContentStore()
+
+    store.add(
+        DocumentContent.create(
+            text="Primer contenido.",
+        )
+    )
+    store.add(
+        DocumentContent.create(
+            text="Segundo contenido.",
+        )
+    )
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+def test_count_contents():
+    store = ContentStore()
+
+    assert store.count() == 0
+
+    store.add(
+        DocumentContent.create(
+            text="Contenido.",
+        )
+    )
+
+    assert store.count() == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_content_version.py
+================================================================================
+
+from datetime import datetime, timezone
+
+import pytest
+
+from documents.content_version import DocumentContentVersion
+from documents.document_type import DocumentType
+
+
+def test_document_content_version_create():
+    version = DocumentContentVersion.create(
+        document_id="document-1",
+        content_id="content-1",
+        version=1,
+        content_type="text/plain",
+    )
+
+    assert version.id
+    assert version.document_id == "document-1"
+    assert version.content_id == "content-1"
+    assert version.version == 1
+    assert version.content_type.mime_type == "text/plain"
+    assert isinstance(version.created_at, datetime)
+    assert version.created_at.tzinfo == timezone.utc
+
+
+def test_document_content_version_accepts_document_type():
+    document_type = DocumentType.from_mime_type(
+        "text/plain"
+    )
+
+    version = DocumentContentVersion.create(
+        document_id="document-1",
+        content_id="content-1",
+        version=2,
+        content_type=document_type,
+    )
+
+    assert version.content_type is document_type
+
+
+def test_document_content_version_rejects_zero_version():
+    with pytest.raises(
+        ValueError,
+        match="greater than zero",
+    ):
+        DocumentContentVersion.create(
+            document_id="document-1",
+            content_id="content-1",
+            version=0,
+            content_type="text/plain",
+        )
+
+
+def test_document_content_version_rejects_negative_version():
+    with pytest.raises(
+        ValueError,
+        match="greater than zero",
+    ):
+        DocumentContentVersion.create(
+            document_id="document-1",
+            content_id="content-1",
+            version=-1,
+            content_type="text/plain",
+        )
+
+
+def test_document_content_version_is_immutable():
+    version = DocumentContentVersion.create(
+        document_id="document-1",
+        content_id="content-1",
+        version=1,
+        content_type="text/plain",
+    )
+
+    with pytest.raises(AttributeError):
+        version.version = 2
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_content_version_store.py
+================================================================================
+
+from documents.content_version import DocumentContentVersion
+from documents.content_version_store import DocumentContentVersionStore
+
+
+def create_version(
+    document_id: str,
+    content_id: str,
+    version: int,
+) -> DocumentContentVersion:
+    return DocumentContentVersion.create(
+        document_id=document_id,
+        content_id=content_id,
+        version=version,
+        content_type="text/plain",
+    )
+
+
+def test_store_add_and_get():
+    store = DocumentContentVersionStore()
+
+    version = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+
+    stored = store.add(version)
+
+    assert stored is version
+    assert store.get(version.id) is version
+
+
+def test_store_list():
+    store = DocumentContentVersionStore()
+
+    version_1 = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+    version_2 = create_version(
+        "document-1",
+        "content-2",
+        2,
+    )
+
+    store.add(version_1)
+    store.add(version_2)
+
+    assert store.list() == [
+        version_1,
+        version_2,
+    ]
+
+
+def test_store_list_for_document():
+    store = DocumentContentVersionStore()
+
+    document_1_version = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+    document_2_version = create_version(
+        "document-2",
+        "content-2",
+        1,
+    )
+
+    store.add(document_1_version)
+    store.add(document_2_version)
+
+    assert store.list_for_document("document-1") == [
+        document_1_version,
+    ]
+
+
+def test_store_get_latest_for_document():
+    store = DocumentContentVersionStore()
+
+    version_1 = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+    version_3 = create_version(
+        "document-1",
+        "content-3",
+        3,
+    )
+    version_2 = create_version(
+        "document-1",
+        "content-2",
+        2,
+    )
+
+    store.add(version_1)
+    store.add(version_3)
+    store.add(version_2)
+
+    assert store.get_latest_for_document(
+        "document-1"
+    ) is version_3
+
+
+def test_store_latest_returns_none_for_unknown_document():
+    store = DocumentContentVersionStore()
+
+    assert (
+        store.get_latest_for_document("unknown")
+        is None
+    )
+
+
+def test_store_remove():
+    store = DocumentContentVersionStore()
+
+    version = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+
+    store.add(version)
+
+    assert store.remove(version.id) is version
+    assert store.get(version.id) is None
+
+
+def test_store_clear():
+    store = DocumentContentVersionStore()
+
+    version = create_version(
+        "document-1",
+        "content-1",
+        1,
+    )
+
+    store.add(version)
+    store.clear()
+
+    assert store.count() == 0
+    assert store.list() == []
+
+
+def test_store_count():
+    store = DocumentContentVersionStore()
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-1",
+            1,
+        )
+    )
+    store.add(
+        create_version(
+            "document-1",
+            "content-2",
+            2,
+        )
+    )
+
+    assert store.count() == 2
+
+def test_store_get_next_version_starts_at_one():
+    store = DocumentContentVersionStore()
+
+    assert (
+        store.get_next_version("document-1")
+        == 1
+    )
+
+
+def test_store_get_next_version_returns_next_number():
+    store = DocumentContentVersionStore()
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-1",
+            1,
+        )
+    )
+
+    assert (
+        store.get_next_version("document-1")
+        == 2
+    )
+
+
+def test_store_get_next_version_uses_highest_version():
+    store = DocumentContentVersionStore()
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-1",
+            1,
+        )
+    )
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-3",
+            3,
+        )
+    )
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-2",
+            2,
+        )
+    )
+
+    assert (
+        store.get_next_version("document-1")
+        == 4
+    )
+
+
+def test_store_get_next_version_is_independent_per_document():
+    store = DocumentContentVersionStore()
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-1",
+            1,
+        )
+    )
+
+    store.add(
+        create_version(
+            "document-1",
+            "content-2",
+            2,
+        )
+    )
+
+    store.add(
+        create_version(
+            "document-2",
+            "content-1",
+            1,
+        )
+    )
+
+    assert (
+        store.get_next_version("document-1")
+        == 3
+    )
+
+    assert (
+        store.get_next_version("document-2")
+        == 2
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_context_access.py
+================================================================================
+
+from context.models import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+from documents import build_document_services
+from documents.context_access import DocumentContextAccess
+from documents.context_resolver import DocumentContextResolver
+
+
+def build_context_access() -> DocumentContextAccess:
+    services = build_document_services()
+
+    resolver = DocumentContextResolver(
+        services.access,
+    )
+
+    return DocumentContextAccess(
+        resolver,
+    )
+
+
+def test_context_access_resolves_documents():
+    services = build_document_services()
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    access = DocumentContextAccess(
+        DocumentContextResolver(
+            services.access,
+        )
+    )
+
+    result = access.resolve(
+        user_id="user-a",
+    )
+
+    assert result.documents == (document,)
+
+
+def test_context_access_resolves_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+    )
+
+    project = ProjectContext.create(
+        name="Proyecto A",
+        organization_id="organization-a",
+    )
+
+    document = services.access.create_document(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id=user.id,
+        project_id=project.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        projects=(project,),
+    )
+
+    access = DocumentContextAccess(
+        DocumentContextResolver(
+            services.access,
+        )
+    )
+
+    result = access.resolve_from_context(
+        context,
+    )
+
+    assert result.documents == (document,)
+
+
+def test_context_access_preserves_context_selection():
+    access = build_context_access()
+
+    context = AssistantContext(
+        user=UserProfile.create(
+            name="Carlos",
+        ),
+        projects=(
+            ProjectContext.create(
+                name="Proyecto A",
+                organization_id="organization-a",
+            ),
+        ),
+    )
+
+    result = access.resolve_from_context(
+        context,
+    )
+
+    assert result.selection.user_id == context.user.id
+    assert result.selection.project_ids == (
+        context.projects[0].id,
+    )
+
+def test_context_access_resolves_ordered_matches():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id="user-a",
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    ordered = services.context_access.resolve_ordered_matches(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    assert tuple(match.document for match in ordered) == (
+        project_document,
+        organization_document,
+        user_document,
+    )
+
+
+def test_context_access_resolves_ordered_documents():
+    services = build_document_services()
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id="user-a",
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    ordered = services.context_access.resolve_ordered_documents(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    assert ordered == (
+        project_document,
+        organization_document,
+        user_document,
+    )
+
+def test_context_access_resolves_ordered_matches_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    project = ProjectContext.create(
+        name="Project A",
+        organization_id="organization-a",
+    )
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id=user.id,
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+        project_id=project.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=(project,),
+    )
+
+    ordered = services.context_access.resolve_ordered_matches_from_context(
+        context,
+    )
+
+    assert tuple(match.document for match in ordered) == (
+        project_document,
+        organization_document,
+        user_document,
+    )
+
+
+def test_context_access_resolves_ordered_documents_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    project = ProjectContext.create(
+        name="Project A",
+        organization_id="organization-a",
+    )
+
+    user_document = services.access.create_document(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+        user_id=user.id,
+    )
+
+    organization_document = services.access.create_document(
+        name="Organización",
+        mime_type="text/plain",
+        source="organization.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    project_document = services.access.create_document(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+        user_id=user.id,
+        organization_id=organization.id,
+        project_id=project.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=(project,),
+    )
+
+    ordered = services.context_access.resolve_ordered_documents_from_context(
+        context,
+    )
+
+    assert ordered == (
+        project_document,
+        organization_document,
+        user_document,
+    )
+
+def test_context_access_query_returns_structured_document_result():
+    services = build_document_services()
+
+    matching = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id="user-a",
+    )
+
+    services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="text/plain",
+        source="contrato.txt",
+        user_id="user-a",
+    )
+
+    result = services.context_access.query(
+        user_id="user-a",
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        matching,
+    )
+
+    assert result.total == 1
+    assert result.has_results is True
+    assert result.query == {
+        "name": "contrato",
+        "mime_type": "application/pdf",
+    }
+
+
+def test_context_access_query_from_assistant_context():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Organization A",
+    )
+
+    document = services.access.create_document(
+        name="Contrato Comercial",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+        user_id=user.id,
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+    )
+
+    result = services.context_access.query_from_context(
+        context,
+        name="contrato",
+        mime_type="application/pdf",
+    )
+
+    assert result.documents == (
+        document,
+    )
+
+    assert result.total == 1
+    assert result.has_results is True
+
+def test_context_access_query_supports_pagination():
+    services = build_document_services()
+
+    first = services.access.create_document(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id="user-a",
+    )
+
+    second = services.access.create_document(
+        name="Segundo",
+        mime_type="text/plain",
+        source="second.txt",
+        user_id="user-a",
+    )
+
+    third = services.access.create_document(
+        name="Tercero",
+        mime_type="text/plain",
+        source="third.txt",
+        user_id="user-a",
+    )
+
+    result = services.context_access.query(
+        user_id="user-a",
+        offset=1,
+        limit=1,
+    )
+
+    assert result.documents == (
+        second,
+    )
+
+    assert result.total == 3
+    assert result.offset == 1
+    assert result.limit == 1
+    assert result.has_more is True
+
+
+def test_context_access_query_from_context_supports_pagination():
+    services = build_document_services()
+
+    user = UserProfile.create(
+        name="Carlos",
+        organization_id="organization-a",
+    )
+
+    first = services.access.create_document(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+        user_id=user.id,
+    )
+
+    second = services.access.create_document(
+        name="Segundo",
+        mime_type="text/plain",
+        source="second.txt",
+        user_id=user.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+    )
+
+    result = services.context_access.query_from_context(
+        context,
+        offset=1,
+        limit=1,
+    )
+
+    assert result.documents == (
+        second,
+    )
+
+    assert result.total == 2
+    assert result.offset == 1
+    assert result.limit == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_context_relevance_resolver.py
+================================================================================
+
+from documents.context_relevance import (
+    DocumentContextMatch,
+    DocumentContextRelevance,
+)
+from documents.context_relevance_resolver import (
+    DocumentContextRelevanceResolver,
+)
+from documents.context_resolver import DocumentContextSelection
+from documents.models import Document
+
+
+def test_project_document_has_project_relevance():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    selection = DocumentContextSelection(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    result = DocumentContextRelevanceResolver().resolve(
+        document=document,
+        selection=selection,
+    )
+
+    assert result == DocumentContextMatch(
+        document=document,
+        relevance=DocumentContextRelevance.PROJECT,
+    )
+
+
+def test_organization_document_has_organization_relevance():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    selection = DocumentContextSelection(
+        user_id="user-a",
+        organization_id="organization-a",
+    )
+
+    result = DocumentContextRelevanceResolver().resolve(
+        document=document,
+        selection=selection,
+    )
+
+    assert result == DocumentContextMatch(
+        document=document,
+        relevance=DocumentContextRelevance.ORGANIZATION,
+    )
+
+
+def test_user_document_has_user_relevance():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    selection = DocumentContextSelection(
+        user_id="user-a",
+    )
+
+    result = DocumentContextRelevanceResolver().resolve(
+        document=document,
+        selection=selection,
+    )
+
+    assert result == DocumentContextMatch(
+        document=document,
+        relevance=DocumentContextRelevance.USER,
+    )
+
+
+def test_document_without_context_match_returns_none():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+    )
+
+    selection = DocumentContextSelection(
+        user_id="user-b",
+    )
+
+    result = DocumentContextRelevanceResolver().resolve(
+        document=document,
+        selection=selection,
+    )
+
+    assert result is None
+
+
+def test_project_relevance_takes_precedence_over_organization_and_user():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+        user_id="user-a",
+        organization_id="organization-a",
+        project_id="project-a",
+    )
+
+    selection = DocumentContextSelection(
+        user_id="user-a",
+        organization_id="organization-a",
+        project_ids=("project-a",),
+    )
+
+    result = DocumentContextRelevanceResolver().resolve(
+        document=document,
+        selection=selection,
+    )
+
+    assert result is not None
+    assert result.relevance == DocumentContextRelevance.PROJECT
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

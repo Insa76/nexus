@@ -1,0 +1,1542 @@
+﻿
+================================================================================
+ARCHIVO: packages\memory\tests\test_semantic_memory_persistence.py
+================================================================================
+
+from pathlib import Path
+
+from memory.semantic_memory import SemanticMemory
+
+
+def test_semantic_memory_persists_facts_after_reopen(tmp_path: Path) -> None:
+    db_path = tmp_path / "semantic.db"
+    first = SemanticMemory(db_path=db_path)
+    first.learn("User", "Favorite color", "blue", metadata={"source": "test"})
+    first.close()
+
+    second = SemanticMemory(db_path=db_path)
+    fact = second.get("user", "favorite color")
+    assert fact is not None
+    assert fact.value == "blue"
+    assert fact.metadata == {"source": "test"}
+    second.close()
+
+
+def test_semantic_memory_updates_and_forgets_persistently(tmp_path: Path) -> None:
+    db_path = tmp_path / "semantic.db"
+    memory = SemanticMemory(db_path=db_path)
+    memory.learn("user", "favorite color", "blue")
+    memory.learn("user", "favorite color", "green")
+    assert memory.get_value("user", "favorite color") == "green"
+    assert memory.forget("user", "favorite color") is True
+    assert memory.get_value("user", "favorite color") is None
+    assert memory.forget("user", "favorite color") is False
+    memory.close()
+
+
+def test_semantic_memory_clear_removes_persisted_facts(tmp_path: Path) -> None:
+    db_path = tmp_path / "semantic.db"
+    memory = SemanticMemory(db_path=db_path)
+    memory.learn("user", "project", "NEXUS")
+    memory.clear()
+    assert memory.count() == 0
+    memory.close()
+
+    reopened = SemanticMemory(db_path=db_path)
+    assert reopened.count() == 0
+    reopened.close()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\pyproject.toml
+================================================================================
+
+[project]
+name = "planner"
+version = "0.1.0"
+description = "NEXUS Planner"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "memory",
+    "context",
+    "ollama>=0.6.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+memory = { workspace = true }
+context = { workspace = true }
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\__init__.py
+================================================================================
+
+"""
+NEXUS Planner package.
+"""
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\context_builder.py
+================================================================================
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
+
+from context import AssistantContext
+
+from memory import WorkingMemory
+from memory.semantic_retriever import SemanticRetriever
+
+
+ContextProvider = Callable[
+    [str | None, AssistantContext | None],
+    Mapping[str, Any] | None,
+]
+
+
+class ContextBuilder:
+    """
+    Construye contexto cognitivo a partir de:
+
+    - WorkingMemory
+    - conocimiento semántico
+    - AssistantContext opcional
+    - proveedores de contexto externos
+
+    No interpreta la solicitud.
+    No ejecuta acciones.
+    No modifica memoria.
+
+    Su responsabilidad es seleccionar y organizar
+    información relevante para entregársela al
+    IntentProvider.
+
+    Los proveedores de contexto permiten incorporar
+    información proveniente de capacidades cognitivas
+    externas sin acoplar este componente a un
+    subsistema concreto.
+    """
+
+    _CONTEXT_ENTRY_TYPES = {
+        "user_request",
+        "intent",
+        "objective",
+        "plan",
+        "plan_final",
+        "execution_result",
+        "error",
+    }
+
+    _EPISODE_ENTRY_TYPE = "episode"
+
+    def __init__(
+        self,
+        max_entries: int = 50,
+        max_episodes: int = 10,
+        semantic_retriever: SemanticRetriever | None = None,
+        max_semantic_matches: int = 10,
+        assistant_context: AssistantContext | None = None,
+        context_providers: Sequence[ContextProvider] = (),
+    ) -> None:
+        self._max_entries = max_entries
+        self._max_episodes = max_episodes
+        self._semantic_retriever = semantic_retriever
+        self._max_semantic_matches = max_semantic_matches
+        self._assistant_context = assistant_context
+        self._context_providers = tuple(
+            context_providers
+        )
+
+    def build(
+        self,
+        memory: WorkingMemory,
+        semantic_query: str | None = None,
+        assistant_context: AssistantContext | None = None,
+    ) -> dict[str, Any]:
+        """
+        Construye un contexto estructurado a partir
+        de las entradas relevantes de memoria.
+
+        Si existe un SemanticRetriever y se proporciona
+        una consulta, incorpora conocimiento semántico
+        relevante sin modificar la memoria.
+
+        Si existe un AssistantContext, incorpora el
+        contexto del usuario, organización y proyectos.
+
+        El AssistantContext recibido en build() tiene
+        prioridad sobre el configurado en el constructor.
+
+        Los context providers reciben la consulta
+        actual y el AssistantContext efectivo y pueden
+        aportar información adicional al contexto
+        cognitivo.
+
+        Los providers no modifican el contexto
+        directamente: devuelven datos que el builder
+        incorpora al resultado final.
+        """
+
+        entries = memory.recent(
+            self._max_entries
+        )
+
+        episode_entries = memory.find(
+            self._EPISODE_ENTRY_TYPE
+        )
+
+        episode_entries = episode_entries[
+            -self._max_episodes:
+        ]
+
+        context: dict[str, Any] = {
+            "recent_interactions": [],
+            "recent_episodes": [],
+            "semantic_knowledge": [],
+            "assistant_context": None,
+            "last_request": None,
+            "last_intent": None,
+            "last_result": None,
+        }
+
+        for entry in entries:
+            if entry.type not in self._CONTEXT_ENTRY_TYPES:
+                continue
+
+            item = {
+                "type": entry.type,
+                "data": entry.data,
+            }
+
+            context["recent_interactions"].append(
+                item
+            )
+
+            if entry.type == "user_request":
+                context["last_request"] = entry.data
+
+            elif entry.type == "intent":
+                context["last_intent"] = entry.data
+
+            elif entry.type == "execution_result":
+                context["last_result"] = entry.data
+
+        for entry in episode_entries:
+            context["recent_episodes"].append(
+                entry.data
+            )
+
+        effective_assistant_context = (
+            assistant_context
+            if assistant_context is not None
+            else self._assistant_context
+        )
+
+        if effective_assistant_context is not None:
+            context["assistant_context"] = (
+                effective_assistant_context.to_dict()
+            )
+
+        context["semantic_knowledge"] = (
+            self._build_semantic_knowledge(
+                semantic_query
+            )
+        )
+
+        #
+        # Context Providers
+        #
+
+        for provider in self._context_providers:
+            provided_context = provider(
+                semantic_query,
+                effective_assistant_context,
+            )
+
+            if provided_context is None:
+                continue
+
+            for key, value in provided_context.items():
+                context[key] = value
+
+        return context
+
+    def _build_semantic_knowledge(
+        self,
+        semantic_query: str | None,
+    ) -> list[dict[str, Any]]:
+        """
+        Recupera conocimiento semántico relevante
+        para la consulta actual.
+
+        La recuperación se realiza en dos niveles:
+
+        1. consulta completa;
+        2. términos individuales de la consulta.
+
+        Esto permite que una solicitud como
+        "Cerrá Chrome" encuentre un hecho cuyo sujeto
+        sea "chrome", sin modificar la lógica del
+        SemanticRetriever.
+
+        No se realiza interpretación semántica compleja.
+        """
+
+        if (
+            self._semantic_retriever is None
+            or not semantic_query
+            or not semantic_query.strip()
+        ):
+            return []
+
+        matches_by_key: dict[
+            tuple[str, str],
+            dict[str, Any],
+        ] = {}
+
+        #
+        # 1. Consulta completa
+        #
+
+        matches = self._semantic_retriever.search(
+            semantic_query,
+            limit=self._max_semantic_matches,
+        )
+
+        self._add_semantic_matches(
+            matches_by_key,
+            matches,
+        )
+
+        #
+        # 2. Términos individuales
+        #
+
+        terms = self._semantic_terms(
+            semantic_query
+        )
+
+        for term in terms:
+            matches = self._semantic_retriever.search(
+                term,
+                limit=self._max_semantic_matches,
+            )
+
+            self._add_semantic_matches(
+                matches_by_key,
+                matches,
+            )
+
+        knowledge = list(
+            matches_by_key.values()
+        )
+
+        knowledge.sort(
+            key=lambda item: (
+                -float(item["score"]),
+                -float(item["confidence"]),
+                item["subject"],
+                item["predicate"],
+            )
+        )
+
+        return knowledge[
+            :self._max_semantic_matches
+        ]
+
+    @staticmethod
+    def _add_semantic_matches(
+        destination: dict[
+            tuple[str, str],
+            dict[str, Any],
+        ],
+        matches: list[Any],
+    ) -> None:
+        """
+        Convierte SemanticMatch en datos simples
+        para el contexto cognitivo.
+
+        Los duplicados se consolidan por
+        subject + predicate.
+        """
+
+        for match in matches:
+            fact = match.fact
+
+            key = (
+                fact.subject,
+                fact.predicate,
+            )
+
+            item = {
+                "subject": fact.subject,
+                "predicate": fact.predicate,
+                "value": fact.value,
+                "confidence": fact.confidence,
+                "source": fact.source,
+                "metadata": dict(
+                    fact.metadata
+                ),
+                "score": match.score,
+            }
+
+            existing = destination.get(key)
+
+            if existing is None:
+                destination[key] = item
+                continue
+
+            #
+            # Conservamos la mejor puntuación obtenida
+            # para el mismo hecho.
+            #
+
+            if item["score"] > existing["score"]:
+                destination[key] = item
+
+    @staticmethod
+    def _semantic_terms(
+        query: str,
+    ) -> list[str]:
+        """
+        Obtiene términos simples de una consulta.
+
+        No realiza NLP ni interpretación.
+        Solamente normaliza espacios y elimina
+        signos básicos de puntuación.
+
+        Los términos de una sola letra se descartan.
+        """
+
+        normalized = query.strip().lower()
+
+        for character in (
+            "¿",
+            "?",
+            "¡",
+            "!",
+            ".",
+            ",",
+            ";",
+            ":",
+            "(",
+            ")",
+            "[",
+            "]",
+            "{",
+            "}",
+            '"',
+            "'",
+        ):
+            normalized = normalized.replace(
+                character,
+                " ",
+            )
+
+        terms: list[str] = []
+        seen: set[str] = set()
+
+        for term in normalized.split():
+            if len(term) < 2:
+                continue
+
+            if term in seen:
+                continue
+
+            seen.add(term)
+            terms.append(term)
+
+        return terms
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\decision.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from planner.intent import Intent
+
+
+@dataclass(frozen=True)
+class Decision:
+    """
+    Resultado de la evaluación cognitiva de una intención.
+
+    Decision no ejecuta acciones ni crea planes.
+    Su responsabilidad es determinar qué debería hacerse
+    a partir de la intención y el contexto disponible.
+    """
+
+    decision_id: str
+    intent: Intent
+    selected_action: str | None
+    confidence: float
+    reason: str
+    requires_execution: bool
+    alternatives: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def is_executable(self) -> bool:
+        return self.requires_execution and self.selected_action is not None
+
+
+class DecisionEngine:
+    """
+    Capa determinista de decisión cognitiva de V1.
+
+    Responsabilidades:
+    - evaluar una intención
+    - determinar si puede ejecutarse
+    - seleccionar la acción correspondiente
+    - producir una justificación
+    - conservar trazabilidad
+
+    No ejecuta acciones.
+    No crea planes.
+    No modifica memoria.
+    No consulta servicios externos.
+    """
+
+    UNKNOWN_ACTION = "system.unknown"
+
+    def decide(
+        self,
+        intent: Intent,
+        context: dict[str, Any] | None = None,
+        capabilities: list[dict[str, Any]] | None = None,
+    ) -> Decision:
+        context = context or {}
+        capabilities = capabilities or []
+
+        if intent.action == self.UNKNOWN_ACTION:
+            return self._unknown_decision(intent)
+
+        if intent.is_compound:
+            return self._compound_decision(
+                intent=intent,
+                context=context,
+                capabilities=capabilities,
+            )
+
+        if not self._action_is_available(intent.action, capabilities):
+            return Decision(
+                decision_id=self._decision_id(intent),
+                intent=intent,
+                selected_action=None,
+                confidence=0.0,
+                reason=(
+                    f"La intención {intent.action} fue reconocida, "
+                    "pero no existe una capacidad disponible para ejecutarla."
+                ),
+                requires_execution=False,
+                metadata={
+                    "status": "unavailable",
+                    "action": intent.action,
+                },
+            )
+
+        return Decision(
+            decision_id=self._decision_id(intent),
+            intent=intent,
+            selected_action=intent.action,
+            confidence=max(0.0, min(1.0, intent.confidence)),
+            reason=(
+                f"La intención reconocida es {intent.action} "
+                "y existe una capacidad disponible para ejecutarla."
+            ),
+            requires_execution=True,
+            metadata={
+                "status": "selected",
+                "action": intent.action,
+                "context_available": bool(context),
+            },
+        )
+
+    def _unknown_decision(self, intent: Intent) -> Decision:
+        return Decision(
+            decision_id=self._decision_id(intent),
+            intent=intent,
+            selected_action=None,
+            confidence=0.0,
+            reason="No se pudo determinar una acción ejecutable.",
+            requires_execution=False,
+            metadata={
+                "status": "unknown",
+                "action": self.UNKNOWN_ACTION,
+            },
+        )
+
+    def _compound_decision(
+        self,
+        intent: Intent,
+        context: dict[str, Any],
+        capabilities: list[dict[str, Any]],
+    ) -> Decision:
+        executable_actions: list[str] = []
+
+        for sub_intent in intent.sub_intents:
+            if (
+                sub_intent.action != self.UNKNOWN_ACTION
+                and self._action_is_available(
+                    sub_intent.action,
+                    capabilities,
+                )
+            ):
+                executable_actions.append(sub_intent.action)
+
+        if not executable_actions:
+            return Decision(
+                decision_id=self._decision_id(intent),
+                intent=intent,
+                selected_action=None,
+                confidence=0.0,
+                reason=(
+                    "La intención compuesta fue reconocida, "
+                    "pero ninguna de sus acciones tiene una capacidad disponible."
+                ),
+                requires_execution=False,
+                alternatives=[],
+                metadata={
+                    "status": "unavailable",
+                    "compound": True,
+                    "actions": [
+                        sub_intent.action
+                        for sub_intent in intent.sub_intents
+                    ],
+                    "context_available": bool(context),
+                },
+            )
+
+        return Decision(
+            decision_id=self._decision_id(intent),
+            intent=intent,
+            selected_action=executable_actions[0],
+            confidence=max(0.0, min(1.0, intent.confidence)),
+            reason=(
+                "La intención compuesta contiene acciones ejecutables; "
+                "la primera acción disponible fue seleccionada como punto de entrada."
+            ),
+            requires_execution=True,
+            alternatives=executable_actions[1:],
+            metadata={
+                "status": "selected",
+                "compound": True,
+                "actions": executable_actions,
+                "context_available": bool(context),
+            },
+        )
+
+    @staticmethod
+    def _action_is_available(
+        action: str,
+        capabilities: list[dict[str, Any]],
+    ) -> bool:
+        if not capabilities:
+            return True
+
+        for capability in capabilities:
+            if not isinstance(capability, dict):
+                continue
+
+            if capability.get("action") == action:
+                return True
+
+        return False
+
+    @staticmethod
+    def _decision_id(intent: Intent) -> str:
+        source = intent.original_text or intent.action
+        return f"decision-{abs(hash(source))}"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\episode_query_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class EpisodeQuery:
+    action: str
+    field: str
+    source: str = "episode_query"
+
+
+class EpisodeQueryResolver:
+    """
+    Detecta consultas explícitas sobre acciones registradas
+    en memoria episódica.
+
+    No consulta memoria.
+    No ejecuta acciones.
+    Solamente determina qué episodio debe consultarse
+    y qué campo interesa recuperar.
+    """
+
+    def resolve(
+        self,
+        text: str,
+    ) -> EpisodeQuery | None:
+
+        normalized = self._normalize(text)
+
+        #
+        # Última aplicación abierta
+        #
+        if normalized in {
+            "qué aplicación abrí",
+            "que aplicación abrí",
+            "qué aplicacion abrí",
+            "que aplicacion abrí",
+            "qué app abrí",
+            "que app abrí",
+        }:
+            return EpisodeQuery(
+                action="system.open_app",
+                field="application",
+            )
+
+        #
+        # Última aplicación cerrada
+        #
+        if normalized in {
+            "qué aplicación cerré",
+            "que aplicación cerré",
+            "qué aplicacion cerré",
+            "que aplicacion cerré",
+            "qué app cerré",
+            "que app cerré",
+        }:
+            return EpisodeQuery(
+                action="system.close_app",
+                field="application",
+            )
+
+        #
+        # Último volumen establecido
+        #
+        if normalized in {
+            "qué volumen puse",
+            "que volumen puse",
+            "qué volumen dejé",
+            "que volumen dejé",
+            "qué volumen configure",
+            "que volumen configure",
+        }:
+            return EpisodeQuery(
+                action="system.set_volume",
+                field="level",
+            )
+
+        #
+        # Última captura
+        #
+        if normalized in {
+            "qué capturé",
+            "que capturé",
+            "qué capture",
+            "que capture",
+        }:
+            return EpisodeQuery(
+                action="system.screen_capture",
+                field="status",
+            )
+
+        return None
+
+    @staticmethod
+    def _normalize(
+        text: str,
+    ) -> str:
+        """
+        Normaliza espacios y puntuación exterior para que
+        una consulta pueda llegar con signos de interrogación,
+        exclamación u otra puntuación natural.
+
+        Ejemplos:
+
+            ¿Qué aplicación abrí?
+            Qué aplicación abrí
+            ¿Qué aplicación abrí
+
+        producen el mismo texto normalizado.
+        """
+
+        normalized = text.lower().strip()
+
+        normalized = normalized.strip(
+            "¿?¡!.,;: "
+        )
+
+        normalized = " ".join(
+            normalized.split()
+        )
+
+        return normalized
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\execution_context.py
+================================================================================
+
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from planner.objective import (
+    Objective,
+    ObjectiveStatus,
+)
+
+from planner.plan import (
+    ExecutionPlan,
+    StepStatus,
+)
+
+
+class ExecutionContext(BaseModel):
+    """
+    Contexto completo de ejecución de un Objective.
+
+    Todos los módulos del sistema trabajan sobre este
+    objeto compartido.
+
+    Mantiene:
+
+    - identidad del actor
+    - variables
+    - artifacts
+    - resultados
+    - errores
+    - estado del Objective
+    - estado de cada PlanStep
+    - posición actual del plan
+    - evidencia individual de cada Step
+
+    También permite validar las dependencias declaradas
+    entre los pasos del plan.
+    """
+
+    objective: Objective
+
+    plan: ExecutionPlan
+
+    # Identidad del actor que origina la ejecución.
+    # No se asignan privilegios automáticamente.
+    actor_id: str | None = None
+
+    actor_type: str | None = None
+
+    variables: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    artifacts: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    results: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    errors: list[str] = Field(
+        default_factory=list
+    )
+
+    current_step: int = 0
+
+    finished: bool = False
+
+    #
+    # Evidencia producida por cada Step.
+    #
+    # La clave es el ID del PlanStep.
+    #
+    # Ejemplo:
+    #
+    # {
+    #     "step-1": {
+    #         "action": "system.open_app",
+    #         "status": "completed",
+    #         "results": {...},
+    #         "artifacts": {...},
+    #     }
+    # }
+    #
+
+    step_evidence: dict[str, dict[str, Any]] = Field(
+        default_factory=dict
+    )
+
+    def current_plan_step(
+        self,
+    ) -> Any | None:
+        """
+        Devuelve el paso actualmente seleccionado.
+        """
+
+        if self.finished:
+            return None
+
+        if self.current_step >= len(self.plan.steps):
+            return None
+
+        return self.plan.steps[self.current_step]
+
+    def get_step(
+        self,
+        step_id: str,
+    ) -> Any | None:
+        """
+        Busca un paso del plan por su ID.
+        """
+
+        for step in self.plan.steps:
+            if step.id == step_id:
+                return step
+
+        return None
+
+    def validate_step_dependencies(
+        self,
+        step: Any,
+    ) -> tuple[bool, list[str]]:
+        """
+        Valida las dependencias declaradas por un paso.
+        """
+
+        missing: list[str] = []
+
+        for dependency_id in getattr(
+            step,
+            "depends_on",
+            [],
+        ):
+            dependency = self.get_step(dependency_id)
+
+            if dependency is None:
+                missing.append(dependency_id)
+                continue
+
+            if dependency.status != StepStatus.COMPLETED:
+                missing.append(dependency_id)
+
+        return (
+            len(missing) == 0,
+            missing,
+        )
+
+    def validate_step_inputs(
+        self,
+        step: Any,
+    ) -> tuple[bool, list[str]]:
+        """
+        Valida que todos los artifacts declarados
+        por el paso como consumidos estén disponibles.
+        """
+
+        missing: list[str] = []
+
+        for artifact_name in getattr(
+            step,
+            "consumes",
+            [],
+        ):
+            if not self.has_artifact(artifact_name):
+                missing.append(artifact_name)
+
+        return (
+            len(missing) == 0,
+            missing,
+        )
+
+    def record_step_evidence(
+        self,
+        step: Any,
+        *,
+        status: str,
+        results_before: dict[str, Any],
+        artifacts_before: dict[str, Any],
+    ) -> None:
+        """
+        Registra evidencia específica producida por un Step.
+
+        Solamente guarda los cambios producidos durante
+        la ejecución de ese Step.
+
+        Esto evita atribuir a un paso evidencia generada
+        anteriormente por otro paso del plan.
+        """
+
+        result_delta = {
+            key: value
+            for key, value in self.results.items()
+            if (
+                key not in results_before
+                or results_before[key] != value
+            )
+        }
+
+        artifact_delta = {
+            key: value
+            for key, value in self.artifacts.items()
+            if (
+                key not in artifacts_before
+                or artifacts_before[key] != value
+            )
+        }
+
+        self.step_evidence[step.id] = {
+            "step_id": step.id,
+            "action": step.action,
+            "status": status,
+            "results": result_delta,
+            "artifacts": artifact_delta,
+        }
+
+    def get_step_evidence(
+        self,
+        step_id: str,
+    ) -> dict[str, Any] | None:
+        """
+        Devuelve la evidencia registrada para un Step.
+        """
+
+        return self.step_evidence.get(step_id)
+
+    def all_step_evidence(
+        self,
+    ) -> dict[str, dict[str, Any]]:
+        """
+        Devuelve toda la evidencia de los Steps.
+        """
+
+        return dict(self.step_evidence)
+
+    def mark_step_running(
+        self,
+    ) -> None:
+        """
+        Marca el paso actual como RUNNING.
+        """
+
+        step = self.current_plan_step()
+
+        if step is None:
+            return
+
+        step.status = StepStatus.RUNNING
+        self.objective.status = ObjectiveStatus.RUNNING
+
+    def mark_step_failed(
+        self,
+        error: str | None = None,
+    ) -> None:
+        """
+        Marca el paso actual como FAILED
+        y detiene el plan.
+        """
+
+        step = self.current_plan_step()
+
+        if step is not None:
+            step.status = StepStatus.FAILED
+
+        if error:
+            self.add_error(error)
+
+        self.objective.status = ObjectiveStatus.FAILED
+        self.finished = True
+        self.plan.completed = False
+
+    def next_step(
+        self,
+    ) -> None:
+        """
+        Completa el paso actual y avanza
+        al siguiente.
+
+        Si existen errores, el plan se detiene.
+        """
+
+        if self.finished:
+            return
+
+        step = self.current_plan_step()
+
+        if step is not None:
+            if self.has_errors():
+                step.status = StepStatus.FAILED
+                self.objective.status = ObjectiveStatus.FAILED
+                self.finished = True
+                self.plan.completed = False
+                return
+
+            step.status = StepStatus.COMPLETED
+
+        self.current_step += 1
+
+        if self.current_step >= len(self.plan.steps):
+            self.finished = True
+            self.plan.completed = True
+            self.objective.status = ObjectiveStatus.COMPLETED
+
+    def set_variable(
+        self,
+        name: str,
+        value: Any,
+    ) -> None:
+        self.variables[name] = value
+
+    def get_variable(
+        self,
+        name: str,
+        default: Any = None,
+    ) -> Any:
+        return self.variables.get(name, default)
+
+    def add_result(
+        self,
+        name: str,
+        value: Any,
+    ) -> None:
+        self.results[name] = value
+
+    def add_artifact(
+        self,
+        name: str,
+        artifact: Any,
+    ) -> None:
+        self.artifacts[name] = artifact
+
+    def get_artifact(
+        self,
+        name: str,
+        default: Any = None,
+    ) -> Any:
+        return self.artifacts.get(name, default)
+
+    def has_artifact(
+        self,
+        name: str,
+    ) -> bool:
+        return name in self.artifacts
+
+    def add_error(
+        self,
+        error: str,
+    ) -> None:
+        self.errors.append(error)
+
+    def has_errors(
+        self,
+    ) -> bool:
+        """
+        Indica si durante la ejecución
+        se produjo al menos un error.
+        """
+
+        return len(self.errors) > 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\hybrid_intent_provider.py
+================================================================================
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from planner.intent import Intent
+from planner.intent_provider import IntentProvider
+from planner.ollama_intent_provider import OllamaIntentProvider
+from planner.rule_intent_provider import RuleIntentProvider
+
+
+class HybridIntentProvider(IntentProvider):
+    """
+    Provider híbrido de interpretación.
+
+    Primero intenta resolver la intención mediante
+    reglas deterministas.
+
+    Si las reglas no reconocen la solicitud,
+    utiliza Ollama como fallback.
+
+    También permite interpretar solicitudes compuestas
+    como:
+
+        "Capturá la pantalla y después inspeccionala"
+
+    generando una Intent principal con una secuencia
+    de sub-intenciones.
+    """
+
+    def __init__(
+        self,
+        rule_provider: RuleIntentProvider,
+        ollama_provider: OllamaIntentProvider,
+    ) -> None:
+
+        self._rule_provider = rule_provider
+
+        self._ollama_provider = ollama_provider
+
+    async def recognize(
+        self,
+        text: str,
+        capabilities: list[dict[str, Any]] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Intent:
+
+                #
+        # Saludos simples: no deben activar herramientas.
+        #
+
+        normalized = re.sub(
+            r"[¿?¡!.,;:]+",
+            "",
+            text.lower().strip(),
+        )
+
+        greetings = {
+            "hola",
+            "hola nexus",
+            "buenas",
+            "buen día",
+            "buen dia",
+            "buenos días",
+            "buenos dias",
+            "buenas tardes",
+            "buenas noches",
+            "hey",
+            "qué tal",
+            "que tal",
+        }
+
+        if normalized in greetings:
+            return Intent(
+                action="system.unknown",
+                confidence=0.0,
+                parameters={},
+                original_text=text,
+            )
+
+        #
+        # Primero comprobamos si la solicitud contiene
+        # una secuencia explícita de acciones.
+        #
+
+        parts = self._split_compound_request(
+            text
+        )
+
+        # Antes de separar por la conjunción "y", damos prioridad a una
+        # intención determinista reconocida sobre la solicitud completa.
+        # Así, expresiones como "fecha y hora actual" no se dividen en dos
+        # fragmentos incompletos y no terminan innecesariamente en Ollama.
+        if len(parts) > 1:
+            whole_intent = await self._rule_provider.recognize(
+                text,
+                capabilities,
+                context,
+            )
+            if whole_intent.action != "system.unknown":
+                return whole_intent
+
+        #
+        # Solicitud simple.
+        #
+
+        if len(parts) == 1:
+
+            return await self._recognize_single(
+                parts[0],
+                capabilities,
+                context,
+            )
+
+        #
+        # Solicitud compuesta.
+        #
+
+        sub_intents: list[Intent] = []
+
+        for part in parts:
+
+            intent = await self._recognize_single(
+                part,
+                capabilities,
+                context,
+            )
+
+            #
+            # Si una parte no pudo resolverse,
+            # no construimos una secuencia parcial.
+            #
+
+            if intent.action == "system.unknown":
+
+                #
+                # Intentamos interpretar la solicitud
+                # completa mediante Ollama.
+                #
+
+                return await self._ollama_provider.recognize(
+                    text,
+                    capabilities,
+                    context,
+                )
+
+            sub_intents.append(
+                intent
+            )
+
+        #
+        # La Intent principal conserva el texto original
+        # y contiene la secuencia que deberá convertir
+        # el Planner en pasos.
+        #
+
+        first = sub_intents[0]
+
+        return Intent(
+            action=first.action,
+            confidence=min(
+                intent.confidence
+                for intent in sub_intents
+            ),
+            parameters=first.parameters.copy(),
+            original_text=text,
+            sub_intents=sub_intents,
+        )
+
+    async def _recognize_single(
+        self,
+        text: str,
+        capabilities: list[dict[str, Any]] | None,
+        context: dict[str, Any] | None,
+    ) -> Intent:
+        """
+        Resuelve una única parte de una solicitud.
+        """
+
+        intent = await self._rule_provider.recognize(
+            text,
+            capabilities,
+            context,
+        )
+
+        if intent.action != "system.unknown":
+
+            return intent
+
+        return await self._ollama_provider.recognize(
+            text,
+            capabilities,
+            context,
+        )
+
+    @staticmethod
+    def _split_compound_request(
+        text: str,
+    ) -> list[str]:
+        """
+        Divide solicitudes que expresan una secuencia
+        explícita de acciones.
+
+        Ejemplos:
+
+            "capturá la pantalla y después inspeccionala"
+
+        se convierte en:
+
+            [
+                "capturá la pantalla",
+                "inspeccionala",
+            ]
+
+        También reconoce conectores como:
+
+            "y luego"
+            "y después"
+            "y a continuación"
+            "y"
+
+        El split solamente se realiza cuando el conector
+        aparece entre fragmentos con contenido.
+        """
+
+        normalized = text.strip()
+
+        if not normalized:
+
+            return [normalized]
+
+        parts = re.split(
+            r"\s+\b(?:y\s+(?:después|luego|a\s+continuación)|y)\b\s+",
+            normalized,
+            flags=re.IGNORECASE,
+        )
+
+        return [
+            part.strip()
+            for part in parts
+            if part.strip()
+        ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\intent.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class Intent(BaseModel):
+    """
+    Representa una intención detectada
+    a partir de una solicitud del usuario.
+
+    Una Intent puede representar:
+
+    - una acción simple
+    - una secuencia de sub-intenciones
+
+    Las intenciones simples mantienen exactamente
+    el comportamiento anterior.
+    """
+
+    action: str
+
+    confidence: float = 1.0
+
+    parameters: dict[str, Any] = Field(
+        default_factory=dict
+    )
+
+    original_text: str
+
+    sub_intents: list["Intent"] = Field(
+        default_factory=list
+    )
+
+    @property
+    def is_compound(self) -> bool:
+        """
+        Indica si la intención contiene
+        múltiples intenciones ejecutables.
+        """
+
+        return len(self.sub_intents) > 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\planner\src\planner\intent_provider.py
+================================================================================
+
+from __future__ import annotations
+
+from abc import ABC
+from abc import abstractmethod
+from typing import Any
+
+from planner.intent import Intent
+
+
+class IntentProvider(ABC):
+    """
+    Contrato para cualquier componente capaz
+    de convertir texto del usuario en un Intent.
+    """
+
+    @abstractmethod
+    async def recognize(
+        self,
+        text: str,
+        capabilities: list[dict[str, Any]] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> Intent:
+        """
+        Convierte texto libre en un Intent.
+
+        El contexto contiene información relevante
+        de la WorkingMemory para resolver referencias
+        y consultas contextuales.
+        """
+        ...
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

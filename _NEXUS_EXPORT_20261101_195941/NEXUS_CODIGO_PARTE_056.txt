@@ -1,0 +1,1946 @@
+﻿
+================================================================================
+ARCHIVO: packages\documents\tests\test_ingestion_registry.py
+================================================================================
+
+from documents import (
+    DocumentArtifact,
+    DocumentContent,
+    IngestionRegistry,
+    IngestionResult,
+)
+
+from documents import DocumentType
+
+
+class FakeIngestor:
+    def __init__(self, label: str) -> None:
+        self.label = label
+
+    def ingest(self, artifact: DocumentArtifact) -> IngestionResult:
+        return IngestionResult(
+            artifact=artifact,
+            content=DocumentContent.create(
+                text=f"Content from {self.label}",
+            ),
+        )
+
+
+def test_register_and_get_ingestor():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor("text")
+
+    registry.register("text/plain", ingestor)
+
+    assert registry.get("text/plain") is ingestor
+
+
+def test_get_unknown_ingestor_returns_none():
+    registry = IngestionRegistry()
+
+    assert registry.get("application/pdf") is None
+
+
+def test_supports_content_type():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor("text")
+
+    registry.register("text/plain", ingestor)
+
+    assert registry.supports("text/plain")
+    assert not registry.supports("application/pdf")
+
+
+def test_register_replaces_existing_ingestor():
+    registry = IngestionRegistry()
+
+    first = FakeIngestor("first")
+    second = FakeIngestor("second")
+
+    registry.register("text/plain", first)
+    registry.register("text/plain", second)
+
+    assert registry.get("text/plain") is second
+
+
+def test_remove_ingestor():
+    registry = IngestionRegistry()
+    ingestor = FakeIngestor("text")
+
+    registry.register("text/plain", ingestor)
+
+    result = registry.remove("text/plain")
+
+    assert result is ingestor
+    assert registry.get("text/plain") is None
+
+
+def test_remove_unknown_ingestor_returns_none():
+    registry = IngestionRegistry()
+
+    assert registry.remove("text/plain") is None
+
+
+def test_content_types():
+    registry = IngestionRegistry()
+
+    registry.register("text/plain", FakeIngestor("text"))
+    registry.register("text/markdown", FakeIngestor("markdown"))
+
+    assert registry.content_types() == [
+        "text/plain",
+        "text/markdown",
+    ]
+
+
+def test_clear_registry():
+    registry = IngestionRegistry()
+
+    registry.register("text/plain", FakeIngestor("text"))
+    registry.register("text/markdown", FakeIngestor("markdown"))
+
+    registry.clear()
+
+    assert registry.content_types() == []
+    assert not registry.supports("text/plain")
+
+from documents import DocumentType
+
+
+def test_registry_accepts_document_type():
+    registry = IngestionRegistry()
+
+    ingestor = object()
+
+    registry.register(
+        DocumentType.from_mime_type(
+            "TEXT/PLAIN"
+        ),
+        ingestor,
+    )
+
+    assert registry.get(
+        "text/plain"
+    ) is ingestor
+
+
+def test_registry_normalizes_registered_mime_type():
+    registry = IngestionRegistry()
+
+    ingestor = object()
+
+    registry.register(
+        " TEXT/PLAIN ",
+        ingestor,
+    )
+
+    assert registry.supports(
+        "text/plain"
+    )
+
+    assert registry.supports(
+        DocumentType.from_mime_type(
+            "TEXT/PLAIN"
+        )
+    )
+
+
+def test_registry_removes_normalized_type():
+    registry = IngestionRegistry()
+
+    ingestor = object()
+
+    registry.register(
+        "application/pdf",
+        ingestor,
+    )
+
+    removed = registry.remove(
+        DocumentType.from_mime_type(
+            "APPLICATION/PDF"
+        )
+    )
+
+    assert removed is ingestor
+    assert not registry.supports(
+        "application/pdf"
+    )
+
+
+def test_registry_rejects_invalid_mime_type():
+    registry = IngestionRegistry()
+
+    try:
+        registry.register(
+            "invalid",
+            object(),
+        )
+    except ValueError:
+        return
+
+    raise AssertionError(
+        "Expected ValueError for invalid MIME type"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_ingestion_service.py
+================================================================================
+
+import pytest
+
+from documents import (
+    DocumentArtifact,
+    DocumentIngestionService,
+    IngestionRegistry,
+    LocalArtifactReader,
+    TextIngestor,
+)
+
+
+def build_service() -> DocumentIngestionService:
+    registry = IngestionRegistry()
+
+    registry.register(
+        "text/plain",
+        TextIngestor(LocalArtifactReader()),
+    )
+
+    return DocumentIngestionService(registry)
+
+
+def test_service_ingests_registered_content_type(tmp_path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido del documento.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service = build_service()
+
+    result = service.ingest(
+        artifact=artifact,
+        content_type="text/plain",
+    )
+
+    assert result.artifact is artifact
+    assert result.content.text == "Contenido del documento."
+    assert result.content.content_type == "text/plain"
+
+
+def test_service_rejects_unsupported_content_type(tmp_path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service = build_service()
+
+    with pytest.raises(
+        ValueError,
+        match="No ingestor registered for content type: application/pdf",
+    ):
+        service.ingest(
+            artifact=artifact,
+            content_type="application/pdf",
+        )
+
+
+def test_service_uses_registry_selected_ingestor(tmp_path):
+    file_path = tmp_path / "notes.txt"
+    file_path.write_text(
+        "Notas de NEXUS.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    service = build_service()
+
+    result = service.ingest(
+        artifact=artifact,
+        content_type="text/plain",
+    )
+
+    assert result.artifact.id == artifact.id
+    assert result.content.text == "Notas de NEXUS."
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_knowledge.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentKnowledge,
+    DocumentSemanticChange,
+)
+
+
+def build_semantic_change() -> DocumentSemanticChange:
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+    return DocumentSemanticChange(
+        source_change=change,
+        meaning="Se modificó la vigencia.",
+        topics=("vigencia",),
+        confidence=0.9,
+    )
+
+
+def test_document_knowledge_preserves_source_change():
+    semantic_change = build_semantic_change()
+
+    knowledge = DocumentKnowledge(
+        source_change=semantic_change,
+        statement=(
+            "La vigencia indicada en el documento "
+            "pasó de 12 meses a 24 meses."
+        ),
+    )
+
+    assert knowledge.source_change == semantic_change
+
+
+def test_document_knowledge_stores_statement():
+    knowledge = DocumentKnowledge(
+        source_change=build_semantic_change(),
+        statement="La vigencia indicada cambió.",
+    )
+
+    assert knowledge.statement == (
+        "La vigencia indicada cambió."
+    )
+
+
+def test_document_knowledge_stores_topic():
+    knowledge = DocumentKnowledge(
+        source_change=build_semantic_change(),
+        statement="La vigencia indicada cambió.",
+        topic=" vigencia ",
+    )
+
+    assert knowledge.topic == "vigencia"
+
+
+def test_document_knowledge_normalizes_empty_topic():
+    knowledge = DocumentKnowledge(
+        source_change=build_semantic_change(),
+        statement="La vigencia indicada cambió.",
+        topic="   ",
+    )
+
+    assert knowledge.topic is None
+
+
+def test_document_knowledge_accepts_confidence():
+    knowledge = DocumentKnowledge(
+        source_change=build_semantic_change(),
+        statement="La vigencia indicada cambió.",
+        confidence=0.85,
+    )
+
+    assert knowledge.confidence == 0.85
+
+
+def test_document_knowledge_rejects_invalid_confidence():
+    try:
+        DocumentKnowledge(
+            source_change=build_semantic_change(),
+            statement="La vigencia indicada cambió.",
+            confidence=1.1,
+        )
+    except ValueError as exc:
+        assert str(exc) == (
+            "Document knowledge confidence must be between 0 and 1"
+        )
+    else:
+        raise AssertionError(
+            "Expected ValueError for invalid confidence"
+        )
+
+
+def test_document_knowledge_rejects_empty_statement():
+    try:
+        DocumentKnowledge(
+            source_change=build_semantic_change(),
+            statement="   ",
+        )
+    except ValueError as exc:
+        assert str(exc) == (
+            "Document knowledge statement cannot be empty"
+        )
+    else:
+        raise AssertionError(
+            "Expected ValueError for empty statement"
+        )
+
+
+def test_document_knowledge_is_immutable():
+    knowledge = DocumentKnowledge(
+        source_change=build_semantic_change(),
+        statement="La vigencia indicada cambió.",
+    )
+
+    try:
+        knowledge.statement = "Otro conocimiento."
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError(
+            "DocumentKnowledge must be immutable"
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_knowledge_extraction.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentKnowledge,
+    DocumentKnowledgeExtraction,
+    DocumentSemanticAnalysis,
+    DocumentSemanticChange,
+    DocumentVersionChangeResult,
+    DocumentVersionComparison,
+)
+
+
+def build_analysis() -> DocumentSemanticAnalysis:
+    comparison = DocumentVersionComparison(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+        from_content_id="content-1",
+        to_content_id="content-2",
+        changed=True,
+    )
+
+    source_result = DocumentVersionChangeResult(
+        comparison=comparison,
+        changes=(
+            DocumentChange.modified(
+                "Vigencia: 12 meses.",
+                "Vigencia: 24 meses.",
+                before_line=1,
+                after_line=1,
+            ),
+            DocumentChange.added(
+                "Nueva cláusula.",
+                line=3,
+            ),
+        ),
+    )
+
+    semantic_changes = (
+        DocumentSemanticChange(
+            source_change=source_result.changes[0],
+            meaning="Se modificó la vigencia.",
+            topics=("vigencia",),
+            confidence=0.9,
+        ),
+        DocumentSemanticChange(
+            source_change=source_result.changes[1],
+            meaning="Se agregó una nueva cláusula.",
+            topics=("contrato",),
+            confidence=1.0,
+        ),
+    )
+
+    return DocumentSemanticAnalysis(
+        source=source_result,
+        changes=semantic_changes,
+    )
+
+
+class FakeKnowledgeExtractor:
+    def extract(
+        self,
+        change: DocumentSemanticChange,
+    ) -> tuple[DocumentKnowledge, ...]:
+        return (
+            DocumentKnowledge(
+                source_change=change,
+                statement=change.meaning,
+                topic=change.topics[0] if change.topics else None,
+                confidence=change.confidence,
+            ),
+        )
+
+
+def test_knowledge_extraction_preserves_source_analysis():
+    analysis = build_analysis()
+
+    extraction = DocumentKnowledgeExtraction(
+        source=analysis,
+        knowledge=(),
+    )
+
+    assert extraction.source == analysis
+
+
+def test_knowledge_extraction_contains_knowledge():
+    analysis = build_analysis()
+
+    knowledge = (
+        DocumentKnowledge(
+            source_change=analysis.changes[0],
+            statement="Se modificó la vigencia.",
+        ),
+    )
+
+    extraction = DocumentKnowledgeExtraction(
+        source=analysis,
+        knowledge=knowledge,
+    )
+
+    assert len(extraction.knowledge) == 1
+    assert extraction.knowledge[0].statement == (
+        "Se modificó la vigencia."
+    )
+
+
+def test_knowledge_extraction_extracted_is_true():
+    analysis = build_analysis()
+
+    extraction = DocumentKnowledgeExtraction(
+        source=analysis,
+        knowledge=(
+            DocumentKnowledge(
+                source_change=analysis.changes[0],
+                statement="Se modificó la vigencia.",
+            ),
+        ),
+    )
+
+    assert extraction.extracted is True
+    assert extraction.empty is False
+
+
+def test_knowledge_extraction_empty_when_no_knowledge():
+    extraction = DocumentKnowledgeExtraction(
+        source=build_analysis(),
+        knowledge=(),
+    )
+
+    assert extraction.extracted is False
+    assert extraction.empty is True
+
+
+def test_knowledge_extraction_is_immutable():
+    extraction = DocumentKnowledgeExtraction(
+        source=build_analysis(),
+        knowledge=(),
+    )
+
+    assert isinstance(extraction.knowledge, tuple)
+
+
+def test_service_extracts_all_semantic_changes():
+    from documents import DocumentKnowledgeExtractionService
+
+    service = DocumentKnowledgeExtractionService(
+        extractor=FakeKnowledgeExtractor(),
+    )
+
+    analysis = build_analysis()
+
+    extraction = service.extract(analysis)
+
+    assert len(extraction.knowledge) == 2
+
+
+def test_service_preserves_change_order():
+    from documents import DocumentKnowledgeExtractionService
+
+    service = DocumentKnowledgeExtractionService(
+        extractor=FakeKnowledgeExtractor(),
+    )
+
+    analysis = build_analysis()
+
+    extraction = service.extract(analysis)
+
+    assert (
+        extraction.knowledge[0].source_change
+        == analysis.changes[0]
+    )
+
+    assert (
+        extraction.knowledge[1].source_change
+        == analysis.changes[1]
+    )
+
+    assert (
+        extraction.knowledge[0].source_change.source_change
+        == analysis.changes[0].source_change
+    )
+
+    assert (
+        extraction.knowledge[1].source_change.source_change
+        == analysis.changes[1].source_change
+    )
+
+
+def test_service_returns_empty_extraction_without_changes():
+    from documents import DocumentKnowledgeExtractionService
+
+    comparison = DocumentVersionComparison(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+        from_content_id="content-1",
+        to_content_id="content-2",
+        changed=False,
+    )
+
+    source = DocumentVersionChangeResult(
+        comparison=comparison,
+        changes=(),
+    )
+
+    analysis = DocumentSemanticAnalysis(
+        source=source,
+        changes=(),
+    )
+
+    service = DocumentKnowledgeExtractionService(
+        extractor=FakeKnowledgeExtractor(),
+    )
+
+    extraction = service.extract(analysis)
+
+    assert extraction.knowledge == ()
+    assert extraction.extracted is False
+    assert extraction.empty is True
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_knowledge_extractor.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentKnowledge,
+    DocumentKnowledgeExtractor,
+    DocumentSemanticChange,
+    RuleBasedDocumentKnowledgeExtractor,
+)
+
+
+def build_change() -> DocumentSemanticChange:
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+    return DocumentSemanticChange(
+        source_change=change,
+        meaning="Se modificó la vigencia.",
+        topics=("vigencia", "contrato"),
+        confidence=0.9,
+    )
+
+
+def test_rule_based_extractor_implements_contract():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    assert isinstance(
+        extractor,
+        DocumentKnowledgeExtractor,
+    )
+
+
+def test_extractor_returns_tuple():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(build_change())
+
+    assert isinstance(result, tuple)
+
+
+def test_extractor_creates_knowledge():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(build_change())
+
+    assert len(result) == 1
+    assert isinstance(result[0], DocumentKnowledge)
+
+
+def test_extractor_preserves_semantic_source():
+    change = build_change()
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(change)
+
+    assert result[0].source_change == change
+
+
+def test_extractor_uses_semantic_meaning_as_statement():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(build_change())
+
+    assert result[0].statement == (
+        "Se modificó la vigencia."
+    )
+
+
+def test_extractor_uses_first_topic():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(build_change())
+
+    assert result[0].topic == "vigencia"
+
+
+def test_extractor_preserves_confidence():
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(build_change())
+
+    assert result[0].confidence == 0.9
+
+
+def test_extractor_handles_change_without_topics():
+    change = DocumentSemanticChange(
+        source_change=DocumentChange.added(
+            "Nueva cláusula.",
+            line=2,
+        ),
+        meaning="Se agregó contenido al documento.",
+        confidence=1.0,
+    )
+
+    extractor = RuleBasedDocumentKnowledgeExtractor()
+
+    result = extractor.extract(change)
+
+    assert len(result) == 1
+    assert result[0].topic is None
+    assert result[0].statement == (
+        "Se agregó contenido al documento."
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_knowledge_record.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentKnowledge,
+    DocumentKnowledgeRecord,
+    DocumentSemanticChange,
+)
+
+
+def build_knowledge() -> DocumentKnowledge:
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+    semantic_change = DocumentSemanticChange(
+        source_change=change,
+        meaning="Se modificó la vigencia.",
+        topics=("vigencia",),
+        confidence=0.9,
+    )
+
+    return DocumentKnowledge(
+        source_change=semantic_change,
+        statement=(
+            "La vigencia indicada en el documento "
+            "pasó de 12 meses a 24 meses."
+        ),
+        topic="vigencia",
+        confidence=0.9,
+    )
+
+
+def test_knowledge_record_create():
+    knowledge = build_knowledge()
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    assert record.id
+    assert record.document_id == "doc-1"
+    assert record.content_version_id == "version-2"
+    assert record.knowledge == knowledge
+    assert record.created_at is not None
+
+
+def test_knowledge_record_preserves_knowledge():
+    knowledge = build_knowledge()
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    assert record.knowledge.statement == (
+        "La vigencia indicada en el documento "
+        "pasó de 12 meses a 24 meses."
+    )
+
+
+def test_knowledge_record_preserves_source_change():
+    knowledge = build_knowledge()
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    semantic_change = record.knowledge.source_change
+    deterministic_change = semantic_change.source_change
+
+    assert deterministic_change.before == "Vigencia: 12 meses."
+    assert deterministic_change.after == "Vigencia: 24 meses."
+
+
+def test_knowledge_record_generates_unique_ids():
+    knowledge = build_knowledge()
+
+    first = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    second = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    assert first.id != second.id
+
+
+def test_knowledge_record_is_immutable():
+    knowledge = build_knowledge()
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    try:
+        record.document_id = "doc-2"
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError(
+            "DocumentKnowledgeRecord must be immutable"
+        )
+
+
+def test_knowledge_record_has_creation_timestamp():
+    knowledge = build_knowledge()
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="doc-1",
+        content_version_id="version-2",
+        knowledge=knowledge,
+    )
+
+    assert record.created_at.tzinfo is not None
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_knowledge_record_store.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentKnowledge,
+    DocumentKnowledgeRecord,
+    DocumentKnowledgeRecordStore,
+    DocumentSemanticChange,
+    DocumentChangeType,
+
+)
+
+
+def build_record(
+    document_id: str = "doc-1",
+    content_version_id: str = "version-1",
+) -> DocumentKnowledgeRecord:
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+    semantic_change = DocumentSemanticChange(
+        source_change=change,
+        meaning="Se modificó la vigencia.",
+        topics=("vigencia",),
+        confidence=0.9,
+    )
+
+    knowledge = DocumentKnowledge(
+        source_change=semantic_change,
+        statement="La vigencia cambió.",
+        topic="vigencia",
+        confidence=0.9,
+    )
+
+    return DocumentKnowledgeRecord.create(
+        document_id=document_id,
+        content_version_id=content_version_id,
+        knowledge=knowledge,
+    )
+
+
+def test_add_and_get():
+    store = DocumentKnowledgeRecordStore()
+    record = build_record()
+
+    store.add(record)
+
+    assert store.get(record.id) == record
+
+
+def test_get_returns_none_when_missing():
+    store = DocumentKnowledgeRecordStore()
+
+    assert store.get("missing") is None
+
+
+def test_list_returns_all_records():
+    store = DocumentKnowledgeRecordStore()
+
+    first = build_record(
+        document_id="doc-1",
+        content_version_id="version-1",
+    )
+    second = build_record(
+        document_id="doc-2",
+        content_version_id="version-2",
+    )
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list() == [first, second]
+
+
+def test_list_for_document():
+    store = DocumentKnowledgeRecordStore()
+
+    first = build_record(document_id="doc-1")
+    second = build_record(document_id="doc-2")
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list_for_document("doc-1") == [first]
+    assert store.list_for_document("doc-2") == [second]
+
+
+def test_list_for_content_version():
+    store = DocumentKnowledgeRecordStore()
+
+    first = build_record(
+        document_id="doc-1",
+        content_version_id="version-1",
+    )
+    second = build_record(
+        document_id="doc-1",
+        content_version_id="version-2",
+    )
+
+    store.add(first)
+    store.add(second)
+
+    assert store.list_for_content_version("version-1") == [first]
+    assert store.list_for_content_version("version-2") == [second]
+
+
+def test_remove():
+    store = DocumentKnowledgeRecordStore()
+    record = build_record()
+
+    store.add(record)
+
+    removed = store.remove(record.id)
+
+    assert removed == record
+    assert store.get(record.id) is None
+
+
+def test_clear():
+    store = DocumentKnowledgeRecordStore()
+
+    store.add(build_record())
+    store.add(build_record(document_id="doc-2"))
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+def test_count():
+    store = DocumentKnowledgeRecordStore()
+
+    assert store.count() == 0
+
+    store.add(build_record())
+    assert store.count() == 1
+
+    store.add(build_record(document_id="doc-2"))
+    assert store.count() == 2
+
+def test_find_returns_matching_knowledge_record():
+    store = DocumentKnowledgeRecordStore()
+
+    knowledge = DocumentKnowledge(
+        source_change=DocumentSemanticChange(
+            source_change=DocumentChange(
+                change_type=DocumentChangeType.MODIFIED,
+                before="A",
+                after="B",
+            ),
+            meaning="Cambio",
+        ),
+        statement="Se modificó contenido.",
+    )
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="document-1",
+        content_version_id="version-1",
+        knowledge=knowledge,
+    )
+
+    store.add(record)
+
+    result = store.find(
+        document_id="document-1",
+        content_version_id="version-1",
+        knowledge=knowledge,
+    )
+
+    assert result == record
+
+def test_find_returns_none_for_non_matching_knowledge_record():
+    store = DocumentKnowledgeRecordStore()
+
+    knowledge = DocumentKnowledge(
+        source_change=DocumentSemanticChange(
+            source_change=DocumentChange(
+                change_type=DocumentChangeType.MODIFIED,
+                before="A",
+                after="B",
+            ),
+            meaning="Cambio",
+        ),
+        statement="Se modificó contenido.",
+    )
+
+    record = DocumentKnowledgeRecord.create(
+        document_id="document-1",
+        content_version_id="version-1",
+        knowledge=knowledge,
+    )
+
+    store.add(record)
+
+    result = store.find(
+        document_id="document-1",
+        content_version_id="version-1",
+        knowledge=DocumentKnowledge(
+            source_change=DocumentSemanticChange(
+                source_change=DocumentChange(
+                    change_type=DocumentChangeType.MODIFIED,
+                    before="X",
+                    after="Y",
+                ),
+                meaning="Otro cambio",
+            ),
+            statement="Otro conocimiento.",
+        ),
+    )
+
+    assert result is None
+
+def test_remove_for_content_version_removes_only_matching_records():
+    store = DocumentKnowledgeRecordStore()
+
+    record_v1 = DocumentKnowledgeRecord.create(
+        document_id="document-1",
+        content_version_id="version-1",
+        knowledge=DocumentKnowledge(
+            source_change=DocumentSemanticChange(
+                source_change=DocumentChange(
+                    change_type=DocumentChangeType.MODIFIED,
+                    before="A",
+                    after="B",
+                ),
+                meaning="Se modificó contenido existente del documento.",
+            ),
+            statement="Se modificó contenido existente del documento.",
+        ),
+    )
+
+    record_v2 = DocumentKnowledgeRecord.create(
+        document_id="document-1",
+        content_version_id="version-2",
+        knowledge=DocumentKnowledge(
+            source_change=DocumentSemanticChange(
+                source_change=DocumentChange(
+                    change_type=DocumentChangeType.MODIFIED,
+                    before="B",
+                    after="C",
+                ),
+                meaning="Se modificó contenido existente del documento.",
+            ),
+            statement="Se modificó contenido existente del documento.",
+        ),
+    )
+
+    store.add(record_v1)
+    store.add(record_v2)
+
+    removed = store.remove_for_content_version(
+        "version-1"
+    )
+
+    assert removed == 1
+    assert store.get(record_v1.id) is None
+    assert store.get(record_v2.id) == record_v2
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_local_artifact_reader.py
+================================================================================
+
+from pathlib import Path
+
+import pytest
+
+from documents import DocumentArtifact, LocalArtifactReader
+
+
+def test_read_local_artifact(tmp_path: Path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido local.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    reader = LocalArtifactReader()
+
+    assert reader.read(artifact) == "Contenido local."
+
+
+def test_read_direct_path(tmp_path: Path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido directo.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=str(file_path),
+    )
+
+    reader = LocalArtifactReader()
+
+    assert reader.read(artifact) == "Contenido directo."
+
+
+def test_read_utf8_content(tmp_path: Path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Información de administración: acción, operación y gestión.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    reader = LocalArtifactReader()
+
+    assert reader.read(artifact) == (
+        "Información de administración: acción, operación y gestión."
+    )
+
+
+def test_read_missing_file_raises(tmp_path: Path):
+    file_path = tmp_path / "missing.txt"
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    reader = LocalArtifactReader()
+
+    with pytest.raises(FileNotFoundError):
+        reader.read(artifact)
+
+
+def test_custom_encoding(tmp_path: Path):
+    file_path = tmp_path / "document.txt"
+    file_path.write_text(
+        "Contenido.",
+        encoding="utf-8",
+    )
+
+    artifact = DocumentArtifact.create(
+        location=f"local:{file_path}",
+    )
+
+    reader = LocalArtifactReader(encoding="utf-8")
+
+    assert reader.read(artifact) == "Contenido."
+
+def test_local_reader_rejects_non_local_source():
+    artifact = DocumentArtifact.create(
+        location="remote:test.txt",
+    )
+
+    reader = LocalArtifactReader()
+
+    with pytest.raises(ValueError):
+        reader.read(artifact)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_query.py
+================================================================================
+
+from documents.models import Document
+from documents.query import DocumentQueryResult
+
+
+def test_document_query_result_stores_documents_and_total():
+    first = Document.create(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+    )
+
+    second = Document.create(
+        name="Segundo",
+        mime_type="application/pdf",
+        source="second.pdf",
+    )
+
+    result = DocumentQueryResult(
+        documents=(first, second),
+        total=2,
+    )
+
+    assert result.documents == (
+        first,
+        second,
+    )
+
+    assert result.total == 2
+
+
+def test_document_query_result_from_documents_calculates_total():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (document,),
+    )
+
+    assert result.documents == (
+        document,
+    )
+
+    assert result.total == 1
+
+
+def test_document_query_result_preserves_query_metadata():
+    document = Document.create(
+        name="Contrato",
+        mime_type="application/pdf",
+        source="contrato.pdf",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (document,),
+        query={
+            "name": "contrato",
+            "mime_type": "application/pdf",
+        },
+    )
+
+    assert result.query == {
+        "name": "contrato",
+        "mime_type": "application/pdf",
+    }
+
+
+def test_document_query_result_is_immutable():
+    result = DocumentQueryResult(
+        documents=(),
+        total=0,
+    )
+
+    try:
+        result.total = 1
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError(
+            "DocumentQueryResult should be immutable"
+        )
+
+def test_document_query_result_reports_empty_state():
+    result = DocumentQueryResult(
+        documents=(),
+        total=0,
+    )
+
+    assert result.is_empty is True
+    assert result.has_results is False
+
+
+def test_document_query_result_reports_results_state():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (document,),
+    )
+
+    assert result.is_empty is False
+    assert result.has_results is True
+
+def test_document_query_result_ordered_documents_uses_relevance():
+    from documents.context_relevance import (
+        DocumentContextMatch,
+        DocumentContextRelevance,
+    )
+
+    user_document = Document.create(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+    )
+
+    project_document = Document.create(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (
+            user_document,
+            project_document,
+        ),
+        matches=(
+            DocumentContextMatch(
+                document=user_document,
+                relevance=DocumentContextRelevance.USER,
+            ),
+            DocumentContextMatch(
+                document=project_document,
+                relevance=DocumentContextRelevance.PROJECT,
+            ),
+        ),
+    )
+
+    assert result.ordered_documents() == (
+        project_document,
+        user_document,
+    )
+
+
+def test_document_query_result_ordered_documents_without_matches_preserves_order():
+    first = Document.create(
+        name="Primero",
+        mime_type="text/plain",
+        source="first.txt",
+    )
+
+    second = Document.create(
+        name="Segundo",
+        mime_type="text/plain",
+        source="second.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (
+            first,
+            second,
+        ),
+    )
+
+    assert result.ordered_documents() == (
+        first,
+        second,
+    )
+
+def test_document_query_result_ordered_matches_uses_relevance():
+    from documents.context_relevance import (
+        DocumentContextMatch,
+        DocumentContextRelevance,
+    )
+
+    user_document = Document.create(
+        name="Usuario",
+        mime_type="text/plain",
+        source="user.txt",
+    )
+
+    project_document = Document.create(
+        name="Proyecto",
+        mime_type="text/plain",
+        source="project.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (
+            user_document,
+            project_document,
+        ),
+        matches=(
+            DocumentContextMatch(
+                document=user_document,
+                relevance=DocumentContextRelevance.USER,
+            ),
+            DocumentContextMatch(
+                document=project_document,
+                relevance=DocumentContextRelevance.PROJECT,
+            ),
+        ),
+    )
+
+    assert result.ordered_matches() == (
+        DocumentContextMatch(
+            document=project_document,
+            relevance=DocumentContextRelevance.PROJECT,
+        ),
+        DocumentContextMatch(
+            document=user_document,
+            relevance=DocumentContextRelevance.USER,
+        ),
+    )
+
+
+def test_document_query_result_ordered_matches_without_matches_returns_empty():
+    result = DocumentQueryResult(
+        documents=(),
+        total=0,
+    )
+
+    assert result.ordered_matches() == ()
+
+def test_document_query_result_supports_pagination_metadata():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (document,),
+        total=5,
+        offset=2,
+        limit=1,
+    )
+
+    assert result.documents == (
+        document,
+    )
+
+    assert result.total == 5
+    assert result.offset == 2
+    assert result.limit == 1
+    assert result.has_more is True
+
+
+def test_document_query_result_reports_no_more_pages():
+    document = Document.create(
+        name="Documento",
+        mime_type="text/plain",
+        source="document.txt",
+    )
+
+    result = DocumentQueryResult.from_documents(
+        (document,),
+        total=3,
+        offset=2,
+        limit=1,
+    )
+
+    assert result.has_more is False
+
+
+def test_document_query_result_rejects_negative_offset():
+    try:
+        DocumentQueryResult.from_documents(
+            (),
+            offset=-1,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "negative offset should be rejected"
+        )
+
+
+def test_document_query_result_rejects_negative_limit():
+    try:
+        DocumentQueryResult.from_documents(
+            (),
+            limit=-1,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "negative limit should be rejected"
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_semantic_analysis.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentSemanticAnalysis,
+    DocumentSemanticChange,
+    DocumentVersionChangeResult,
+    DocumentVersionComparison,
+)
+
+
+def build_comparison() -> DocumentVersionComparison:
+    return DocumentVersionComparison(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+        from_content_id="content-1",
+        to_content_id="content-2",
+        changed=True,
+    )
+
+
+def build_source_result() -> DocumentVersionChangeResult:
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=1,
+        after_line=1,
+    )
+
+    return DocumentVersionChangeResult(
+        comparison=build_comparison(),
+        changes=(change,),
+    )
+
+
+def build_semantic_change() -> DocumentSemanticChange:
+    source = build_source_result().changes[0]
+
+    return DocumentSemanticChange(
+        source_change=source,
+        meaning="Se modificó la vigencia.",
+        topics=("vigencia",),
+        confidence=0.9,
+    )
+
+
+def test_semantic_analysis_preserves_source_result():
+    source = build_source_result()
+
+    analysis = DocumentSemanticAnalysis(
+        source=source,
+        changes=(build_semantic_change(),),
+    )
+
+    assert analysis.source == source
+
+
+def test_semantic_analysis_contains_semantic_changes():
+    analysis = DocumentSemanticAnalysis(
+        source=build_source_result(),
+        changes=(build_semantic_change(),),
+    )
+
+    assert len(analysis.changes) == 1
+    assert analysis.changes[0].meaning == (
+        "Se modificó la vigencia."
+    )
+
+
+def test_semantic_analysis_changed_is_true_when_changes_exist():
+    analysis = DocumentSemanticAnalysis(
+        source=build_source_result(),
+        changes=(build_semantic_change(),),
+    )
+
+    assert analysis.changed is True
+    assert analysis.unchanged is False
+
+
+def test_semantic_analysis_unchanged_when_no_semantic_changes():
+    analysis = DocumentSemanticAnalysis(
+        source=build_source_result(),
+        changes=(),
+    )
+
+    assert analysis.changed is False
+    assert analysis.unchanged is True
+
+
+def test_semantic_analysis_changes_are_immutable():
+    analysis = DocumentSemanticAnalysis(
+        source=build_source_result(),
+        changes=(build_semantic_change(),),
+    )
+
+    assert isinstance(analysis.changes, tuple)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_semantic_analysis_service.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentSemanticAnalysisService,
+    DocumentSemanticAnalyzer,
+    DocumentSemanticChange,
+    DocumentVersionChangeResult,
+    DocumentVersionComparison,
+    RuleBasedSemanticAnalyzer,
+)
+
+
+def build_result() -> DocumentVersionChangeResult:
+    comparison = DocumentVersionComparison(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+        from_content_id="content-1",
+        to_content_id="content-2",
+        changed=True,
+    )
+
+    changes = (
+        DocumentChange.modified(
+            "Vigencia: 12 meses.",
+            "Vigencia: 24 meses.",
+            before_line=1,
+            after_line=1,
+        ),
+        DocumentChange.added(
+            "Nueva cláusula.",
+            line=3,
+        ),
+    )
+
+    return DocumentVersionChangeResult(
+        comparison=comparison,
+        changes=changes,
+    )
+
+
+class FakeSemanticAnalyzer:
+    def analyze(
+        self,
+        change: DocumentChange,
+    ) -> DocumentSemanticChange:
+        return DocumentSemanticChange(
+            source_change=change,
+            meaning="Cambio analizado.",
+            confidence=0.75,
+        )
+
+
+def test_service_accepts_semantic_analyzer():
+    analyzer = FakeSemanticAnalyzer()
+
+    service = DocumentSemanticAnalysisService(
+        analyzer=analyzer,
+    )
+
+    assert isinstance(
+        service.analyzer,
+        DocumentSemanticAnalyzer,
+    )
+
+
+def test_service_analyzes_all_changes():
+    service = DocumentSemanticAnalysisService(
+        analyzer=FakeSemanticAnalyzer(),
+    )
+
+    result = build_result()
+
+    analysis = service.analyze(result)
+
+    assert len(analysis.changes) == 2
+
+    assert all(
+        change.meaning == "Cambio analizado."
+        for change in analysis.changes
+    )
+
+
+def test_service_preserves_source_result():
+    service = DocumentSemanticAnalysisService(
+        analyzer=FakeSemanticAnalyzer(),
+    )
+
+    result = build_result()
+
+    analysis = service.analyze(result)
+
+    assert analysis.source == result
+
+
+def test_service_preserves_change_order():
+    service = DocumentSemanticAnalysisService(
+        analyzer=FakeSemanticAnalyzer(),
+    )
+
+    result = build_result()
+
+    analysis = service.analyze(result)
+
+    assert (
+        analysis.changes[0].source_change
+        == result.changes[0]
+    )
+
+    assert (
+        analysis.changes[1].source_change
+        == result.changes[1]
+    )
+
+
+def test_service_with_rule_based_analyzer():
+    service = DocumentSemanticAnalysisService(
+        analyzer=RuleBasedSemanticAnalyzer(),
+    )
+
+    analysis = service.analyze(build_result())
+
+    assert len(analysis.changes) == 2
+
+    assert (
+        analysis.changes[0].meaning
+        == "Se modificó contenido existente del documento."
+    )
+
+    assert (
+        analysis.changes[1].meaning
+        == "Se agregó contenido al documento."
+    )
+
+
+def test_service_returns_unchanged_analysis_when_no_changes():
+    comparison = DocumentVersionComparison(
+        document_id="doc-1",
+        from_version=1,
+        to_version=2,
+        from_content_id="content-1",
+        to_content_id="content-2",
+        changed=False,
+    )
+
+    result = DocumentVersionChangeResult(
+        comparison=comparison,
+        changes=(),
+    )
+
+    service = DocumentSemanticAnalysisService(
+        analyzer=FakeSemanticAnalyzer(),
+    )
+
+    analysis = service.analyze(result)
+
+    assert analysis.changes == ()
+    assert analysis.changed is False
+    assert analysis.unchanged is True
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\documents\tests\test_semantic_analyzer.py
+================================================================================
+
+from documents import (
+    DocumentChange,
+    DocumentSemanticAnalyzer,
+    RuleBasedSemanticAnalyzer,
+)
+
+
+def test_rule_based_analyzer_implements_semantic_analyzer():
+    analyzer = RuleBasedSemanticAnalyzer()
+
+    assert isinstance(analyzer, DocumentSemanticAnalyzer)
+
+
+def test_rule_based_analyzer_analyzes_added_change():
+    change = DocumentChange.added(
+        "Nueva cláusula.",
+        line=3,
+    )
+
+    analyzer = RuleBasedSemanticAnalyzer()
+
+    result = analyzer.analyze(change)
+
+    assert result.source_change == change
+    assert result.meaning == (
+        "Se agregó contenido al documento."
+    )
+    assert result.confidence == 1.0
+
+
+def test_rule_based_analyzer_analyzes_removed_change():
+    change = DocumentChange.removed(
+        "Cláusula eliminada.",
+        line=4,
+    )
+
+    analyzer = RuleBasedSemanticAnalyzer()
+
+    result = analyzer.analyze(change)
+
+    assert result.source_change == change
+    assert result.meaning == (
+        "Se eliminó contenido del documento."
+    )
+    assert result.confidence == 1.0
+
+
+def test_rule_based_analyzer_analyzes_modified_change():
+    change = DocumentChange.modified(
+        "Vigencia: 12 meses.",
+        "Vigencia: 24 meses.",
+        before_line=2,
+        after_line=2,
+    )
+
+    analyzer = RuleBasedSemanticAnalyzer()
+
+    result = analyzer.analyze(change)
+
+    assert result.source_change == change
+    assert result.meaning == (
+        "Se modificó contenido existente del documento."
+    )
+    assert result.confidence == 1.0
+
+
+def test_rule_based_analyzer_preserves_change_evidence():
+    change = DocumentChange.modified(
+        "Antes",
+        "Después",
+        before_line=5,
+        after_line=5,
+    )
+
+    result = RuleBasedSemanticAnalyzer().analyze(change)
+
+    assert result.source_change.before == "Antes"
+    assert result.source_change.after == "Después"
+    assert result.source_change.before_line == 5
+    assert result.source_change.after_line == 5
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

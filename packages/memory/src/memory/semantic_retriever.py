@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import re
 from dataclasses import dataclass
 
 from memory.semantic_memory import SemanticFact, SemanticMemory
@@ -160,33 +160,19 @@ class SemanticRetriever:
 
         return matches[:limit]
 
+    
     @staticmethod
     def _score(
         fact: SemanticFact,
         query: str,
     ) -> float:
-        """
-        Calcula relevancia básica.
+        """Calcula relevancia mediante frases y términos compartidos."""
 
-        Prioridad:
-        - coincidencia exacta de subject
-        - coincidencia exacta de predicate
-        - coincidencia exacta del valor textual
-        - coincidencias parciales
-        """
+        subject = SemanticRetriever._normalize(fact.subject)
+        predicate = SemanticRetriever._normalize(fact.predicate)
+        value = SemanticRetriever._normalize(str(fact.value))
 
-        subject = SemanticRetriever._normalize(
-            fact.subject
-        )
-
-        predicate = SemanticRetriever._normalize(
-            fact.predicate
-        )
-
-        value = SemanticRetriever._normalize(
-            str(fact.value)
-        )
-
+        # Conservar el comportamiento existente para coincidencias directas.
         score = 0.0
 
         if query == subject:
@@ -207,10 +193,60 @@ class SemanticRetriever:
         if query in value:
             score += 0.4
 
-        return score
+        # Solo aplicar coincidencia por términos si la búsqueda directa
+        # no encontró nada.
+        if score > 0:
+            return score
+
+        stopwords = {
+            "que", "qué", "recordas", "recordás", "recuerdas",
+            "sobre", "el", "la", "los", "las", "de", "del",
+            "un", "una", "unos", "unas", "me", "lo", "por",
+            "favor", "acerca", "contame", "decime",
+        }
+
+        query_tokens = {
+            token
+            for token in re.findall(r"[a-záéíóúüñ0-9]+", query)
+            if token not in stopwords
+        }
+
+        if not query_tokens:
+            return 0.0
+
+        subject_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", subject)
+        )
+        predicate_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", predicate)
+        )
+        value_tokens = set(
+            re.findall(r"[a-záéíóúüñ0-9]+", value)
+        )
+
+        matched_subject = query_tokens & subject_tokens
+        matched_predicate = query_tokens & predicate_tokens
+        matched_value = query_tokens & value_tokens
+
+        matched_tokens = (
+            matched_subject | matched_predicate | matched_value
+        )
+
+        if not matched_tokens:
+            return 0.0
+
+        coverage = len(matched_tokens) / len(query_tokens)
+
+        return (
+            0.4 * coverage
+            + 0.2 * bool(matched_subject)
+            + 0.2 * bool(matched_predicate)
+            + 0.2 * bool(matched_value)
+        )
 
     @staticmethod
     def _normalize(value: str) -> str:
         return " ".join(
             value.strip().lower().split()
         )
+

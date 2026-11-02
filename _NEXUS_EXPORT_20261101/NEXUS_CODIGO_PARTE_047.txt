@@ -1,0 +1,1976 @@
+﻿
+================================================================================
+ARCHIVO: packages\actions\src\actions\query_episode.py
+================================================================================
+
+from __future__ import annotations
+
+from typing import Any
+
+from actions.base import Action
+from memory.episode_memory import EpisodeMemory
+from planner.execution_context import ExecutionContext
+from planner.plan import PlanStep
+
+
+class QueryEpisodeAction(Action):
+    """
+    Consulta memoria episódica y recupera información
+    de un episodio anterior.
+
+    La información puede provenir de:
+    - parameters del episodio
+    - output producido por la ejecución del episodio
+
+    No ejecuta nuevamente la acción consultada.
+    """
+
+    name = "system.query_episode"
+
+    description = (
+        "Consulta memoria episódica y recupera "
+        "información de un episodio anterior."
+    )
+
+    parameters = {
+        "action": {
+            "type": "string",
+            "description": (
+                "Acción del episodio que se desea consultar."
+            ),
+        },
+        "field": {
+            "type": "string",
+            "description": (
+                "Campo que se desea recuperar del episodio."
+            ),
+        },
+    }
+
+    internal = True
+
+    produces = [
+        "episode_query_result",
+    ]
+
+    consumes = []
+
+    def __init__(
+        self,
+        episode_memory: EpisodeMemory,
+    ) -> None:
+        self._episode_memory = episode_memory
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+        action = step.metadata.get("action")
+        field = step.metadata.get("field")
+
+        if not isinstance(action, str) or not action.strip():
+            context.add_error(
+                "QueryEpisodeAction requiere "
+                "un 'action' válido."
+            )
+            return
+
+        if not isinstance(field, str) or not field.strip():
+            context.add_error(
+                "QueryEpisodeAction requiere "
+                "un 'field' válido."
+            )
+            return
+
+        action = action.strip()
+        field = field.strip()
+
+        episode = (
+            self._episode_memory.find_latest_by_action(
+                action
+            )
+        )
+
+        if episode is None:
+            context.add_error(
+                f"No se encontró ningún episodio "
+                f"para la acción '{action}'."
+            )
+            return
+
+        parameters = episode.parameters
+
+        if not isinstance(parameters, dict):
+            parameters = {}
+
+        #
+        # Primero buscamos el campo en los parámetros.
+        #
+        if field in parameters:
+            value = parameters[field]
+
+        else:
+            #
+            # Algunos datos pertenecen al resultado
+            # producido por la acción y no a sus parámetros.
+            #
+            episode_output = episode.output
+
+            if not isinstance(episode_output, dict):
+                context.add_error(
+                    f"Field '{field}' was not found "
+                    f"in the episode for action "
+                    f"'{action}'."
+                )
+                return
+
+            if field not in episode_output:
+                context.add_error(
+                    f"Field '{field}' was not found "
+                    f"in the episode for action "
+                    f"'{action}'."
+                )
+                return
+
+            value = episode_output[field]
+
+        result: dict[str, Any] = {
+            "status": "found",
+            "action": action,
+            "field": field,
+            "value": value,
+            "original_text": episode.original_text,
+            "timestamp": episode.timestamp,
+        }
+
+        context.add_result(
+            "episode_query_result",
+            result,
+        )
+
+        #
+        # También exponemos los valores individualmente
+        # para que otras capas del Runtime puedan utilizarlos.
+        #
+        context.add_result(
+            "status",
+            "found",
+        )
+
+        context.add_result(
+            "action",
+            action,
+        )
+
+        context.add_result(
+            "field",
+            field,
+        )
+
+        context.add_result(
+            "value",
+            value,
+        )
+
+        context.add_result(
+            "original_text",
+            episode.original_text,
+        )
+
+        context.add_result(
+            "timestamp",
+            episode.timestamp,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\registry.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+from providers.tool import Tool
+
+
+class ActionRegistry:
+    """
+    Registro de Actions disponibles.
+    """
+
+    def __init__(self) -> None:
+
+        self._actions: dict[str, Action] = {}
+
+    def register(
+        self,
+        action: Action,
+    ) -> None:
+
+        self._actions[action.name] = action
+
+    def unregister(
+        self,
+        name: str,
+    ) -> None:
+
+        self._actions.pop(
+            name,
+            None,
+        )
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._actions
+
+    def get(
+        self,
+        name: str,
+    ) -> Action:
+
+        if name not in self._actions:
+
+            raise KeyError(
+                f"Action '{name}' not registered."
+            )
+
+        return self._actions[name]
+
+    def list(self) -> list[str]:
+
+        return sorted(
+            self._actions.keys()
+        )
+
+    def describe(self) -> list[Tool]:
+        """
+        Devuelve una descripción de las Actions
+        internas de NEXUS.
+
+        La descripción incluye los artifacts que
+        cada Action consume y produce.
+        """
+
+        tools: list[Tool] = []
+
+        for action in self._actions.values():
+
+            if not action.internal:
+                continue
+
+            description = (
+                action.description
+                if action.description
+                else (
+                    f"Capacidad interna: "
+                    f"{action.name}"
+                )
+            )
+
+            tools.append(
+                Tool(
+                    name=f"nexus.{action.name}",
+                    description=description,
+                    provider="nexus",
+                    action=action.name,
+                    parameters=dict(
+                        action.parameters
+                    ),
+                    produces=list(
+                        action.produces
+                    ),
+                    consumes=list(
+                        action.consumes
+                    ),
+                )
+            )
+
+        return sorted(
+            tools,
+            key=lambda tool: tool.name,
+        )
+
+    def clear(self) -> None:
+
+        self._actions.clear()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\restore_previous_mute.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.state_history import StateHistory
+from providers.provider_manager import ProviderManager
+
+
+class RestorePreviousMuteAction(Action):
+    """
+    Action para restaurar el estado anterior de mute
+    registrado en el historial de NEXUS.
+    """
+
+    name = "system.restore_previous_mute"
+
+    internal = True
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+        state_history: StateHistory,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+        self._state_history = state_history
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        #
+        # Obtener el estado anterior
+        #
+
+        previous_muted = (
+            self._state_history.previous_restorable(
+        "muted"
+        )
+    )
+
+        if previous_muted is None:
+
+            context.add_error(
+                "No previous mute state is available."
+            )
+
+            return
+
+        #
+        # Validar estado
+        #
+
+        if not isinstance(
+            previous_muted,
+            bool,
+        ):
+
+            context.add_error(
+                "Previous mute state is invalid."
+            )
+
+            return
+
+        #
+        # Restaurar estado
+        #
+
+        try:
+
+            if previous_muted:
+
+                result = (
+                    await self._provider_manager.execute(
+                        provider="local",
+                        tool="windows.mute",
+                        parameters={},
+                    )
+                )
+
+                status = "muted"
+
+            else:
+
+                result = (
+                    await self._provider_manager.execute(
+                        provider="local",
+                        tool="windows.unmute",
+                        parameters={},
+                    )
+                )
+
+                status = "unmuted"
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to restore previous mute state: {exc}"
+            )
+
+            return
+
+        #
+        # Resultado
+        #
+
+        context.add_result(
+            "muted",
+            previous_muted,
+        )
+
+        context.add_result(
+            "status",
+            "restored",
+        )
+
+        context.add_result(
+            "result",
+            result,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\restore_previous_volume.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from memory.state_history import StateHistory
+from providers.provider_manager import ProviderManager
+
+
+class RestorePreviousVolumeAction(Action):
+    """
+    Action para restaurar el volumen anterior
+    registrado en el historial de NEXUS.
+    """
+
+    name = "system.restore_previous_volume"
+
+    internal = True
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+        state_history: StateHistory,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+        self._state_history = state_history
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        #
+        # Obtener el volumen anterior
+        #
+
+        previous_volume = (
+            self._state_history.previous_restorable(
+        "volume"
+        )
+    )
+
+        if previous_volume is None:
+
+            context.add_error(
+                "No previous volume state is available."
+            )
+
+            return
+
+        #
+        # Validar valor
+        #
+
+        try:
+
+            previous_volume = float(
+                previous_volume
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            context.add_error(
+                "Previous volume state is invalid."
+            )
+
+            return
+
+        #
+        # Validar rango
+        #
+
+        if (
+            previous_volume < 0
+            or previous_volume > 100
+        ):
+
+            context.add_error(
+                "Previous volume state must be between 0 and 100."
+            )
+
+            return
+
+        #
+        # Restaurar volumen
+        #
+
+        try:
+
+            result = (
+                await self._provider_manager.execute(
+                    provider="local",
+                    tool="windows.set_volume",
+                    parameters={
+                        "level": previous_volume,
+                    },
+                )
+            )
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to restore previous volume: {exc}"
+            )
+
+            return
+
+        #
+        # Resultado
+        #
+
+        context.add_result(
+            "volume",
+            result,
+        )
+
+        context.add_result(
+            "status",
+            "restored",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\screen_capture.py
+================================================================================
+
+from __future__ import annotations
+
+from actions.base import Action
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from providers.provider_manager import ProviderManager
+
+
+class ScreenCaptureAction(Action):
+    """
+    Action para capturar la pantalla.
+
+    Produce el artifact `image`.
+    """
+
+    name = "system.screen_capture"
+
+    description = (
+        "Captura la pantalla actual."
+    )
+
+    produces = [
+        "image",
+    ]
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+
+            image = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.capture_screen",
+                parameters={},
+            )
+
+        except Exception as exc:
+
+            context.add_error(
+                f"Failed to capture screen: {exc}"
+            )
+
+            return
+
+        path = step.metadata.get(
+            "path"
+        )
+
+        if path:
+
+            image.save(path)
+
+            context.add_result(
+                "path",
+                path,
+            )
+
+        #
+        # La imagen es un artifact.
+        #
+
+        context.add_artifact(
+            "image",
+            image,
+        )
+
+        context.add_result(
+            "status",
+            "captured",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\set_volume.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class SetVolumeAction(Action):
+    """
+    Action para establecer el volumen
+    maestro de Windows.
+    """
+
+    name = "system.set_volume"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        level = step.metadata.get("level")
+
+        if level is None:
+            context.add_error(
+                "No volume level specified."
+            )
+            return
+
+        try:
+            level = float(level)
+        except (TypeError, ValueError):
+            context.add_error(
+                "Volume level must be numeric."
+            )
+            return
+
+        if level < 0 or level > 100:
+            context.add_error(
+                "Volume level must be between 0 and 100."
+            )
+            return
+
+        try:
+            result = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.set_volume",
+                parameters={
+                    "level": level,
+                },
+            )
+        except Exception as exc:
+            context.add_error(
+                f"Failed to set volume: {exc}"
+            )
+            return
+
+        context.add_result(
+            "volume",
+            result,
+        )
+
+        context.add_result(
+            "status",
+            "set",
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\src\actions\unmute.py
+================================================================================
+
+from __future__ import annotations
+
+from planner.plan import PlanStep
+from planner.execution_context import ExecutionContext
+
+from actions.base import Action
+
+from providers.provider_manager import ProviderManager
+
+
+class UnmuteAction(Action):
+    """
+    Action para quitar el silencio de Windows.
+    """
+
+    name = "system.unmute"
+
+    def __init__(
+        self,
+        provider_manager: ProviderManager,
+    ) -> None:
+
+        self._provider_manager = provider_manager
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+        step: PlanStep,
+    ) -> None:
+
+        try:
+            result = await self._provider_manager.execute(
+                provider="local",
+                tool="windows.unmute",
+                parameters={},
+            )
+        except Exception as exc:
+            context.add_error(
+                f"Failed to unmute system: {exc}"
+            )
+            return
+
+        #
+        # Estado del sistema
+        #
+
+        context.add_result(
+            "muted",
+            False,
+        )
+
+        context.add_result(
+            "status",
+            "unmuted",
+        )
+
+        #
+        # Resultado original del provider
+        #
+
+        context.add_result(
+            "result",
+            result,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\tests\test_action_manager_authorization.py
+================================================================================
+
+from __future__ import annotations
+
+import pytest
+
+from actions.base import Action
+from actions.manager import ActionManager
+from actions.registry import ActionRegistry
+
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective, ObjectiveStatus
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+
+from security import (
+    ActionAuthorization,
+    ActionPolicy,
+    ActionPolicyStore,
+    Actor,
+    ActorRoleAssignment,
+    AssignmentStore,
+    AuthorizationService,
+    Permission,
+    PermissionAction,
+    Role,
+)
+
+
+ACTION_NAME = "test.protected_action"
+
+
+class CountingAction(Action):
+    name = ACTION_NAME
+    description = "Action used to test authorization."
+
+    def __init__(self) -> None:
+        self.called = False
+
+    async def execute(self, context, step) -> None:
+        self.called = True
+        context.add_result("executed", True)
+
+
+def build_authorization(
+    *,
+    assigned: bool,
+    register_policy: bool = True,
+) -> tuple[ActionAuthorization, Actor]:
+
+    actor = Actor.user("user-1")
+
+    permission = Permission(
+        resource=ACTION_NAME,
+        action=PermissionAction.EXECUTE,
+    )
+
+    assignments = AssignmentStore()
+
+    if assigned:
+        role = Role(
+            id="operator",
+            name="Operator",
+            permissions=frozenset({permission}),
+        )
+
+        assignments.add(
+            ActorRoleAssignment(
+                actor=actor,
+                role=role,
+            )
+        )
+
+    policy_store = ActionPolicyStore()
+
+    if register_policy:
+        policy_store.register(
+            ActionPolicy(
+                action_name=ACTION_NAME,
+                permission=permission,
+            )
+        )
+
+    authorization = ActionAuthorization(
+        policy_store=policy_store,
+        authorization=AuthorizationService(assignments),
+    )
+
+    return authorization, actor
+
+
+def build_context(
+    actor: Actor | None,
+) -> ExecutionContext:
+
+    objective = Objective(
+        id="objective-1",
+        title="Test authorization",
+        status=ObjectiveStatus.RUNNING,
+        priority=1,
+        metadata={},
+    )
+
+    step = PlanStep(
+        id="step-1",
+        name="Protected action",
+        description="Authorization test",
+        action=ACTION_NAME,
+    )
+
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=[step],
+    )
+
+    return ExecutionContext(
+        objective=objective,
+        plan=plan,
+        actor_id=actor.id if actor else None,
+        actor_type=(
+            actor.actor_type.value if actor else None
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_authorized_action_executes() -> None:
+    authorization, actor = build_authorization(
+        assigned=True,
+    )
+
+    action = CountingAction()
+    registry = ActionRegistry()
+    registry.register(action)
+
+    manager = ActionManager(
+        registry,
+        action_authorization=authorization,
+    )
+
+    context = build_context(actor)
+
+    await manager.execute(context)
+
+    assert action.called is True
+    assert context.results["executed"] is True
+    assert context.plan.steps[0].status == StepStatus.COMPLETED
+    assert context.step_evidence["step-1"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_denied_action_is_not_executed() -> None:
+    authorization, actor = build_authorization(
+        assigned=False,
+    )
+
+    action = CountingAction()
+    registry = ActionRegistry()
+    registry.register(action)
+
+    manager = ActionManager(
+        registry,
+        action_authorization=authorization,
+    )
+
+    context = build_context(actor)
+
+    await manager.execute(context)
+
+    assert action.called is False
+    assert context.plan.steps[0].status == StepStatus.FAILED
+    assert context.objective.status == ObjectiveStatus.FAILED
+    assert context.finished is True
+    assert context.plan.completed is False
+    assert context.has_errors() is True
+    assert context.step_evidence["step-1"]["status"] == "failed"
+    assert context.step_evidence["step-1"]["authorization"]["allowed"] is False
+
+
+@pytest.mark.asyncio
+async def test_missing_actor_is_denied() -> None:
+    authorization, _ = build_authorization(
+        assigned=True,
+    )
+
+    action = CountingAction()
+    registry = ActionRegistry()
+    registry.register(action)
+
+    manager = ActionManager(
+        registry,
+        action_authorization=authorization,
+    )
+
+    context = build_context(None)
+
+    await manager.execute(context)
+
+    assert action.called is False
+    assert context.plan.steps[0].status == StepStatus.FAILED
+    assert context.finished is True
+    assert context.has_errors() is True
+
+
+@pytest.mark.asyncio
+async def test_missing_policy_is_denied() -> None:
+    authorization, actor = build_authorization(
+        assigned=True,
+        register_policy=False,
+    )
+
+    action = CountingAction()
+    registry = ActionRegistry()
+    registry.register(action)
+
+    manager = ActionManager(
+        registry,
+        action_authorization=authorization,
+    )
+
+    context = build_context(actor)
+
+    await manager.execute(context)
+
+    assert action.called is False
+    assert context.plan.steps[0].status == StepStatus.FAILED
+    assert context.finished is True
+    assert context.has_errors() is True
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\actions\tests\test_get_time.py
+================================================================================
+
+from unittest.mock import patch
+
+import pytest
+
+from actions.get_time import GetTimeAction
+from planner.execution_context import ExecutionContext
+from planner.objective import Objective
+from planner.plan import ExecutionPlan, PlanStep
+
+
+@pytest.mark.asyncio
+async def test_get_time_action_records_local_time() -> None:
+    objective = Objective(
+        id="objective-time",
+        title="Consultar la hora",
+        description="Consultar la hora",
+    )
+    step = PlanStep(
+        id="step-time",
+        name="Consultar hora",
+        description="Obtener la hora local",
+        action="system.get_time",
+    )
+    plan = ExecutionPlan(
+        objective_id=objective.id,
+        steps=[step],
+    )
+    context = ExecutionContext(
+        objective=objective,
+        plan=plan,
+    )
+
+    with patch("actions.get_time.datetime") as mocked_datetime:
+        mocked_datetime.now.return_value.strftime.side_effect = [
+            "28/10/2026",
+            "14:35",
+        ]
+        await GetTimeAction().execute(context, step)
+
+    assert context.results["date"] == "28/10/2026"
+    assert context.results["time"] == "14:35"
+    assert context.results["status"] == "read"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\pyproject.toml
+================================================================================
+
+[project]
+name = "adapters"
+version = "0.1.0"
+description = "NEXUS Adapters"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "comtypes>=1.4.16",
+    "mss>=10.2.0",
+    "pillow>=12.3.0",
+    "psutil>=7.2.2",
+    "pycaw>=20251023",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\README.md
+================================================================================
+
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\__init__.py
+================================================================================
+
+"""
+NEXUS Adapters
+"""
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\__init__.py
+================================================================================
+
+"""
+NEXUS Adapters
+"""
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\app_launcher.py
+================================================================================
+
+from __future__ import annotations
+
+import os
+import subprocess
+import time
+import threading
+import psutil
+
+
+class WindowsAppLauncher:
+    """
+    Abre aplicaciones conocidas de Windows y verifica que el proceso
+    correspondiente haya quedado disponible antes de informar éxito.
+
+    La resolución de aplicaciones se mantiene explícita para evitar
+    ejecutar comandos arbitrarios recibidos desde lenguaje natural.
+    """
+
+    _APPLICATIONS = {
+        # Browsers
+        "chrome": (
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ),
+
+        # Media
+        "spotify": "spotify",
+
+        # Windows
+        "notepad": "notepad",
+        "bloc de notas": "notepad",
+
+        "calculator": "calc",
+        "calculadora": "calc",
+        "calc": "calc",
+
+        "paint": "mspaint",
+        "mspaint": "mspaint",
+    }
+
+    _PROCESS_NAMES = {
+        "spotify": {
+            "spotify.exe",
+            "spotify",
+        },
+
+        "chrome": {
+            "chrome.exe",
+            "chrome",
+        },
+
+        "notepad": {
+            "notepad.exe",
+            "notepad",
+        },
+        "bloc de notas": {
+            "notepad.exe",
+            "notepad",
+        },
+
+        "calculator": {
+            "calculatorapp.exe",
+            "calculator.exe",
+            "calc.exe",
+            "calc",
+        },
+        "calculadora": {
+            "calculatorapp.exe",
+            "calculator.exe",
+            "calc.exe",
+            "calc",
+        },
+        "calc": {
+            "calculatorapp.exe",
+            "calculator.exe",
+            "calc.exe",
+            "calc",
+        },
+
+        "paint": {
+            "mspaint.exe",
+            "mspaint",
+        },
+        "mspaint": {
+            "mspaint.exe",
+            "mspaint",
+        },
+    }
+
+    _STARTUP_TIMEOUT = 5.0
+    _POLL_INTERVAL = 0.1
+
+    def open(self, application: str) -> bool:
+        application = self._normalize_application(application)
+
+        executable = self._APPLICATIONS.get(application)
+
+        if executable is None:
+            return False
+
+        if not self._launch(executable):
+            return False
+
+        return self._wait_until_available(application)
+
+    @staticmethod
+    def _normalize_application(application: str) -> str:
+        return application.strip().lower()
+
+    @staticmethod
+    def _launch(executable: str) -> bool:
+        if os.path.isabs(executable):
+            if not os.path.exists(executable):
+                return False
+            command = [executable]
+        else:
+            command = executable
+
+        try:
+            process = subprocess.Popen(command)
+            threading.Thread(
+                target=process.wait,
+                daemon=True,
+            ).start()
+            return True
+        except OSError:
+            return False
+
+
+
+    def _wait_until_available(self, application: str) -> bool:
+        target_names = self._PROCESS_NAMES.get(application)
+
+        if not target_names:
+            return True
+
+        deadline = time.monotonic() + self._STARTUP_TIMEOUT
+
+        while time.monotonic() < deadline:
+            if self._process_exists(target_names):
+                return True
+
+            time.sleep(self._POLL_INTERVAL)
+
+        return False
+
+    @staticmethod
+    def _process_exists(target_names: set[str]) -> bool:
+        normalized_targets = {
+            name.lower()
+            for name in target_names
+        }
+
+        for process in psutil.process_iter(["name"]):
+            try:
+                name = process.info.get("name")
+
+                if not name:
+                    continue
+
+                if name.lower() in normalized_targets:
+                    return True
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
+            except Exception:
+                continue
+
+        return False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\file_opener.py
+================================================================================
+
+from __future__ import annotations
+import os
+import re
+from pathlib import Path
+
+class WindowsFileOpener:
+    """Abre archivos únicamente desde Escritorio, Documentos o Descargas."""
+    def __init__(self, home: Path | None = None) -> None:
+        self._home = (home or Path.home()).resolve()
+
+    def open(self, file_name: str, location: str = "desktop", extension: str | None = None) -> bool:
+        if not isinstance(file_name, str) or not file_name.strip():
+            return False
+        roots = {
+            "desktop": self._home / "Desktop",
+            "documents": self._home / "Documents",
+            "downloads": self._home / "Downloads",
+        }
+        root = roots.get(str(location).lower())
+        if root is None or not root.is_dir():
+            return False
+        root = root.resolve()
+        requested = file_name.strip()
+        if any(c in requested for c in '<>:"/\\\\|?*'):
+            return False
+        ext = "." + extension.lower().lstrip(".") if extension else None
+        matches = []
+        for current, dirs, names in os.walk(root, followlinks=False):
+            dirs[:] = [d for d in dirs if not (Path(current) / d).is_symlink()]
+            for name in names:
+                candidate = Path(current) / name
+                if ext and candidate.suffix.lower() != ext:
+                    continue
+                if candidate.stem.casefold() == requested.casefold() or candidate.name.casefold() == requested.casefold():
+                    try:
+                        resolved = candidate.resolve()
+                        resolved.relative_to(root)
+                    except (OSError, ValueError):
+                        continue
+                    matches.append(resolved)
+                    if len(matches) > 1:
+                        return False
+        if len(matches) != 1 or not matches[0].is_file():
+            return False
+        try:
+            os.startfile(str(matches[0]))  # type: ignore[attr-defined]
+            return True
+        except (OSError, AttributeError):
+            return False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\process_manager.py
+================================================================================
+
+from __future__ import annotations
+
+import ctypes
+import ctypes.wintypes
+
+import psutil
+
+
+class WindowsProcessManager:
+
+    def list(self) -> list[dict]:
+
+        visible_pids: set[int] = set()
+
+        user32 = ctypes.windll.user32
+
+        enum_windows = user32.EnumWindows
+        get_window_thread_process_id = (
+            user32.GetWindowThreadProcessId
+        )
+        is_window_visible = user32.IsWindowVisible
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.LPARAM,
+        )
+
+        @EnumWindowsProc
+        def callback(hwnd, lparam):
+
+            if is_window_visible(hwnd):
+
+                pid = ctypes.wintypes.DWORD()
+
+                get_window_thread_process_id(
+                    hwnd,
+                    ctypes.byref(pid),
+                )
+
+                if pid.value:
+                    visible_pids.add(
+                        pid.value
+                    )
+
+            return True
+
+        enum_windows(
+            callback,
+            0,
+        )
+
+        #
+        # Procesos que tienen una ventana visible.
+        #
+
+        processes = []
+
+        for process in psutil.process_iter(
+            ["pid", "name"]
+        ):
+
+            try:
+
+                info = process.info
+
+                if info["pid"] not in visible_pids:
+                    continue
+
+                name = info.get("name")
+
+                if not name:
+                    continue
+
+                processes.append(info)
+
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+            ):
+
+                continue
+
+            except Exception:
+
+                continue
+
+        #
+        # Nombres amigables.
+        #
+
+        friendly_names = {
+            "chrome.exe": "Google Chrome",
+            "code.exe": "Visual Studio Code",
+            "msedge.exe": "Microsoft Edge",
+            "explorer.exe": "Explorador de archivos",
+            "winword.exe": "Microsoft Word",
+            "excel.exe": "Microsoft Excel",
+            "powerpnt.exe": "Microsoft PowerPoint",
+            "notepad.exe": "Bloc de notas",
+        }
+
+        #
+        # Componentes que no queremos mostrar
+        # como aplicaciones abiertas.
+        #
+
+        ignored = {
+            "textinputhost.exe",
+        }
+
+        #
+        # Eliminamos duplicados por nombre.
+        #
+
+        unique = {}
+
+        for process in processes:
+
+            name = process.get("name")
+
+            if not name:
+                continue
+
+            key = name.lower()
+
+            if key in ignored:
+                continue
+
+            display_name = friendly_names.get(
+                key,
+                name.removesuffix(".exe"),
+            )
+
+            unique[key] = {
+                "name": display_name,
+                "pid": process["pid"],
+            }
+
+        return sorted(
+            unique.values(),
+            key=lambda p: p["name"].lower(),
+        )
+
+    def close(
+        self,
+        application: str,
+    ) -> bool:
+
+        application = application.strip().lower()
+
+        #
+        # Alias de aplicaciones.
+        #
+        # El valor representa el nombre real del proceso
+        # o una familia de nombres de proceso.
+        #
+
+        aliases = {
+            "chrome": {
+                "chrome.exe",
+                "chrome",
+            },
+            "google chrome": {
+                "chrome.exe",
+                "chrome",
+            },
+            "code": {
+                "code.exe",
+                "code",
+            },
+            "visual studio code": {
+                "code.exe",
+                "code",
+            },
+            "vs code": {
+                "code.exe",
+                "code",
+            },
+            "edge": {
+                "msedge.exe",
+                "msedge",
+            },
+            "microsoft edge": {
+                "msedge.exe",
+                "msedge",
+            },
+            "explorer": {
+                "explorer.exe",
+                "explorer",
+            },
+            "explorador de archivos": {
+                "explorer.exe",
+                "explorer",
+            },
+            "word": {
+                "winword.exe",
+                "winword",
+            },
+            "microsoft word": {
+                "winword.exe",
+                "winword",
+            },
+            "excel": {
+                "excel.exe",
+                "excel",
+            },
+            "microsoft excel": {
+                "excel.exe",
+                "excel",
+            },
+            "powerpoint": {
+                "powerpnt.exe",
+                "powerpnt",
+            },
+            "microsoft powerpoint": {
+                "powerpnt.exe",
+                "powerpnt",
+            },
+            "notepad": {
+                "notepad.exe",
+                "notepad",
+            },
+            "bloc de notas": {
+                "notepad.exe",
+                "notepad",
+            },
+        }
+
+        target_names = aliases.get(
+            application,
+            {
+                application,
+                f"{application}.exe",
+            },
+        )
+
+        #
+        # No dependemos de list() para cerrar.
+        #
+        # Esto es importante porque list() representa únicamente
+        # procesos con ventanas visibles. Una aplicación puede
+        # estar ejecutándose mientras Windows todavía no expone
+        # su ventana en EnumWindows.
+        #
+
+        for process in psutil.process_iter(
+            ["pid", "name"]
+        ):
+
+            try:
+
+                name = process.info.get("name")
+
+                if not name:
+                    continue
+
+                normalized_name = name.lower()
+
+                if normalized_name not in target_names:
+                    continue
+
+                process.terminate()
+
+                try:
+                    process.wait(timeout=3)
+
+                except psutil.TimeoutExpired:
+
+                    #
+                    # Intentamos una terminación forzada.
+                    #
+
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                    except (
+                        psutil.NoSuchProcess,
+                        psutil.AccessDenied,
+                        psutil.TimeoutExpired,
+                    ):
+                        return False
+
+                return True
+
+            except (
+                psutil.NoSuchProcess,
+                psutil.AccessDenied,
+            ):
+                continue
+
+            except Exception:
+                continue
+
+        return False
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\screen_capture.py
+================================================================================
+
+
+from __future__ import annotations
+
+from mss import MSS
+from PIL import Image
+
+
+class WindowsScreenCapture:
+    def capture(self) -> Image.Image:
+        with MSS() as sct:
+            screenshot = sct.grab(sct.monitors[1])
+
+            return Image.frombytes(
+                "RGB",
+                screenshot.size,
+                screenshot.rgb,
+            )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\src\adapters\windows\volume_control.py
+================================================================================
+
+
+from __future__ import annotations
+
+from pycaw.utils import AudioUtilities
+
+
+class WindowsVolumeControl:
+    """
+    Controla el volumen maestro de Windows.
+
+    Conserva el dispositivo de audio y reutiliza su
+    interfaz EndpointVolume.
+    """
+
+    def __init__(self) -> None:
+        self._device = None
+        self._volume = None
+
+    def _get_volume_interface(self):
+        """Obtiene y reutiliza la interfaz del dispositivo."""
+
+        if self._volume is not None:
+            return self._volume
+
+        device = AudioUtilities.GetSpeakers()
+        volume = device.EndpointVolume
+
+        # Conservar ambas referencias COM durante su uso.
+        self._device = device
+        self._volume = volume
+
+        return self._volume
+
+    def _reset_interface(self) -> None:
+        """Permite resolver nuevamente el dispositivo."""
+
+        self._volume = None
+        self._device = None
+
+    def get(self) -> float:
+        """Devuelve el volumen actual como porcentaje."""
+
+        volume = self._get_volume_interface()
+
+        try:
+            level = volume.GetMasterVolumeLevelScalar()
+        except Exception:
+            self._reset_interface()
+            volume = self._get_volume_interface()
+            level = volume.GetMasterVolumeLevelScalar()
+
+        return round(float(level) * 100, 1)
+
+    def set(self, level: float) -> float:
+        """Establece el volumen maestro entre 0 y 100."""
+
+        level = max(0.0, min(100.0, float(level)))
+        volume = self._get_volume_interface()
+
+        try:
+            volume.SetMasterVolumeLevelScalar(level / 100.0, None)
+        except Exception:
+            self._reset_interface()
+            volume = self._get_volume_interface()
+            volume.SetMasterVolumeLevelScalar(level / 100.0, None)
+
+        return round(level, 1)
+
+    def mute(self) -> None:
+        """Silencia Windows."""
+
+        volume = self._get_volume_interface()
+
+        try:
+            volume.SetMute(1, None)
+        except Exception:
+            self._reset_interface()
+            volume = self._get_volume_interface()
+            volume.SetMute(1, None)
+
+    def unmute(self) -> None:
+        """Quita el silencio de Windows."""
+
+        volume = self._get_volume_interface()
+
+        try:
+            volume.SetMute(0, None)
+        except Exception:
+            self._reset_interface()
+            volume = self._get_volume_interface()
+            volume.SetMute(0, None)
+
+    def is_muted(self) -> bool:
+        """Indica si Windows está silenciado."""
+
+        volume = self._get_volume_interface()
+
+        try:
+            muted = volume.GetMute()
+        except Exception:
+            self._reset_interface()
+            volume = self._get_volume_interface()
+            muted = volume.GetMute()
+
+        return bool(muted)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\adapters\tests\test_app_launcher.py
+================================================================================
+
+
+from unittest.mock import Mock, patch
+
+import pytest
+
+from adapters.windows.app_launcher import WindowsAppLauncher
+
+
+@pytest.mark.parametrize(
+    "executable",
+    [
+        "notepad",
+        "spotify",
+        "calc",
+        "mspaint",
+    ],
+)
+def test_launch_starts_process_and_waiter(executable):
+    process = Mock()
+
+    with (
+        patch(
+            "adapters.windows.app_launcher.subprocess.Popen",
+            return_value=process,
+        ) as popen,
+        patch(
+            "adapters.windows.app_launcher.threading.Thread",
+        ) as thread,
+    ):
+        assert WindowsAppLauncher._launch(executable) is True
+
+    popen.assert_called_once_with(executable)
+    thread.assert_called_once_with(
+        target=process.wait,
+        daemon=True,
+    )
+    thread.return_value.start.assert_called_once_with()
+
+
+def test_launch_absolute_path():
+    executable = r"C:\Apps\chrome.exe"
+    process = Mock()
+
+    with (
+        patch(
+            "adapters.windows.app_launcher.os.path.exists",
+            return_value=True,
+        ),
+        patch(
+            "adapters.windows.app_launcher.subprocess.Popen",
+            return_value=process,
+        ) as popen,
+        patch(
+            "adapters.windows.app_launcher.threading.Thread",
+        ) as thread,
+    ):
+        assert WindowsAppLauncher._launch(executable) is True
+
+    popen.assert_called_once_with([executable])
+    thread.assert_called_once_with(
+        target=process.wait,
+        daemon=True,
+    )
+    thread.return_value.start.assert_called_once_with()
+
+
+def test_launch_returns_false_when_process_creation_fails():
+    with (
+        patch(
+            "adapters.windows.app_launcher.subprocess.Popen",
+            side_effect=OSError("No se pudo iniciar"),
+        ),
+        patch(
+            "adapters.windows.app_launcher.threading.Thread",
+        ) as thread,
+    ):
+        assert WindowsAppLauncher._launch("notepad") is False
+
+    thread.assert_not_called()
+
+
+def test_launch_returns_false_when_absolute_path_does_not_exist():
+    executable = r"C:\Apps\chrome.exe"
+
+    with (
+        patch(
+            "adapters.windows.app_launcher.os.path.exists",
+            return_value=False,
+        ),
+        patch(
+            "adapters.windows.app_launcher.subprocess.Popen",
+        ) as popen,
+        patch(
+            "adapters.windows.app_launcher.threading.Thread",
+        ) as thread,
+    ):
+        assert WindowsAppLauncher._launch(executable) is False
+
+    popen.assert_not_called()
+    thread.assert_not_called()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

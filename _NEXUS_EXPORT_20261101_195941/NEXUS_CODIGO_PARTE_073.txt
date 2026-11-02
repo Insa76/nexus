@@ -1,0 +1,1866 @@
+﻿
+================================================================================
+ARCHIVO: packages\shared\src\shared\constants.py
+================================================================================
+
+VERSION = "0.1.0"
+
+SYSTEM_NAME = "NEXUS"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\src\shared\enums.py
+================================================================================
+
+from enum import Enum
+
+
+class ObjectiveStatus(str, Enum):
+
+    CREATED = "created"
+
+    PLANNING = "planning"
+
+    READY = "ready"
+
+    RUNNING = "running"
+
+    COMPLETED = "completed"
+
+    FAILED = "failed"
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\src\shared\event.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from datetime import datetime
+
+from uuid import uuid4
+
+
+@dataclass(slots=True)
+class Event:
+
+    type: str
+
+    source: str
+
+    payload: dict
+
+    priority: int = 100
+
+    id: str = field(
+
+        default_factory=lambda: str(uuid4())
+
+    )
+
+    timestamp: datetime = field(
+
+        default_factory=datetime.utcnow
+
+    )
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\src\shared\execution_result.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass(slots=True)
+class ExecutionResult:
+
+    success: bool = True
+
+    data: dict = field(default_factory=dict)
+
+    errors: list[str] = field(default_factory=list)
+
+    def add(
+
+        self,
+
+        key: str,
+
+        value,
+
+    ):
+
+        self.data[key] = value
+
+    def fail(
+
+        self,
+
+        message: str,
+
+    ):
+
+        self.success = False
+
+        self.errors.append(message)
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\shared\src\shared\ids.py
+================================================================================
+
+from uuid import uuid4
+
+
+def new_id() -> str:
+
+    return str(uuid4())
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\pyproject.toml
+================================================================================
+
+[project]
+name = "tasks"
+version = "0.1.0"
+description = "NEXUS Assistant Tasks"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\README.md
+================================================================================
+
+# NEXUS Tasks
+
+Domain models for assistant tasks.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\__init__.py
+================================================================================
+
+from tasks.lifecycle import (
+    InvalidTaskTransition,
+    can_transition,
+    transition_task,
+)
+from tasks.models import Task, TaskStatus
+from tasks.reminder_lifecycle import (
+    InvalidReminderTransition,
+    can_transition as can_reminder_transition,
+    transition_reminder,
+)
+from tasks.reminder_resolver import ReminderResolver
+from tasks.reminder_store import ReminderStore
+from tasks.reminder_trigger import (
+    ReminderTriggerHandler,
+    ReminderTriggerResult,
+)
+from tasks.reminders import Reminder, ReminderStatus
+from tasks.resolver import TaskResolver
+from tasks.store import TaskStore
+from tasks.temporal import (
+    due_tasks,
+    overdue_tasks,
+    upcoming_tasks,
+)
+from tasks.temporal_factory import (
+    InvalidReminderSchedule,
+    reminder_to_schedule,
+)
+from tasks.temporal_schedule import TemporalSchedule
+
+__all__ = [
+    "Task",
+    "TaskStatus",
+    "TaskStore",
+    "TaskResolver",
+    "InvalidTaskTransition",
+    "can_transition",
+    "transition_task",
+    "overdue_tasks",
+    "due_tasks",
+    "upcoming_tasks",
+    "Reminder",
+    "ReminderStatus",
+    "ReminderStore",
+    "ReminderResolver",
+    "InvalidReminderTransition",
+    "can_reminder_transition",
+    "transition_reminder",
+    "TemporalSchedule",
+    "InvalidReminderSchedule",
+    "reminder_to_schedule",
+    "ReminderTriggerHandler",
+    "ReminderTriggerResult",
+]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\lifecycle.py
+================================================================================
+
+from __future__ import annotations
+
+from tasks.models import Task, TaskStatus
+
+
+_ALLOWED_TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
+    TaskStatus.PENDING: {
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.IN_PROGRESS: {
+        TaskStatus.COMPLETED,
+        TaskStatus.CANCELLED,
+    },
+    TaskStatus.COMPLETED: set(),
+    TaskStatus.CANCELLED: set(),
+}
+
+
+class InvalidTaskTransition(ValueError):
+    """Raised when a task lifecycle transition is not allowed."""
+
+
+def can_transition(
+    current: TaskStatus,
+    target: TaskStatus,
+) -> bool:
+    return target in _ALLOWED_TRANSITIONS[current]
+
+
+def transition_task(
+    task: Task,
+    target: TaskStatus,
+) -> Task:
+    if not can_transition(task.status, target):
+        raise InvalidTaskTransition(
+            f"Invalid task transition: "
+            f"{task.status.value} -> {target.value}"
+        )
+
+    return Task(
+        id=task.id,
+        title=task.title,
+        description=task.description,
+        status=target,
+        priority=task.priority,
+        user_id=task.user_id,
+        organization_id=task.organization_id,
+        project_id=task.project_id,
+        due_at=task.due_at,
+        created_at=task.created_at,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\models.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class TaskStatus(str, Enum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class Task:
+    id: str
+    title: str
+    description: str | None = None
+    status: TaskStatus = TaskStatus.PENDING
+    priority: str = "normal"
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    due_at: datetime | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        title: str,
+        description: str | None = None,
+        priority: str = "normal",
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+        due_at: datetime | None = None,
+    ) -> Task:
+        return cls(
+            id=str(uuid4()),
+            title=title,
+            description=description,
+            status=TaskStatus.PENDING,
+            priority=priority,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+            due_at=due_at,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\reminder_lifecycle.py
+================================================================================
+
+from __future__ import annotations
+
+from tasks.reminders import Reminder, ReminderStatus
+
+
+_ALLOWED_TRANSITIONS: dict[
+    ReminderStatus,
+    set[ReminderStatus],
+] = {
+    ReminderStatus.PENDING: {
+        ReminderStatus.TRIGGERED,
+        ReminderStatus.CANCELLED,
+    },
+    ReminderStatus.TRIGGERED: set(),
+    ReminderStatus.CANCELLED: set(),
+}
+
+
+class InvalidReminderTransition(ValueError):
+    """Raised when a reminder lifecycle transition is not allowed."""
+
+
+def can_transition(
+    current: ReminderStatus,
+    target: ReminderStatus,
+) -> bool:
+    return target in _ALLOWED_TRANSITIONS[current]
+
+
+def transition_reminder(
+    reminder: Reminder,
+    target: ReminderStatus,
+) -> Reminder:
+    if not can_transition(reminder.status, target):
+        raise InvalidReminderTransition(
+            f"Invalid reminder transition: "
+            f"{reminder.status.value} -> {target.value}"
+        )
+
+    return Reminder(
+        id=reminder.id,
+        message=reminder.message,
+        trigger_at=reminder.trigger_at,
+        status=target,
+        task_id=reminder.task_id,
+        user_id=reminder.user_id,
+        organization_id=reminder.organization_id,
+        project_id=reminder.project_id,
+        created_at=reminder.created_at,
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\reminder_resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from context import AssistantContext
+
+from tasks.reminders import Reminder
+from tasks.reminder_store import ReminderStore
+
+
+class ReminderResolver:
+    """Resolves reminders relevant to an assistant context."""
+
+    def __init__(self, store: ReminderStore) -> None:
+        self._store = store
+
+    def resolve(self, context: AssistantContext) -> list[Reminder]:
+        reminders = self._store.list()
+
+        user = context.user
+        organization = context.organization
+        project_ids = {project.id for project in context.projects}
+
+        resolved: list[Reminder] = []
+
+        for reminder in reminders:
+            if user is not None and reminder.user_id == user.id:
+                resolved.append(reminder)
+                continue
+
+            if (
+                organization is not None
+                and reminder.organization_id == organization.id
+            ):
+                resolved.append(reminder)
+                continue
+
+            if (
+                reminder.project_id is not None
+                and reminder.project_id in project_ids
+            ):
+                resolved.append(reminder)
+
+        return resolved
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\reminder_store.py
+================================================================================
+
+
+from __future__ import annotations
+
+import sqlite3
+import threading
+from datetime import datetime
+from pathlib import Path
+
+from tasks.reminders import Reminder, ReminderStatus
+
+
+class ReminderStore:
+    """SQLite-backed store for assistant reminders."""
+
+    def __init__(
+        self,
+        db_path: str | Path | None = None,
+    ) -> None:
+        self._lock = threading.RLock()
+
+        if db_path is None or str(db_path) == ":memory:":
+            resolved_path = ":memory:"
+        else:
+            path = Path(db_path).expanduser()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            resolved_path = str(path)
+
+        self._connection = sqlite3.connect(
+            resolved_path,
+            timeout=10.0,
+            check_same_thread=False,
+        )
+        self._connection.row_factory = sqlite3.Row
+        self._connection.execute("PRAGMA foreign_keys = ON")
+
+        if resolved_path != ":memory:":
+            self._connection.execute("PRAGMA journal_mode = WAL")
+
+        self._initialize_schema()
+
+    def _initialize_schema(self) -> None:
+        with self._lock, self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reminders (
+                    id TEXT PRIMARY KEY,
+                    message TEXT NOT NULL,
+                    trigger_at TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    task_id TEXT,
+                    user_id TEXT,
+                    organization_id TEXT,
+                    project_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+    @staticmethod
+    def _to_reminder(row: sqlite3.Row | None) -> Reminder | None:
+        if row is None:
+            return None
+
+        return Reminder(
+            id=row["id"],
+            message=row["message"],
+            trigger_at=datetime.fromisoformat(row["trigger_at"]),
+            status=ReminderStatus(row["status"]),
+            task_id=row["task_id"],
+            user_id=row["user_id"],
+            organization_id=row["organization_id"],
+            project_id=row["project_id"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def _save(self, reminder: Reminder) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO reminders (
+                id, message, trigger_at, status, task_id,
+                user_id, organization_id, project_id, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                message = excluded.message,
+                trigger_at = excluded.trigger_at,
+                status = excluded.status,
+                task_id = excluded.task_id,
+                user_id = excluded.user_id,
+                organization_id = excluded.organization_id,
+                project_id = excluded.project_id,
+                created_at = excluded.created_at
+            """,
+            (
+                reminder.id,
+                reminder.message,
+                reminder.trigger_at.isoformat(),
+                reminder.status.value,
+                reminder.task_id,
+                reminder.user_id,
+                reminder.organization_id,
+                reminder.project_id,
+                reminder.created_at.isoformat(),
+            ),
+        )
+
+    def add(self, reminder: Reminder) -> Reminder:
+        with self._lock, self._connection:
+            self._save(reminder)
+        return reminder
+
+    def get(self, reminder_id: str) -> Reminder | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM reminders WHERE id = ?",
+                (reminder_id,),
+            ).fetchone()
+
+        return self._to_reminder(row)
+
+    def list(self) -> list[Reminder]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM reminders ORDER BY rowid"
+            ).fetchall()
+
+        return [
+            reminder
+            for row in rows
+            if (reminder := self._to_reminder(row)) is not None
+        ]
+
+    def update(self, reminder: Reminder) -> Reminder:
+        with self._lock, self._connection:
+            exists = self._connection.execute(
+                "SELECT 1 FROM reminders WHERE id = ?",
+                (reminder.id,),
+            ).fetchone()
+
+            if exists is None:
+                raise KeyError(f"Reminder not found: {reminder.id}")
+
+            self._save(reminder)
+
+        return reminder
+
+    def remove(self, reminder_id: str) -> Reminder | None:
+        with self._lock, self._connection:
+            row = self._connection.execute(
+                "SELECT * FROM reminders WHERE id = ?",
+                (reminder_id,),
+            ).fetchone()
+
+            reminder = self._to_reminder(row)
+
+            if reminder is not None:
+                self._connection.execute(
+                    "DELETE FROM reminders WHERE id = ?",
+                    (reminder_id,),
+                )
+
+        return reminder
+
+    def clear(self) -> None:
+        with self._lock, self._connection:
+            self._connection.execute("DELETE FROM reminders")
+
+    def count(self) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS total FROM reminders"
+            ).fetchone()
+
+        return int(row["total"])
+
+    def close(self) -> None:
+        """Close the SQLite connection."""
+        with self._lock:
+            self._connection.close()
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\reminder_trigger.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timezone
+
+from tasks.reminder_lifecycle import (
+    InvalidReminderTransition,
+    transition_reminder,
+)
+from tasks.reminders import Reminder, ReminderStatus
+
+
+@dataclass(frozen=True)
+class ReminderTriggerResult:
+    reminder_id: str
+    message: str
+    triggered_at: datetime
+    reminder: Reminder
+
+
+class ReminderTriggerHandler:
+    """Handles the domain transition produced by a reminder trigger."""
+
+    def handle(
+        self,
+        reminder: Reminder,
+    ) -> ReminderTriggerResult:
+        triggered_at = datetime.now(timezone.utc)
+
+        triggered = transition_reminder(
+            reminder,
+            ReminderStatus.TRIGGERED,
+        )
+
+        return ReminderTriggerResult(
+            reminder_id=triggered.id,
+            message=triggered.message,
+            triggered_at=triggered_at,
+            reminder=triggered,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\reminders.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ReminderStatus(str, Enum):
+    PENDING = "pending"
+    TRIGGERED = "triggered"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class Reminder:
+    id: str
+    message: str
+    trigger_at: datetime
+    status: ReminderStatus = ReminderStatus.PENDING
+    task_id: str | None = None
+    user_id: str | None = None
+    organization_id: str | None = None
+    project_id: str | None = None
+    created_at: datetime = field(default_factory=_utc_now)
+
+    @classmethod
+    def create(
+        cls,
+        message: str,
+        trigger_at: datetime,
+        task_id: str | None = None,
+        user_id: str | None = None,
+        organization_id: str | None = None,
+        project_id: str | None = None,
+    ) -> Reminder:
+        return cls(
+            id=str(uuid4()),
+            message=message,
+            trigger_at=trigger_at,
+            status=ReminderStatus.PENDING,
+            task_id=task_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            project_id=project_id,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\resolver.py
+================================================================================
+
+from __future__ import annotations
+
+from context import AssistantContext
+
+from tasks.models import Task
+from tasks.store import TaskStore
+
+
+class TaskResolver:
+    """Resolves tasks relevant to an assistant context."""
+
+    def __init__(self, store: TaskStore) -> None:
+        self._store = store
+
+    def resolve(self, context: AssistantContext) -> list[Task]:
+        tasks = self._store.list()
+
+        user = context.user
+        organization = context.organization
+        project_ids = {project.id for project in context.projects}
+
+        resolved: list[Task] = []
+
+        for task in tasks:
+            if user is not None and task.user_id == user.id:
+                resolved.append(task)
+                continue
+
+            if (
+                organization is not None
+                and task.organization_id == organization.id
+            ):
+                resolved.append(task)
+                continue
+
+            if task.project_id is not None and task.project_id in project_ids:
+                resolved.append(task)
+
+        return resolved
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\store.py
+================================================================================
+
+from __future__ import annotations
+
+from tasks.models import Task
+
+
+class TaskStore:
+    """In-memory store for assistant tasks."""
+
+    def __init__(self) -> None:
+        self._tasks: dict[str, Task] = {}
+
+    def add(self, task: Task) -> Task:
+        self._tasks[task.id] = task
+        return task
+
+    def get(self, task_id: str) -> Task | None:
+        return self._tasks.get(task_id)
+
+    def list(self) -> list[Task]:
+        return list(self._tasks.values())
+
+    def update(self, task: Task) -> Task:
+        if task.id not in self._tasks:
+            raise KeyError(f"Task not found: {task.id}")
+
+        self._tasks[task.id] = task
+        return task
+
+    def remove(self, task_id: str) -> Task | None:
+        return self._tasks.pop(task_id, None)
+
+    def clear(self) -> None:
+        self._tasks.clear()
+
+    def count(self) -> int:
+        return len(self._tasks)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\temporal.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from tasks.models import Task
+
+
+def overdue_tasks(
+    tasks: list[Task],
+    now: datetime,
+) -> list[Task]:
+    return [
+        task
+        for task in tasks
+        if task.due_at is not None
+        and task.due_at < now
+        and task.status not in {"completed", "cancelled"}
+    ]
+
+
+def due_tasks(
+    tasks: list[Task],
+    now: datetime,
+) -> list[Task]:
+    return [
+        task
+        for task in tasks
+        if task.due_at is not None
+        and task.due_at <= now
+        and task.status not in {"completed", "cancelled"}
+    ]
+
+
+def upcoming_tasks(
+    tasks: list[Task],
+    now: datetime,
+) -> list[Task]:
+    return [
+        task
+        for task in tasks
+        if task.due_at is not None
+        and task.due_at > now
+        and task.status not in {"completed", "cancelled"}
+    ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\temporal_factory.py
+================================================================================
+
+from __future__ import annotations
+
+from tasks.reminders import Reminder, ReminderStatus
+from tasks.temporal_schedule import TemporalSchedule
+
+
+class InvalidReminderSchedule(ValueError):
+    """Raised when a reminder cannot be scheduled."""
+
+
+def reminder_to_schedule(
+    reminder: Reminder,
+) -> TemporalSchedule:
+    if reminder.status != ReminderStatus.PENDING:
+        raise InvalidReminderSchedule(
+            "Only pending reminders can be scheduled."
+        )
+
+    return TemporalSchedule.create(
+        execute_at=reminder.trigger_at,
+        target_id=reminder.id,
+        target_type="reminder",
+        metadata={
+            "reminder_message": reminder.message,
+        },
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: packages\tasks\src\tasks\temporal_schedule.py
+================================================================================
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from uuid import uuid4
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass(frozen=True)
+class TemporalSchedule:
+    """
+    Representa una solicitud de ejecución temporal de una sola vez.
+
+    Es una frontera entre el dominio que necesita una ejecución temporal
+    y la infraestructura que finalmente decidirá cómo ejecutarla.
+    """
+
+    id: str
+    execute_at: datetime
+    target_id: str
+    target_type: str
+    created_at: datetime = field(default_factory=_utc_now)
+    metadata: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def create(
+        cls,
+        execute_at: datetime,
+        target_id: str,
+        target_type: str,
+        metadata: dict[str, str] | None = None,
+    ) -> TemporalSchedule:
+        return cls(
+            id=str(uuid4()),
+            execute_at=execute_at,
+            target_id=target_id,
+            target_type=target_type,
+            metadata=dict(metadata or {}),
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: pyproject.toml
+================================================================================
+
+[tool.uv.workspace]
+members = [
+    "packages/core",
+    "packages/shared",
+    "packages/actions",
+    "packages/adapters",
+    "packages/planner",
+    "packages/runtime",
+    "packages/bootstrap",
+    "packages/engine",
+    "packages/providers",
+    "packages/memory",
+    "packages/response",
+    "packages/presence",
+    "packages/context",
+    "packages/tasks",
+    "packages/documents",
+    "packages/processes",
+    "packages/rules",
+    "packages/security",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+python_classes = ["Test*"]
+python_files = ["test_*.py"]
+# No recolectar copias de respaldo: contienen tests con nombres duplicados.
+norecursedirs = [".git", ".venv", "venv", "backups", "dist", "build", "node_modules", ".pytest_cache", "__pycache__"]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: README.md
+================================================================================
+
+# NEXUS V1 — ejecución y validación
+
+## Ruta modular de desarrollo validada
+
+Desde `C:\Users\cdi40\Desktop\nexus`:
+
+```powershell
+uv run python -u .\server.py
+```
+
+El runtime modular escucha en `127.0.0.1:8765`. Ejecutar la suite Python:
+
+```powershell
+uv run pytest -q --ignore=backups --ignore=dist --ignore=build
+uv run python -m compileall -q .\packages .\tests .\server.py .\nexus_http_security.py
+```
+
+## Consola React + Electron en desarrollo
+
+Desde la raíz del proyecto, ejecutar:
+
+```powershell
+.\start-nexus-desktop-dev.ps1
+```
+
+El script comprueba la API en `http://127.0.0.1:8765/api/status`, inicia `apps/console` con Vite en `127.0.0.1:5173` si hace falta y después abre Electron. Los logs quedan en `%TEMP%\NEXUS_V1_DESKTOP_LOGS`.
+
+Para validar Python, las pruebas y la compilación React:
+
+```powershell
+.\VERIFICAR_NEXUS_INTEGRACION.ps1
+```
+
+El build React no es un instalador comercial. La distribución final todavía requiere empaquetar el runtime Python, verificar instalación limpia, actualización, desinstalación y recuperación.
+
+## Otras líneas del repositorio
+
+`backend/` + `dashboard/` y `desktop/` son rutas distintas/legadas y no se fusionan con el runtime modular en esta fase. El objetivo de este parche es dejar una ruta de desarrollo coherente: `server.py` + `apps/console` + `electron`.
+
+## Seguridad
+
+El runtime debe permanecer en loopback. No exponerlo en una red ni publicar el servidor sin diseñar autenticación, autorización y una política de seguridad de producción.
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: runtime_snapshot.txt
+================================================================================
+
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\__init__.py
+============================================================
+from .runtime import Runtime
+
+__all__ = [
+    "Runtime",
+]
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\bootstrap.py
+============================================================
+from __future__ import annotations
+
+from packages.core.src.core.kernel import Kernel
+
+from packages.runtime.src.runtime.runtime import Runtime
+
+from packages.actions.src.actions.registry import CapabilityRegistry
+from packages.actions.src.actions.manager import CapabilityManager
+
+from packages.actions.src.actions.echo import EchoCapability
+from packages.actions.src.actions.open_app import OpenAppCapability
+from packages.runtime.src.runtime.executor import Executor
+
+
+class Bootstrap:
+    """
+    Inicializa todos los componentes principales
+    del Runtime.
+    """
+
+    def build(self) -> Runtime:
+
+        kernel = Kernel()
+
+        runtime = Runtime(
+            kernel=kernel,
+        )
+
+        #
+        # Capability Registry
+        #
+
+        registry = CapabilityRegistry()
+
+        registry.register(
+            EchoCapability()
+        )
+
+        registry.register(
+            OpenAppCapability()
+        )
+
+        manager = CapabilityManager(
+            registry
+        )
+
+        executor = Executor(
+          manager
+        )
+
+        runtime.configure_executor(
+          executor
+        )
+
+        runtime.capability_registry = registry
+
+        runtime.capability_manager = manager
+
+        return runtime
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\dispatcher.py
+============================================================
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+
+EventHandler = Callable[[Any], Awaitable[None]]
+
+
+class Dispatcher:
+    """
+    Despachador de eventos del Runtime.
+
+    Su única responsabilidad es encontrar el
+    handler registrado para un evento y ejecutarlo.
+
+    No conoce IA.
+    No conoce Planner.
+    No conoce Memory.
+    No conoce Providers.
+    """
+
+    def __init__(self) -> None:
+
+        self._handlers: dict[str, EventHandler] = {}
+
+    def register(
+        self,
+        event_type: str,
+        handler: EventHandler,
+    ) -> None:
+        """
+        Registra un handler para un tipo de evento.
+        """
+
+        self._handlers[event_type] = handler
+
+    def unregister(
+        self,
+        event_type: str,
+    ) -> None:
+
+        self._handlers.pop(
+            event_type,
+            None,
+        )
+
+    def has(
+        self,
+        event_type: str,
+    ) -> bool:
+
+        return event_type in self._handlers
+
+    async def dispatch(
+        self,
+        event: Any,
+    ) -> None:
+        """
+        Envía el evento al handler correspondiente.
+        """
+
+        handler = self._handlers.get(
+            event.type
+        )
+
+        if handler is None:
+            return
+
+        await handler(event)
+
+    def clear(self) -> None:
+
+        self._handlers.clear()
+
+    def handlers(self) -> list[str]:
+
+        return sorted(
+            self._handlers.keys()
+        )
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\execution_result.py
+============================================================
+from __future__ import annotations
+
+import time
+
+from planner.execution_context import ExecutionContext
+
+from runtime.execution_result import ExecutionResult
+
+
+class Executor:
+    """
+    Ejecuta un ExecutionContext completo.
+    """
+
+    def __init__(
+        self,
+        runtime,
+    ) -> None:
+
+        self.runtime = runtime
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> ExecutionResult:
+
+        start = time.perf_counter()
+
+        result = ExecutionResult()
+
+        if self.runtime.action_manager is None:
+
+            result.success = False
+
+            result.message = (
+                "ActionManager has not been configured."
+            )
+
+            return result
+
+        while True:
+
+            step = context.current_plan_step()
+
+            if step is None:
+                break
+
+            await self.runtime.action_manager.execute(
+                context
+            )
+
+        result.success = not context.has_errors()
+
+        result.output = context.results
+
+        result.artifacts = context.artifacts
+
+        result.metadata = context.variables
+
+        if context.errors:
+
+            result.message = "\n".join(
+                context.errors
+            )
+
+        result.execution_time = round(
+
+            time.perf_counter() - start,
+
+            3,
+
+        )
+
+        return result
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\executor.py
+============================================================
+from __future__ import annotations
+
+from planner.execution_context import ExecutionContext
+
+from runtime.execution_result import ExecutionResult
+
+
+class Executor:
+    """
+    Ejecuta un ExecutionContext completo.
+
+    El Executor no conoce las Actions.
+    Solamente coordina el Runtime.
+    """
+
+    def __init__(
+        self,
+        runtime,
+    ) -> None:
+
+        self.runtime = runtime
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> ExecutionResult:
+
+        result = ExecutionResult()
+
+        if self.runtime.action_manager is None:
+
+            result.success = False
+            result.errors.append(
+                "ActionManager has not been configured."
+            )
+
+            return result
+
+        while True:
+
+            step = context.current_plan_step()
+
+            if step is None:
+                break
+
+            await self.runtime.action_manager.execute(
+                context
+            )
+
+        result.success = len(
+            context.errors
+        ) == 0
+
+        result.data = context.results.copy()
+
+        result.errors.extend(
+            context.errors
+        )
+
+        return result
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\lifecycle.py
+============================================================
+from __future__ import annotations
+
+from packages.runtime.src.runtime.runtime import Runtime
+
+
+class Lifecycle:
+    """
+    Controla el ciclo de vida del Runtime.
+
+    Este componente únicamente administra el
+    inicio y la detención del sistema.
+    """
+
+    def __init__(self, runtime: Runtime) -> None:
+
+        self.runtime = runtime
+
+        self.running = False
+
+    async def start(self) -> None:
+        """
+        Inicia el Runtime.
+        """
+
+        if self.running:
+            return
+
+        self.running = True
+
+        self.runtime.kernel.start()
+
+    async def stop(self) -> None:
+        """
+        Detiene el Runtime.
+        """
+
+        if not self.running:
+            return
+
+        self.running = False
+
+        self.runtime.kernel.stop()
+
+    async def restart(self) -> None:
+        """
+        Reinicia el Runtime.
+        """
+
+        await self.stop()
+
+        await self.start()
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\registry.py
+============================================================
+from __future__ import annotations
+
+from typing import Any
+
+
+class Registry:
+    """
+    Registro de módulos del Runtime.
+
+    Mantiene un catálogo de todos los módulos
+    cargados en el sistema.
+
+    No crea módulos.
+    No ejecuta módulos.
+    No conoce implementaciones.
+    """
+
+    def __init__(self) -> None:
+
+        self._modules: dict[str, Any] = {}
+
+    def register(
+        self,
+        name: str,
+        module: Any,
+    ) -> None:
+        """
+        Registra un módulo.
+        """
+
+        self._modules[name] = module
+
+    def get(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Devuelve un módulo registrado.
+        """
+
+        if name not in self._modules:
+
+            raise KeyError(
+                f"Module '{name}' not registered."
+            )
+
+        return self._modules[name]
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._modules
+
+    def unregister(
+        self,
+        name: str,
+    ) -> None:
+
+        self._modules.pop(
+            name,
+            None,
+        )
+
+    def clear(self) -> None:
+
+        self._modules.clear()
+
+    def modules(self) -> list[str]:
+
+        return sorted(
+            self._modules.keys()
+        )
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\runtime.py
+============================================================
+from __future__ import annotations
+
+from core.kernel import Kernel
+
+from planner.execution_context import ExecutionContext
+
+from runtime.dispatcher import Dispatcher
+from runtime.executor import Executor
+from runtime.registry import Registry
+from runtime.scheduler import Scheduler
+from runtime.service_container import ServiceContainer
+from runtime.execution_result import ExecutionResult
+
+from actions.registry import ActionRegistry
+from actions.manager import ActionManager
+
+
+class Runtime:
+    """
+    Runtime principal de NEXUS.
+
+    Es el orquestador del sistema.
+
+    Su responsabilidad es coordinar los distintos
+    componentes sin conocer sus implementaciones.
+
+    Nunca contiene lógica de negocio.
+    """
+
+    def __init__(
+        self,
+        kernel: Kernel,
+    ) -> None:
+
+        self.kernel = kernel
+
+        self.registry = Registry()
+
+        self.container = ServiceContainer()
+
+        self.scheduler = Scheduler()
+
+        self.dispatcher = Dispatcher()
+
+        #
+        # Se inicializan en Bootstrap
+        #
+
+        self.action_registry: ActionRegistry | None = None
+
+        self.action_manager: ActionManager | None = None
+
+        self.executor: Executor | None = None
+
+    def configure_executor(
+        self,
+        executor: Executor,
+    ) -> None:
+
+        self.executor = executor
+
+    async def execute(
+        self,
+        context: ExecutionContext,
+    ) -> ExecutionResult:
+        """
+        Ejecuta un plan completo.
+        """
+
+        if self.executor is None:
+            raise RuntimeError(
+                "Runtime executor has not been configured."
+            )
+
+        return await self.executor.execute(
+            context
+        )
+
+    def register_module(
+        self,
+        name: str,
+        module,
+    ) -> None:
+
+        self.registry.register(
+            name,
+            module,
+        )
+
+    def register_service(
+        self,
+        name: str,
+        service,
+    ) -> None:
+
+        self.container.register(
+            name,
+            service,
+        )
+
+    def configure_actions(
+        self,
+        registry: ActionRegistry,
+        manager: ActionManager,
+    ) -> None:
+        """
+        Registra el sistema de Actions del Runtime.
+        """
+
+        self.action_registry = registry
+        self.action_manager = manager
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\scheduler.py
+============================================================
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from typing import Awaitable, Callable
+
+
+TaskCallback = Callable[[], Awaitable[None]]
+
+
+@dataclass(slots=True)
+class ScheduledTask:
+    """
+    Representa una tarea periódica.
+    """
+
+    name: str
+    interval: float
+    callback: TaskCallback
+
+
+class Scheduler:
+    """
+    Scheduler principal de NEXUS.
+
+    Administra tareas periódicas.
+
+    No conoce IA.
+    No conoce Runtime.
+    No conoce Providers.
+    No conoce Planner.
+
+    Solo ejecuta tareas registradas.
+    """
+
+    def __init__(self) -> None:
+
+        self._tasks: list[ScheduledTask] = []
+
+        self._running = False
+
+    def register(
+        self,
+        name: str,
+        interval: float,
+        callback: TaskCallback,
+    ) -> None:
+
+        self._tasks.append(
+
+            ScheduledTask(
+
+                name=name,
+
+                interval=interval,
+
+                callback=callback,
+            )
+        )
+
+    async def start(self) -> None:
+
+        if self._running:
+            return
+
+        self._running = True
+
+        await asyncio.gather(
+
+            *[
+
+                self._run_task(task)
+
+                for task in self._tasks
+
+            ]
+        )
+
+    async def stop(self) -> None:
+
+        self._running = False
+
+    async def _run_task(
+        self,
+        task: ScheduledTask,
+    ) -> None:
+
+        while self._running:
+
+            try:
+
+                await task.callback()
+
+            except Exception as ex:
+
+                print(
+
+                    f"[Scheduler] {task.name}: {ex}"
+
+                )
+
+            await asyncio.sleep(
+
+                task.interval
+
+            )
+
+    def clear(self) -> None:
+
+        self._tasks.clear()
+
+    def tasks(self) -> list[str]:
+
+        return [
+
+            task.name
+
+            for task in self._tasks
+
+        ]
+
+============================================================
+FILE: C:\Users\cdi40\Desktop\nexus\packages\runtime\src\runtime\service_container.py
+============================================================
+from __future__ import annotations
+
+from typing import Any
+
+
+class ServiceContainer:
+    """
+    Contenedor de dependencias del Runtime.
+
+    Es el único responsable de almacenar y entregar
+    servicios compartidos entre los distintos módulos.
+
+    No crea objetos.
+    No conoce implementaciones.
+    No contiene lógica de negocio.
+    """
+
+    def __init__(self) -> None:
+
+        self._services: dict[str, Any] = {}
+
+    def register(
+        self,
+        name: str,
+        service: Any,
+    ) -> None:
+        """
+        Registra un servicio.
+        """
+
+        self._services[name] = service
+
+    def get(
+        self,
+        name: str,
+    ) -> Any:
+        """
+        Obtiene un servicio previamente registrado.
+        """
+
+        if name not in self._services:
+
+            raise KeyError(
+                f"Service '{name}' not registered."
+            )
+
+        return self._services[name]
+
+    def has(
+        self,
+        name: str,
+    ) -> bool:
+
+        return name in self._services
+
+    def remove(
+        self,
+        name: str,
+    ) -> None:
+
+        self._services.pop(
+            name,
+            None,
+        )
+
+    def clear(self) -> None:
+
+        self._services.clear()
+
+    def services(self) -> list[str]:
+
+        return sorted(
+            self._services.keys()
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

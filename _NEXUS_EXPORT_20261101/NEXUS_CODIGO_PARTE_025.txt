@@ -1,0 +1,2462 @@
+﻿
+================================================================================
+ARCHIVO: dashboard\src\features\workflows\Workflow.jsx
+================================================================================
+
+import ReactFlow, {
+  addEdge,
+  Background,
+  Controls
+} from "reactflow"
+import "reactflow/dist/style.css"
+
+import { useState, useEffect, useRef } from "react"
+import toast from "react-hot-toast"
+
+import Presence from "../presence/Presence"
+import ConditionNode from "../../nodes/ConditionNode"
+import Copilot from "../ai/Copilot"
+
+import axios from "axios"
+
+const api = axios.create({
+  baseURL: "http://127.0.0.1:8010",
+  headers: { "x-api-key": "nexus-secret" }
+})
+
+export default function Workflow() {
+
+  const [logs, setLogs] = useState([])
+  const [activeAction, setActiveAction] = useState(null)
+  const [finishedActions, setFinishedActions] = useState([])
+  const [errorAction, setErrorAction] = useState(null)
+  const [aiPrompt,setAiPrompt] = useState("")
+
+  const idRef = useRef(2)
+
+  const [nodes, setNodes] = useState([
+    {
+      id: "1",
+      position: { x: 100, y: 100 },
+      data: { label: "▶ Trigger" },
+      type: "default"
+    }
+  ])
+
+  const [edges, setEdges] = useState([])
+
+  const nodeTypes = { condition: ConditionNode }
+
+  /* ==================================================
+     WEBSOCKET LIVE EVENTS
+  ================================================== */
+
+  useEffect(() => {
+
+    const ws = new WebSocket("ws://127.0.0.1:8010/ws")
+
+    ws.onmessage = (e) => {
+
+      const msg = JSON.parse(e.data)
+
+      setLogs(l => [...l.slice(-120), msg])
+
+      if (msg.type === "workflow_step") {
+        setActiveAction(msg.action)
+        setErrorAction(null)
+      }
+
+      if (msg.type === "workflow_result") {
+        setFinishedActions(prev => [...prev, msg.action])
+        setActiveAction(null)
+      }
+
+      if (msg.type === "workflow_error") {
+        setErrorAction(msg.action)
+        setActiveAction(null)
+      }
+
+    }
+
+    return () => ws.close()
+
+  }, [])
+
+  /* ==================================================
+     VISUAL NODE COLORING
+  ================================================== */
+
+  const styledNodes = nodes.map(n => {
+
+    if (!n.data?.action) return n
+
+    let style = {
+      border: "1px solid #444",
+      borderRadius: 8,
+      padding: 6
+    }
+
+    if (n.data.action === activeAction) {
+      style = {
+        ...style,
+        border: "2px solid #f6c344",
+        boxShadow: "0 0 12px #f6c344"
+      }
+    }
+
+    if (finishedActions.includes(n.data.action)) {
+      style = {
+        ...style,
+        border: "2px solid #2ecc71",
+        boxShadow: "0 0 12px #2ecc71"
+      }
+    }
+
+    if (errorAction === n.data.action) {
+      style = {
+        ...style,
+        border: "2px solid #e74c3c",
+        boxShadow: "0 0 12px #e74c3c"
+      }
+    }
+
+    return {
+      ...n,
+      style
+    }
+
+  })
+
+  /* ==================================================
+     AI WORKFLOW GENERATION
+  ================================================== */
+
+  const generateWithAI = async () => {
+
+    if(!aiPrompt) return
+
+    try{
+
+      const res = await api.post("/ai/generate-workflow",{
+        prompt: aiPrompt
+      })
+
+      const wf = res.data.workflow
+
+      buildGraphFromWorkflow(wf)
+
+      toast.success("Workflow generado por IA")
+
+    }catch(err){
+
+      toast.error("Error generando workflow")
+
+    }
+
+  }
+
+  /* ==================================================
+     BUILD GRAPH FROM WORKFLOW JSON
+  ================================================== */
+
+  function buildGraphFromWorkflow(workflow){
+
+    const newNodes=[
+      {
+        id:"1",
+        position:{x:100,y:100},
+        data:{label:"▶ Trigger"}
+      }
+    ]
+
+    const newEdges=[]
+
+    let lastId="1"
+
+    workflow.steps.forEach((step,i)=>{
+
+      const id=String(i+2)
+
+      newNodes.push({
+        id,
+        position:{x:300,y:100+i*120},
+        data:{
+          label:step.action,
+          action:step.action
+        }
+      })
+
+      newEdges.push({
+        id:lastId+"-"+id,
+        source:lastId,
+        target:id
+      })
+
+      lastId=id
+
+    })
+
+    setNodes(newNodes)
+    setEdges(newEdges)
+
+  }
+
+  /* ==================================================
+     ADD NODE
+  ================================================== */
+
+  const addNode = (action) => {
+
+    const newNode = {
+      id: String(idRef.current++),
+      position: { x: 260, y: 150 + idRef.current * 70 },
+      data: { label: action, action },
+      type: "default"
+    }
+
+    setNodes(n => [...n, newNode])
+
+  }
+
+  /* ==================================================
+     SAVE WORKFLOW
+  ================================================== */
+
+  const saveWorkflow = async () => {
+
+    const nodeMap = {}
+    nodes.forEach(n => nodeMap[n.id] = n)
+
+    const edgeMap = {}
+    edges.forEach(e => {
+      if (!edgeMap[e.source]) edgeMap[e.source] = []
+      edgeMap[e.source].push(e)
+    })
+
+    function buildTree(nodeId) {
+
+      const node = nodeMap[nodeId]
+      if (!node) return null
+
+      if (node.data?.action) {
+
+        const children = (edgeMap[nodeId] || [])
+          .map(e => buildTree(e.target))
+          .filter(Boolean)
+
+        return {
+          type: "action",
+          action: node.data.action,
+          value: null,
+          next: children
+        }
+
+      }
+
+      return null
+
+    }
+
+    const targets = edges.map(e => e.target)
+    const rootNode = nodes.find(n => !targets.includes(n.id))
+
+    if (!rootNode) {
+      toast.error("No se detecta nodo raíz")
+      return
+    }
+
+    const tree = buildTree(rootNode.id)
+
+    if (!tree) {
+      toast.error("Workflow vacío o mal conectado")
+      return
+    }
+
+    await api.post("/workflows/save", [
+      {
+        name: "workflow-1",
+        trigger: "manual",
+        steps: [tree]
+      }
+    ])
+
+    toast.success("Workflow guardado ✓")
+
+  }
+
+  /* ==================================================
+     RUN WORKFLOW
+  ================================================== */
+
+  const runAsync = async () => {
+
+    setFinishedActions([])
+    setErrorAction(null)
+
+    const res = await api.post("/jobs/run", { name: "workflow-1" })
+
+    toast("Job creado: " + res.data.job_id)
+
+  }
+
+  /* ==================================================
+     LOAD WORKFLOW FROM COPILOT
+  ================================================== */
+
+  const loadGeneratedWorkflow = (workflow) => {
+
+    buildGraphFromWorkflow(workflow)
+
+  }
+
+  /* ==================================================
+     UI
+  ================================================== */
+
+  return (
+    <div style={{ position: "relative" }}>
+
+      <div style={{
+        position: "absolute",
+        right: 20,
+        top: 20,
+        width: 140,
+        height: 140,
+        pointerEvents: "none",
+        zIndex: 50
+      }}>
+        <Presence />
+      </div>
+
+      {/* ================= AI PROMPT ================= */}
+
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+
+        <input
+          value={aiPrompt}
+          onChange={e=>setAiPrompt(e.target.value)}
+          placeholder="Describe el workflow..."
+          style={{flex:1,padding:6}}
+        />
+
+        <button onClick={generateWithAI}>
+          Generate AI
+        </button>
+
+      </div>
+
+      {/* ================= ACTION BUTTONS ================= */}
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+        <button onClick={() => addNode("list_dir")}>List Dir</button>
+        <button onClick={() => addNode("move_files")}>Move Files</button>
+        <button onClick={() => addNode("create_folder")}>Create Folder</button>
+        <button onClick={saveWorkflow}>Save</button>
+        <button onClick={runAsync}>Run Async 🚀</button>
+      </div>
+
+      {/* ================= WORKFLOW CANVAS ================= */}
+
+      <div style={{
+        height: 600,
+        background: "#111",
+        borderRadius: 12,
+        overflow: "hidden"
+      }}>
+
+        <ReactFlow
+          nodes={styledNodes}
+          edges={edges}
+          onConnect={(p) => setEdges(e => addEdge(p, e))}
+          nodeTypes={nodeTypes}
+          fitView
+        >
+          <Background />
+          <Controls />
+        </ReactFlow>
+
+        <Copilot onWorkflow={loadGeneratedWorkflow}/>
+
+      </div>
+
+      {/* ================= LOG PANEL ================= */}
+
+      <div style={{
+        marginTop: 10,
+        height: 120,
+        overflow: "auto",
+        background: "#000",
+        color: "#0f0",
+        fontSize: 12,
+        padding: 8,
+        borderRadius: 8
+      }}>
+        {logs.map((l, i) => (
+          <div key={i}>{JSON.stringify(l)}</div>
+        ))}
+      </div>
+
+    </div>
+  )
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\index.css
+================================================================================
+
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #0f0f0f;
+  color: #fff;
+  font-family: system-ui, sans-serif;
+}
+
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+
+input {
+  padding: 8px;
+  margin: 5px;
+  border-radius: 6px;
+  border: 1px solid #333;
+  background: #111;
+  color: #fff;
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\main.jsx
+================================================================================
+
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import './index.css'
+import App from './App.jsx'
+import axios from "axios"
+
+/* =========================
+   AXIOS INTERCEPTOR GLOBAL
+========================= */
+
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem("token")
+
+  if (token) {
+    config.headers.Authorization = "Bearer " + token
+  }
+
+  return config
+})
+
+createRoot(document.getElementById('root')).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\nexusState.js
+================================================================================
+
+export const NexusState = {
+  mode: "idle" // idle | listening | thinking | speaking
+}
+
+export const setMode = (m)=>{
+  NexusState.mode = m
+}
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\nodes\ActionNode.jsx
+================================================================================
+
+import { ACTIONS } from "../config/actions";
+import { Handle, Position } from "reactflow";
+
+export default function ActionNode({ data, id }) {
+
+  const action = data.action || "create_folder";
+
+  const config = ACTIONS[action];
+
+  // 🔥 NODE STATE
+  const state = data.nodeState || "idle";
+
+  // =========================
+  // UPDATE PARAM FIELD
+  // =========================
+  const updateField = (field, value) => {
+
+    data.onChange(id, {
+
+      ...data,
+
+      params: {
+
+        ...data.params,
+
+        [field]: value
+      }
+    });
+  };
+
+  // =========================
+  // CHANGE ACTION
+  // =========================
+  const changeAction = (newAction) => {
+
+    data.onChange(id, {
+
+      ...data,
+
+      action: newAction,
+
+      params: {}
+    });
+  };
+
+  // =========================
+  // VISUAL STATES
+  // =========================
+  const styles = {
+
+    idle: {
+
+      background: "#222",
+
+      border: "1px solid #444",
+
+      boxShadow: "none"
+    },
+
+    pending: {
+
+      background: "#222",
+
+      border: "1px solid #444",
+
+      boxShadow: "none"
+    },
+
+    running: {
+
+      background: "#16333a",
+
+      border: "2px solid #4deeea",
+
+      boxShadow:
+        "0 0 20px rgba(77,238,234,0.8)"
+    },
+
+    success: {
+
+      background: "#18361f",
+
+      border: "2px solid #57ff89",
+
+      boxShadow:
+        "0 0 20px rgba(87,255,137,0.8)"
+    },
+
+    error: {
+
+      background: "#3a1616",
+
+      border: "2px solid #ff5c5c",
+
+      boxShadow:
+        "0 0 20px rgba(255,92,92,0.8)"
+    }
+  };
+
+  const currentStyle =
+    styles[state] || styles.idle;
+
+  console.log("🧩 ACTION NODE:", data);
+
+  return (
+
+    <>
+
+      {/* INPUT HANDLE */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{
+          background: "#4deeea",
+          width: 10,
+          height: 10,
+          border: "2px solid #fff"
+        }}
+      />
+
+      <div
+        style={{
+
+          padding: 10,
+
+          color: "#fff",
+
+          borderRadius: 8,
+
+          minWidth: 220,
+
+          transform:
+
+            state === "running"
+              ? "scale(1.03)"
+              : "scale(1)",
+
+          transition: "all 0.25s ease",
+
+          ...currentStyle
+        }}
+      >
+
+        {/* HEADER */}
+        <div
+          style={{
+
+            marginBottom: 10,
+
+            fontWeight: "bold",
+
+            color:
+
+              state === "running"
+                ? "#4deeea"
+
+              : state === "success"
+                ? "#57ff89"
+
+              : state === "error"
+                ? "#ff5c5c"
+
+              : "#fff"
+          }}
+        >
+          ⚙️ {config.label}
+        </div>
+
+        {/* SELECT ACTION */}
+        <select
+          value={action}
+          onChange={(e) =>
+            changeAction(e.target.value)
+          }
+          style={{
+
+            width: "100%",
+
+            marginBottom: 10,
+
+            padding: 6,
+
+            borderRadius: 6,
+
+            background: "#111",
+
+            color: "#fff",
+
+            border: "1px solid #555"
+          }}
+        >
+          {Object.entries(ACTIONS).map(
+            ([key, a]) => (
+
+              <option
+                key={key}
+                value={key}
+              >
+                {a.label}
+              </option>
+            )
+          )}
+        </select>
+
+        {/* DYNAMIC INPUTS */}
+        <div>
+
+          {config.fields.map((f) => (
+
+            <input
+              key={f.name}
+
+              placeholder={f.label}
+
+              value={
+                data.params?.[f.name] || ""
+              }
+
+              onChange={(e) =>
+                updateField(
+                  f.name,
+                  e.target.value
+                )
+              }
+
+              style={{
+
+                display: "block",
+
+                marginTop: 5,
+
+                width: "100%",
+
+                padding: 6,
+
+                borderRadius: 5,
+
+                border: "1px solid #555",
+
+                background: "#111",
+
+                color: "#fff"
+              }}
+            />
+
+          ))}
+
+        </div>
+
+        {/* RETRY + TIMEOUT */}
+        <div style={{ marginTop: 12 }}>
+
+          <input
+            type="number"
+
+            placeholder="Retries"
+
+            value={data.retry || 0}
+
+            onChange={(e) =>
+
+              data.onChange(id, {
+
+                ...data,
+
+                retry: Number(e.target.value)
+              })
+            }
+
+            style={{
+
+              width: "100%",
+
+              marginBottom: 5,
+
+              padding: 6,
+
+              borderRadius: 5,
+
+              border: "1px solid #555",
+
+              background: "#111",
+
+              color: "#fff"
+            }}
+          />
+
+          <input
+            type="number"
+
+            placeholder="Timeout (sec)"
+
+            value={data.timeout || 30}
+
+            onChange={(e) =>
+
+              data.onChange(id, {
+
+                ...data,
+
+                timeout: Number(e.target.value)
+              })
+            }
+
+            style={{
+
+              width: "100%",
+
+              padding: 6,
+
+              borderRadius: 5,
+
+              border: "1px solid #555",
+
+              background: "#111",
+
+              color: "#fff"
+            }}
+          />
+
+        </div>
+
+      </div>
+
+      {/* OUTPUT HANDLE */}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        style={{
+          background: "#57ff89",
+          width: 10,
+          height: 10,
+          border: "2px solid #fff"
+        }}
+      />
+
+    </>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\nodes\ConditionNode.jsx
+================================================================================
+
+import { Handle, Position } from "reactflow"
+
+export default function ConditionNode({ data }) {
+
+  return (
+    <div style={{
+      background:"#222",
+      color:"#fff",
+      padding:12,
+      borderRadius:10,
+      minWidth:180,
+      border:"2px solid #ffaa00"
+    }}>
+      <strong>IF</strong>
+      <div style={{fontSize:12, marginTop:6}}>
+        {data.if_action} {data.operator} {data.compare}
+      </div>
+
+      {/* entrada */}
+      <Handle type="target" position={Position.Top} />
+
+      {/* salida THEN */}
+      <Handle
+        type="source"
+        position={Position.Left}
+        id="then"
+        style={{ background:"#00cc66" }}
+      />
+
+      {/* salida ELSE */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="else"
+        style={{ background:"#ff4444" }}
+      />
+    </div>
+  )
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\pages\Builder.jsx
+================================================================================
+
+import ReactFlow, {
+  Background,
+  Controls,
+  MiniMap,
+  addEdge,
+  applyNodeChanges,
+  applyEdgeChanges
+} from "reactflow";
+
+import "reactflow/dist/style.css";
+
+import {
+  useState,
+  useCallback,
+  useEffect
+} from "react";
+
+import ActionNode from "../nodes/ActionNode";
+
+import { getAuthHeaders } from "../services/auth";
+
+const nodeTypes = {
+  action: ActionNode
+};
+
+export default function Builder() {
+
+  // =========================================================
+  // STATE
+  // =========================================================
+  const [nodes, setNodes] = useState([]);
+  const [edges, setEdges] = useState([]);
+
+  const [prompt, setPrompt] = useState("");
+  const [missionGoal, setMissionGoal] = useState("");
+
+  const [logs, setLogs] = useState([]);
+
+  const [currentJobId, setCurrentJobId] =
+    useState(null);
+
+  const [generatedSteps, setGeneratedSteps] =
+    useState([]);
+
+  const [savedWorkflows, setSavedWorkflows] =
+    useState([]);
+
+  const [workflowName, setWorkflowName] =
+    useState("");
+
+  const [reactFlowInstance, setReactFlowInstance] =
+    useState(null);
+
+  const [executions, setExecutions] =
+    useState([]);
+
+  const [operatorGoal, setOperatorGoal] =
+  useState("");  
+
+  // =========================================================
+  // LIVE STATE
+  // =========================================================
+  const [nodeStates, setNodeStates] =
+    useState({});
+
+  const [activeAction, setActiveAction] =
+    useState(null);
+
+  const [progress, setProgress] =
+    useState(0);
+
+  const [stepInfo, setStepInfo] =
+    useState({
+      completed: 0,
+      total: 0
+    });
+
+  // =========================================================
+  // LOAD WORKFLOWS
+  // =========================================================
+  useEffect(() => {
+
+    loadWorkflows();
+
+  }, []);
+
+  // =========================================================
+  // WEBSOCKET
+  // =========================================================
+  useEffect(() => {
+
+    const ws = new WebSocket(
+      "ws://127.0.0.1:8010/ws"
+    );
+
+    ws.onopen = () => {
+
+      console.log("🟢 WS conectado");
+    };
+
+    ws.onmessage = (event) => {
+
+      const msg = JSON.parse(event.data);
+
+      console.log("📡 WS EVENT:", msg);
+
+      // =====================================================
+      // JOB LOGS
+      // =====================================================
+      if (
+        msg.type === "job_log" &&
+        msg.job_id === currentJobId
+      ) {
+
+        setLogs(prev => [
+          ...prev,
+          msg.message
+        ]);
+
+        // ===================================================
+        // NODE STATES
+        // ===================================================
+        if (
+          msg.node_id &&
+          msg.status
+        ) {
+
+          setNodeStates(prev => ({
+
+            ...prev,
+
+            [msg.node_id]: msg.status
+          }));
+        }
+
+        // ===================================================
+        // ACTIVE ACTION
+        // ===================================================
+        if (
+          msg.action &&
+          msg.status === "running"
+        ) {
+
+          setActiveAction(msg.action);
+        }
+
+        // ===================================================
+        // PROGRESS
+        // ===================================================
+        if (
+          typeof msg.progress === "number"
+        ) {
+
+          setProgress(msg.progress);
+
+          setStepInfo({
+            completed:
+              msg.completed_steps || 0,
+
+            total:
+              msg.total_steps || 0
+          });
+        }
+      }
+
+      // =====================================================
+      // APPROVAL
+      // =====================================================
+      if (
+        msg.type === "approval_required"
+      ) {
+
+        const ok = window.confirm(
+          msg.message
+        );
+
+        if (ok) {
+
+          fetch(
+            `http://localhost:8010/approvals/${msg.job_id}`,
+            {
+              method: "POST",
+
+              headers: {
+                ...getAuthHeaders()
+              }
+            }
+          );
+        }
+      }
+    };
+
+    ws.onerror = (err) => {
+
+      console.log(
+        "⚠️ WS error",
+        err
+      );
+    };
+
+    ws.onclose = () => {
+
+      console.log("⚪ WS cerrado");
+    };
+
+    return () => {
+
+      ws.close();
+    };
+
+  }, [currentJobId]);
+
+  // =========================================================
+  // UPDATE NODE
+  // =========================================================
+  const updateNodeData = (
+    id,
+    newData
+  ) => {
+
+    setNodes((nds) =>
+      nds.map((n) =>
+        n.id === id
+          ? {
+              ...n,
+
+              data: {
+                ...newData,
+                onChange: updateNodeData
+              }
+            }
+          : n
+      )
+    );
+  };
+
+  // =========================================================
+  // ADD NODE
+  // =========================================================
+  const addNode = () => {
+
+    const id = String(Date.now());
+
+    const newNode = {
+
+      id,
+
+      type: "action",
+
+      position: {
+        x: 250,
+        y: 250
+      },
+
+      data: {
+
+        action: "create_folder",
+
+        params: {},
+
+        onChange: updateNodeData,
+
+        nodeState: "pending"
+      }
+    };
+
+    setNodes(prev => [
+      ...prev,
+      newNode
+    ]);
+
+    setTimeout(() => {
+
+      reactFlowInstance?.fitView();
+
+    }, 100);
+  };
+
+  // =========================================================
+  // FLOW EVENTS
+  // =========================================================
+  const onNodesChange = useCallback(
+
+    (changes) => {
+
+      setNodes((nds) =>
+        applyNodeChanges(
+          changes,
+          nds
+        )
+      );
+    },
+
+    []
+  );
+
+  const onEdgesChange = useCallback(
+
+    (changes) => {
+
+      setEdges((eds) =>
+        applyEdgeChanges(
+          changes,
+          eds
+        )
+      );
+    },
+
+    []
+  );
+
+  const onConnect = (params) => {
+
+    const label = window.prompt(
+      "Tipo conexión: true / false",
+      "true"
+    );
+
+    setEdges((eds) =>
+      addEdge(
+        {
+          ...params,
+
+          label:
+            label || "true"
+        },
+        eds
+      )
+    );
+  };
+
+  // =========================================================
+  // RUN WORKFLOW
+  // =========================================================
+  const runWorkflow = async () => {
+
+    if (
+      !nodes ||
+      nodes.length === 0
+    ) {
+
+      alert(
+        "No hay nodos para ejecutar"
+      );
+
+      return;
+    }
+
+    setLogs([]);
+    setNodeStates({});
+    setProgress(0);
+
+    setStepInfo({
+      completed: 0,
+      total: nodes.length
+    });
+
+    try {
+
+      const res = await fetch(
+        "http://localhost:8010/jobs/run",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            ...getAuthHeaders()
+          },
+
+          body: JSON.stringify({
+            nodes,
+            edges
+          })
+        }
+      );
+
+      const data =
+        await res.json();
+
+      console.log(
+        "🔥 JOB RESPONSE:",
+        data
+      );
+
+      if (!data.job_id) {
+
+        alert(
+          "Error ejecutando workflow"
+        );
+
+        return;
+      }
+
+      setCurrentJobId(
+        data.job_id
+      );
+
+      setTimeout(() => {
+
+        loadExecutions(
+          data.job_id
+        );
+
+      }, 1000);
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // RUN AI
+  // =========================================================
+  const runAI = async () => {
+
+    try {
+
+      const res = await fetch(
+        "http://localhost:8010/ai-builder/generate",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            ...getAuthHeaders()
+          },
+
+          body: JSON.stringify({
+            prompt
+          })
+        }
+      );
+
+      const data =
+        await res.json();
+
+      console.log(
+        "🧠 IA RESPONSE:",
+        data
+      );
+
+      if (
+        !data.steps ||
+        data.steps.length === 0
+      ) {
+
+        alert(
+          "IA no generó pasos"
+        );
+
+        return;
+      }
+
+      setGeneratedSteps(
+        data.steps
+      );
+
+      const newNodes =
+        data.steps.map(
+          (step, i) => ({
+
+            id:
+              `${Date.now()}-${i}`,
+
+            type: "action",
+
+            position: {
+              x: 250,
+              y: i * 160
+            },
+
+            data: {
+
+              action:
+                step.action,
+
+              params:
+                step.value || {},
+
+              nodeState:
+                "pending",
+
+              onChange:
+                updateNodeData
+            }
+          })
+        );
+
+      setNodes(newNodes);
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // SAVE WORKFLOW
+  // =========================================================
+  const saveWorkflow = async () => {
+
+    if (!workflowName) {
+
+      alert(
+        "Nombre requerido"
+      );
+
+      return;
+    }
+
+    try {
+
+      await fetch(
+        "http://localhost:8010/workflows/save",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            ...getAuthHeaders()
+          },
+
+          body: JSON.stringify({
+
+            name:
+              workflowName,
+
+            nodes,
+
+            edges
+          })
+        }
+      );
+
+      alert(
+        "Workflow guardado 🚀"
+      );
+
+      loadWorkflows();
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // LOAD WORKFLOWS
+  // =========================================================
+  const loadWorkflows = async () => {
+
+    try {
+
+      const res = await fetch(
+        "http://localhost:8010/workflows",
+        {
+          headers: {
+            ...getAuthHeaders()
+          }
+        }
+      );
+
+      const data =
+        await res.json();
+
+      setSavedWorkflows(data);
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // LOAD WORKFLOW
+  // =========================================================
+  const loadWorkflow = async (
+    workflowId
+  ) => {
+
+    try {
+
+      const res = await fetch(
+        `http://localhost:8010/workflows/${workflowId}`,
+        {
+          headers: {
+            ...getAuthHeaders()
+          }
+        }
+      );
+
+      const data =
+        await res.json();
+
+      const hydratedNodes =
+        data.nodes.map(n => ({
+
+          ...n,
+
+          data: {
+
+            ...n.data,
+
+            onChange:
+              updateNodeData,
+
+            nodeState:
+              nodeStates[n.id]
+              || "idle"
+          }
+        }));
+
+      setNodes(
+        hydratedNodes
+      );
+
+      setEdges(
+        data.edges || []
+      );
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // LOAD EXECUTIONS
+  // =========================================================
+  const loadExecutions = async (
+    jobId
+  ) => {
+
+    try {
+
+      const res = await fetch(
+        `http://localhost:8010/executions/${jobId}`,
+        {
+          headers: {
+            ...getAuthHeaders()
+          }
+        }
+      );
+
+      const data =
+        await res.json();
+
+      setExecutions(data);
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // RUN MISSION
+  // =========================================================
+  const runMission = async () => {
+
+    try {
+
+      const res = await fetch(
+        "http://localhost:8010/missions/run",
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json",
+
+            ...getAuthHeaders()
+          },
+
+          body: JSON.stringify({
+            goal: missionGoal
+          })
+        }
+      );
+
+      const data =
+        await res.json();
+
+      console.log(
+        "🚀 MISSION:",
+        data
+      );
+
+    } catch (err) {
+
+      console.error(err);
+    }
+  };
+
+  // =========================================================
+  // NODES STATE
+  // =========================================================
+  const nodesWithState =
+    nodes.map((n) => ({
+
+      ...n,
+
+      data: {
+
+        ...n.data,
+
+        nodeState:
+          nodeStates[n.id]
+          || "pending"
+      }
+    }));
+
+  // =========================================================
+  // EDGES STATE
+  // =========================================================
+  const edgesWithState =
+    edges.map((e) => {
+
+      const sourceNode =
+        nodes.find(
+          n => n.id === e.source
+        );
+
+      const isActive =
+        sourceNode?.data?.action
+        === activeAction;
+
+      return {
+
+        ...e,
+
+        animated: isActive,
+
+        style: {
+
+          stroke:
+            isActive
+              ? "#4deeea"
+              : "#555",
+
+          strokeWidth:
+            isActive
+              ? 3
+              : 1.5
+        }
+      };
+    });
+
+  const runOperator = async () => {
+
+  const res = await fetch(
+
+    "http://localhost:8000/operator/run",
+
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json",
+        ...getAuthHeaders()
+      },
+
+      body: JSON.stringify({
+        goal: operatorGoal
+      })
+    }
+  );
+
+  const data = await res.json();
+
+  console.log(
+    "🧠 OPERATOR:",
+    data
+  );
+};  
+
+  // =========================================================
+  // UI
+  // =========================================================
+  return (
+
+  <div
+    style={{
+      width: "100vw",
+      height: "100vh",
+      background: "#0d1117",
+      overflow: "hidden"
+    }}
+  >
+
+    {/* ================================================= */}
+    {/* TOP BAR */}
+    {/* ================================================= */}
+    <div
+      style={{
+        position: "fixed",
+
+        top: 0,
+        left: 0,
+        right: 0,
+
+        height: 72,
+
+        zIndex: 100,
+
+        display: "flex",
+
+        alignItems: "center",
+
+        gap: 10,
+
+        padding: "0 16px",
+
+        background: "rgba(10,10,10,0.96)",
+
+        borderBottom: "1px solid #222",
+
+        backdropFilter: "blur(10px)"
+      }}
+    >
+
+      <button onClick={addNode}>
+        + Nodo
+      </button>
+
+      <button onClick={runWorkflow}>
+        ▶ Ejecutar
+      </button>
+
+      <input
+        placeholder="Nombre workflow"
+        value={workflowName}
+        onChange={(e) =>
+          setWorkflowName(e.target.value)
+        }
+        style={{
+          width: 180
+        }}
+      />
+
+      <button onClick={saveWorkflow}>
+        💾 Guardar
+      </button>
+
+      <input
+        placeholder="Ej: ordenar PDFs"
+        value={prompt}
+        onChange={(e) =>
+          setPrompt(e.target.value)
+        }
+        style={{
+          width: 220
+        }}
+      />
+
+      <button onClick={runAI}>
+        ✨ AI
+      </button>
+
+      <input
+        placeholder="Mission Goal"
+        value={missionGoal}
+        onChange={(e) =>
+          setMissionGoal(e.target.value)
+        }
+        style={{
+          width: 260
+        }}
+      />
+
+      <button onClick={runMission}>
+        🚀 Run Mission
+      </button>
+
+    </div>
+
+    <div
+  style={{
+    position: "absolute",
+    top: 70,
+    left: 10,
+    zIndex: 20
+  }}
+>
+
+  <input
+    placeholder="Operator Goal"
+    value={operatorGoal}
+    onChange={(e) =>
+      setOperatorGoal(
+        e.target.value
+      )
+    }
+  />
+
+  <button
+    onClick={runOperator}
+  >
+    🧠 Run Operator
+  </button>
+
+</div>
+
+    {/* ================================================= */}
+    {/* LEFT SIDEBAR */}
+    {/* ================================================= */}
+    <div
+      style={{
+        position: "fixed",
+
+        top: 82,
+        left: 10,
+
+        bottom: 10,
+
+        width: 280,
+
+        zIndex: 50,
+
+        background: "#111",
+
+        border: "1px solid #222",
+
+        borderRadius: 12,
+
+        overflow: "hidden",
+
+        display: "flex",
+
+        flexDirection: "column"
+      }}
+    >
+
+      <div
+        style={{
+          padding: 14,
+
+          borderBottom: "1px solid #222",
+
+          fontWeight: "bold",
+
+          color: "#fff"
+        }}
+      >
+        📂 Workflows
+      </div>
+
+      <div
+        style={{
+          flex: 1,
+
+          overflowY: "auto",
+
+          padding: 12
+        }}
+      >
+
+        {savedWorkflows.length === 0 && (
+
+          <div
+            style={{
+              color: "#888"
+            }}
+          >
+            No hay workflows
+          </div>
+        )}
+
+        {savedWorkflows.map((wf) => (
+
+          <div
+            key={wf.id}
+            style={{
+              background: "#1a1a1a",
+
+              borderRadius: 10,
+
+              padding: 10,
+
+              marginBottom: 10
+            }}
+          >
+
+            <div
+              style={{
+                color: "#fff",
+
+                marginBottom: 8
+              }}
+            >
+              {wf.name}
+            </div>
+
+            <button
+              onClick={() =>
+                loadWorkflow(wf.id)
+              }
+            >
+              ▶ Load
+            </button>
+
+          </div>
+        ))}
+
+      </div>
+
+    </div>
+
+    {/* ================================================= */}
+    {/* RIGHT SIDEBAR */}
+    {/* ================================================= */}
+    <div
+      style={{
+        position: "fixed",
+
+        top: 82,
+        right: 10,
+
+        bottom: 10,
+
+        width: 340,
+
+        zIndex: 50,
+
+        display: "flex",
+
+        flexDirection: "column",
+
+        gap: 12
+      }}
+    >
+
+      {/* ============================================= */}
+      {/* EXECUTION PANEL */}
+      {/* ============================================= */}
+      <div
+        style={{
+          background: "#111",
+
+          border: "1px solid #222",
+
+          borderRadius: 12,
+
+          overflow: "hidden",
+
+          minHeight: 250,
+
+          maxHeight: 320,
+
+          display: "flex",
+
+          flexDirection: "column"
+        }}
+      >
+
+        <div
+          style={{
+            padding: 14,
+
+            borderBottom: "1px solid #222",
+
+            fontWeight: "bold",
+
+            color: "#fff"
+          }}
+        >
+          📜 Execution Timeline
+        </div>
+
+        <div
+          style={{
+            flex: 1,
+
+            overflowY: "auto",
+
+            padding: 12
+          }}
+        >
+
+          {executions.map((e, i) => (
+
+            <div
+              key={i}
+              style={{
+                padding: 10,
+
+                marginBottom: 10,
+
+                borderRadius: 8,
+
+                background:
+                  e.status === "success"
+                    ? "#13361b"
+                    : e.status === "error"
+                    ? "#3a1616"
+                    : "#222"
+              }}
+            >
+
+              <div
+                style={{
+                  color: "#fff"
+                }}
+              >
+                ⚙️ {e.action}
+              </div>
+
+              <div
+                style={{
+                  color: "#aaa",
+
+                  marginTop: 4
+                }}
+              >
+                Status: {e.status}
+              </div>
+
+              <div
+                style={{
+                  fontSize: 12,
+
+                  opacity: 0.7,
+
+                  marginTop: 6,
+
+                  color: "#777"
+                }}
+              >
+                {e.created_at}
+              </div>
+
+            </div>
+          ))}
+
+        </div>
+
+      </div>
+
+      {/* ============================================= */}
+      {/* PROGRESS */}
+      {/* ============================================= */}
+      <div
+        style={{
+          background: "#0b0f14",
+
+          border: "1px solid #188686",
+
+          borderRadius: 12,
+
+          padding: 14
+        }}
+      >
+
+        <div
+          style={{
+            color: "#4deeea",
+
+            marginBottom: 10
+          }}
+        >
+          🚀 Progreso:
+          {" "}
+          {stepInfo.completed}
+          /
+          {stepInfo.total}
+        </div>
+
+        <div
+          style={{
+            width: "100%",
+
+            height: 10,
+
+            background: "#222",
+
+            borderRadius: 999
+          }}
+        >
+
+          <div
+            style={{
+              width: `${progress}%`,
+
+              height: "100%",
+
+              background: "#4deeea",
+
+              borderRadius: 999,
+
+              transition: "width 0.3s ease"
+            }}
+          />
+
+        </div>
+
+      </div>
+
+      {/* ============================================= */}
+      {/* LOGS */}
+      {/* ============================================= */}
+      <div
+        style={{
+          flex: 1,
+
+          background: "#0b0f14",
+
+          border: "1px solid #188686",
+
+          borderRadius: 12,
+
+          overflow: "hidden",
+
+          display: "flex",
+
+          flexDirection: "column"
+        }}
+      >
+
+        <div
+          style={{
+            padding: 14,
+
+            borderBottom: "1px solid #133",
+
+            color: "#4deeea",
+
+            fontWeight: "bold"
+          }}
+        >
+          🧠 Runtime Logs
+        </div>
+
+        <div
+          style={{
+            flex: 1,
+
+            overflowY: "auto",
+
+            padding: 14,
+
+            color: "#4deeea"
+          }}
+        >
+
+          {logs.length === 0 && (
+
+            <div>
+              Esperando ejecución...
+            </div>
+          )}
+
+          {logs.map((log, i) => (
+
+            <div
+              key={i}
+              style={{
+                marginBottom: 8
+              }}
+            >
+              • {log}
+            </div>
+
+          ))}
+
+        </div>
+
+      </div>
+
+    </div>
+
+    {/* ================================================= */}
+    {/* FLOW */}
+    {/* ================================================= */}
+    <div
+      style={{
+        position: "absolute",
+
+        top: 72,
+        left: 0,
+        right: 0,
+        bottom: 0
+      }}
+    >
+
+      <ReactFlow
+        nodeTypes={nodeTypes}
+        nodes={nodesWithState}
+        edges={edgesWithState}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
+        onConnect={onConnect}
+        onInit={setReactFlowInstance}
+        deleteKeyCode={["Backspace", "Delete"]}
+        fitView
+      >
+        <MiniMap />
+        <Controls />
+        <Background />
+      </ReactFlow>
+
+    </div>
+
+  </div>
+);
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\pages\Dashboard.jsx
+================================================================================
+
+import { useEffect, useState } from "react";
+import { authFetch } from "../services/auth";
+import Navbar from "../components/Navbar";
+
+import JobsPanel from "../features/jobs/JobsPanel";
+import MissionControl from "../features/system/MissionControl";
+import RealtimePanel from "../features/jobs/RealtimePanel";
+
+export default function Dashboard() {
+
+  const [metrics, setMetrics] = useState(null);
+
+  useEffect(() => {
+    authFetch("http://localhost:8010/metrics")
+      .then(res => res.json())
+      .then(setMetrics);
+  }, []);
+
+  if (!metrics) return <div style={{ padding: 20 }}>Cargando sistema...</div>;
+
+  return (
+    <div>
+
+      {/* 🔥 NAVBAR */}
+      <Navbar />
+
+      <div style={{ padding: 20 }}>
+
+        {/* 🔥 NEXUS CONTROL (RECUPERADO) */}
+        <h1 style={{ marginBottom: 20 }}>🧠 Nexus Control</h1>
+
+        <div style={{ display: "flex", gap: 20 }}>
+          <Card title="Jobs activos" value={metrics.active_jobs} />
+          <Card title="Errores" value={metrics.counters?.errors || 0} />
+          <Card
+            title="Circuit"
+            value={metrics.circuit_state?.state || "unknown"}
+          />
+        </div>
+
+        {/* 🔥 SYSTEM CONTROL */}
+        <div style={{ marginTop: 30 }}>
+          <MissionControl />
+        </div>
+
+        {/* 🔥 JOBS */}
+        <div style={{ marginTop: 30 }}>
+          <JobsPanel />
+        </div>
+
+        <RealtimePanel />
+
+        {/* 🔥 DEBUG / LOG */}
+        <h2 style={{ marginTop: 30 }}>Actividad</h2>
+
+        <pre style={{
+          background: "#111",
+          color: "#0f0",
+          padding: 10,
+          borderRadius: 8
+        }}>
+          {JSON.stringify(metrics, null, 2)}
+        </pre>
+
+      </div>
+    </div>
+  );
+}
+
+function Card({ title, value }) {
+
+  const display =
+    typeof value === "object"
+      ? JSON.stringify(value)
+      : value;
+
+  return (
+    <div style={{
+      background: "#1a1a1a",
+      padding: 20,
+      borderRadius: 10,
+      minWidth: 150
+    }}>
+      <div style={{ fontSize: 12, color: "#aaa" }}>{title}</div>
+      <div style={{ fontSize: 22 }}>{display}</div>
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: dashboard\src\pages\Login.jsx
+================================================================================
+
+import { useState } from "react";
+
+const API = "http://127.0.0.1:8010";
+
+export default function Login() {
+
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const login = async () => {
+
+    if (!username || !password) {
+      setError("Completá usuario y contraseña");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+
+      const res = await fetch(`${API}/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Error en login");
+      }
+
+      const data = await res.json();
+
+      // guardar sesión
+      localStorage.setItem("token", data.access_token);
+      localStorage.setItem("user", JSON.stringify(data.user));
+
+      // redirigir
+      window.location.href = "/";
+
+    } catch (err) {
+      console.error(err);
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      display: "flex",
+      flexDirection: "column",
+      gap: 10,
+      maxWidth: 300,
+      margin: "100px auto"
+    }}>
+
+      <h2>Login Nexus</h2>
+
+      <input
+        placeholder="Usuario"
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+      />
+
+      <input
+        placeholder="Contraseña"
+        type="password"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
+
+      <button onClick={login} disabled={loading}>
+        {loading ? "Ingresando..." : "Login"}
+      </button>
+
+      {error && (
+        <div style={{ color: "red", fontSize: 14 }}>
+          {error}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+

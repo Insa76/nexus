@@ -1,0 +1,2172 @@
+﻿
+================================================================================
+ARCHIVO: tests\test_semantic_knowledge_extractor.py
+================================================================================
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from memory.episode_memory import Episode
+from memory.semantic_knowledge_extractor import (
+    SemanticKnowledgeExtractor,
+)
+from memory.semantic_memory import SemanticMemory
+
+
+def make_episode(
+    *,
+    action: str,
+    parameters: dict | None = None,
+    output: dict | None = None,
+    success: bool = True,
+) -> Episode:
+    return Episode(
+        action=action,
+        parameters=parameters or {},
+        original_text="test",
+        success=success,
+        output=output or {},
+        timestamp=datetime.now(timezone.utc),
+    )
+
+
+def test_extract_open_app() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        parameters={
+            "application": "Chrome",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "chrome"
+    assert facts[0].predicate == "es una aplicación"
+    assert facts[0].value is True
+
+    assert (
+        memory.get_value(
+            "chrome",
+            "es una aplicación",
+        )
+        is True
+    )
+
+
+def test_extract_close_app() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.close_app",
+        parameters={
+            "application": "Spotify",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "spotify"
+    assert facts[0].predicate == "es una aplicación"
+
+
+def test_extract_volume() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.set_volume",
+        parameters={
+            "level": 60,
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "system"
+    assert facts[0].predicate == "último volumen conocido"
+    assert facts[0].value == 60
+
+
+def test_extract_volume_from_output() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.set_volume",
+        output={
+            "level": 45,
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert len(facts) == 1
+    assert facts[0].value == 45
+
+
+def test_failed_episode_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        parameters={
+            "application": "Chrome",
+        },
+        success=False,
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_unknown_action_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.unknown_action",
+        parameters={
+            "application": "Chrome",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_missing_application_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        parameters={},
+        output={},
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_metadata_is_preserved() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        parameters={
+            "application": "Chrome",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts[0].source == "episode"
+    assert (
+        facts[0].metadata["episode_action"]
+        == "system.open_app"
+    )
+
+def test_invalid_volume_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.set_volume",
+        parameters={
+            "level": "loud",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_empty_application_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        parameters={
+            "application": "   ",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_invalid_volume_from_output_is_ignored() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.set_volume",
+        output={
+            "level": "unknown",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert facts == []
+    assert memory.count() == 0
+
+
+def test_application_can_be_extracted_from_output() -> None:
+    memory = SemanticMemory()
+    extractor = SemanticKnowledgeExtractor(memory)
+
+    episode = make_episode(
+        action="system.open_app",
+        output={
+            "application": "Firefox",
+        },
+    )
+
+    facts = extractor.extract(episode)
+
+    assert len(facts) == 1
+    assert facts[0].subject == "firefox"
+    assert facts[0].predicate == "es una aplicación"
+    assert facts[0].value is True
+
+
+if __name__ == "__main__":
+    tests = [
+        test_extract_open_app,
+        test_extract_close_app,
+        test_extract_volume,
+        test_extract_volume_from_output,
+        test_failed_episode_is_ignored,
+        test_unknown_action_is_ignored,
+        test_missing_application_is_ignored,
+        test_metadata_is_preserved,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("SEMANTIC KNOWLEDGE EXTRACTOR")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_semantic_memory.py
+================================================================================
+
+from __future__ import annotations
+
+from memory.semantic_memory import SemanticMemory
+
+
+def test_learn_and_get() -> None:
+    memory = SemanticMemory()
+
+    fact = memory.learn(
+        "Chrome",
+        "es una aplicación",
+        True,
+    )
+
+    assert fact.subject == "chrome"
+    assert fact.predicate == "es una aplicación"
+    assert fact.value is True
+
+    stored = memory.get(
+        "chrome",
+        "es una aplicación",
+    )
+
+    assert stored is fact
+
+
+def test_get_value() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    assert (
+        memory.get_value(
+            "Chrome",
+            "Tipo",
+        )
+        == "browser"
+    )
+
+
+def test_find_by_subject() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "chrome",
+        "plataforma",
+        "windows",
+    )
+
+    facts = memory.find_by_subject(
+        "chrome"
+    )
+
+    assert len(facts) == 2
+
+
+def test_update_existing_fact() -> None:
+    memory = SemanticMemory()
+
+    first = memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    second = memory.learn(
+        "chrome",
+        "tipo",
+        "application",
+    )
+
+    assert first is second
+    assert memory.count() == 1
+    assert (
+        memory.get_value(
+            "chrome",
+            "tipo",
+        )
+        == "application"
+    )
+
+
+def test_find_by_predicate() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    facts = memory.find_by_predicate(
+        "tipo"
+    )
+
+    assert len(facts) == 2
+
+
+def test_forget() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    assert memory.forget(
+        "chrome",
+        "tipo",
+    )
+
+    assert memory.get(
+        "chrome",
+        "tipo",
+    ) is None
+
+    assert not memory.forget(
+        "chrome",
+        "tipo",
+    )
+
+
+def test_confidence_is_normalized() -> None:
+    memory = SemanticMemory()
+
+    low = memory.learn(
+        "chrome",
+        "confidence_test",
+        True,
+        confidence=-10,
+    )
+
+    high = memory.learn(
+        "spotify",
+        "confidence_test",
+        True,
+        confidence=10,
+    )
+
+    assert low.confidence == 0.0
+    assert high.confidence == 1.0
+
+
+def test_metadata_and_source() -> None:
+    memory = SemanticMemory()
+
+    fact = memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+        confidence=0.85,
+        source="episode",
+        metadata={
+            "episode_action": "system.open_app",
+        },
+    )
+
+    assert fact.confidence == 0.85
+    assert fact.source == "episode"
+    assert (
+        fact.metadata["episode_action"]
+        == "system.open_app"
+    )
+
+
+def test_clear() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    assert memory.count() == 2
+
+    memory.clear()
+
+    assert memory.count() == 0
+    assert memory.all() == []
+
+
+if __name__ == "__main__":
+    tests = [
+        test_learn_and_get,
+        test_get_value,
+        test_find_by_subject,
+        test_update_existing_fact,
+        test_find_by_predicate,
+        test_forget,
+        test_confidence_is_normalized,
+        test_metadata_and_source,
+        test_clear,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("SEMANTIC MEMORY")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_semantic_retriever.py
+================================================================================
+
+from __future__ import annotations
+
+from memory.semantic_memory import SemanticMemory
+from memory.semantic_retriever import SemanticRetriever
+
+
+def test_search_by_subject() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "es una aplicación",
+        True,
+    )
+
+    memory.learn(
+        "chrome",
+        "plataforma",
+        "windows",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search("chrome")
+
+    assert len(results) == 2
+    assert all(
+        result.fact.subject == "chrome"
+        for result in results
+    )
+
+
+def test_search_by_predicate() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search("tipo")
+
+    assert len(results) == 2
+
+
+def test_search_by_value() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search("browser")
+
+    assert len(results) == 1
+    assert results[0].fact.subject == "chrome"
+
+
+def test_exact_subject_has_high_score() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "chrome extension",
+        "tipo",
+        "browser",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search("chrome")
+
+    assert results
+    assert results[0].fact.subject == "chrome"
+
+
+def test_search_by_subject_method() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    memory.learn(
+        "spotify",
+        "plataforma",
+        "windows",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search_by_subject(
+        "Spotify"
+    )
+
+    assert len(results) == 2
+
+
+def test_search_by_predicate_method() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    memory.learn(
+        "spotify",
+        "tipo",
+        "music",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search_by_predicate(
+        "Tipo"
+    )
+
+    assert len(results) == 2
+
+
+def test_limit() -> None:
+    memory = SemanticMemory()
+
+    memory.learn("chrome", "a", True)
+    memory.learn("chrome", "b", True)
+    memory.learn("chrome", "c", True)
+
+    retriever = SemanticRetriever(memory)
+
+    results = retriever.search(
+        "chrome",
+        limit=2,
+    )
+
+    assert len(results) == 2
+
+
+def test_empty_query() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    assert retriever.search("   ") == []
+
+
+def test_no_match() -> None:
+    memory = SemanticMemory()
+
+    memory.learn(
+        "chrome",
+        "tipo",
+        "browser",
+    )
+
+    retriever = SemanticRetriever(memory)
+
+    assert retriever.search("notepad") == []
+
+
+if __name__ == "__main__":
+    tests = [
+        test_search_by_subject,
+        test_search_by_predicate,
+        test_search_by_value,
+        test_exact_subject_has_high_score,
+        test_search_by_subject_method,
+        test_search_by_predicate_method,
+        test_limit,
+        test_empty_query,
+        test_no_match,
+    ]
+
+    passed = 0
+
+    for test in tests:
+        test()
+        passed += 1
+
+    print("=" * 72)
+    print("SEMANTIC RETRIEVER")
+    print("=" * 72)
+    print(f"PASSED : {passed}")
+    print(f"FAILED : {len(tests) - passed}")
+    print("=" * 72)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_task_lifecycle.py
+================================================================================
+
+import pytest
+
+from tasks import (
+    InvalidTaskTransition,
+    Task,
+    TaskStatus,
+    can_transition,
+    transition_task,
+)
+
+
+def test_pending_can_start() -> None:
+    assert can_transition(
+        TaskStatus.PENDING,
+        TaskStatus.IN_PROGRESS,
+    )
+
+
+def test_pending_can_be_cancelled() -> None:
+    assert can_transition(
+        TaskStatus.PENDING,
+        TaskStatus.CANCELLED,
+    )
+
+
+def test_in_progress_can_complete() -> None:
+    assert can_transition(
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.COMPLETED,
+    )
+
+
+def test_in_progress_can_be_cancelled() -> None:
+    assert can_transition(
+        TaskStatus.IN_PROGRESS,
+        TaskStatus.CANCELLED,
+    )
+
+
+def test_completed_has_no_outgoing_transitions() -> None:
+    assert not can_transition(
+        TaskStatus.COMPLETED,
+        TaskStatus.IN_PROGRESS,
+    )
+
+    assert not can_transition(
+        TaskStatus.COMPLETED,
+        TaskStatus.CANCELLED,
+    )
+
+
+def test_cancelled_has_no_outgoing_transitions() -> None:
+    assert not can_transition(
+        TaskStatus.CANCELLED,
+        TaskStatus.PENDING,
+    )
+
+    assert not can_transition(
+        TaskStatus.CANCELLED,
+        TaskStatus.IN_PROGRESS,
+    )
+
+
+def test_transition_task_returns_new_task() -> None:
+    task = Task.create(title="Preparar reunión")
+
+    started = transition_task(
+        task,
+        TaskStatus.IN_PROGRESS,
+    )
+
+    assert started.id == task.id
+    assert started.title == task.title
+    assert started.status == TaskStatus.IN_PROGRESS
+    assert task.status == TaskStatus.PENDING
+
+
+def test_transition_task_can_complete() -> None:
+    task = Task.create(title="Preparar reunión")
+
+    started = transition_task(
+        task,
+        TaskStatus.IN_PROGRESS,
+    )
+
+    completed = transition_task(
+        started,
+        TaskStatus.COMPLETED,
+    )
+
+    assert completed.status == TaskStatus.COMPLETED
+
+
+def test_invalid_transition_raises() -> None:
+    task = Task.create(title="Tarea")
+
+    with pytest.raises(InvalidTaskTransition):
+        transition_task(
+            task,
+            TaskStatus.COMPLETED,
+        )
+
+
+def test_completed_task_cannot_be_reopened() -> None:
+    task = Task.create(title="Tarea")
+
+    started = transition_task(
+        task,
+        TaskStatus.IN_PROGRESS,
+    )
+
+    completed = transition_task(
+        started,
+        TaskStatus.COMPLETED,
+    )
+
+    with pytest.raises(InvalidTaskTransition):
+        transition_task(
+            completed,
+            TaskStatus.IN_PROGRESS,
+        )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_task_model.py
+================================================================================
+
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import Task, TaskStatus
+
+
+def test_task_creation() -> None:
+    task = Task.create(
+        title="Preparar reunión",
+        description="Preparar agenda",
+        priority="high",
+    )
+
+    assert task.id
+    assert task.title == "Preparar reunión"
+    assert task.description == "Preparar agenda"
+    assert task.priority == "high"
+    assert task.status == TaskStatus.PENDING
+
+
+def test_task_with_due_date() -> None:
+    due_at = datetime(2026, 10, 1, 15, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Entregar informe",
+        due_at=due_at,
+    )
+
+    assert task.due_at == due_at
+
+
+def test_task_ids_are_unique() -> None:
+    first = Task.create(title="Primera")
+    second = Task.create(title="Segunda")
+
+    assert first.id != second.id
+
+
+def test_task_is_immutable() -> None:
+    task = Task.create(title="Inmutable")
+
+    with pytest.raises(FrozenInstanceError):
+        task.title = "Modificada"  # type: ignore[misc]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_task_resolver.py
+================================================================================
+
+from context import (
+    AssistantContext,
+    OrganizationProfile,
+    ProjectContext,
+    UserProfile,
+)
+
+from tasks import Task, TaskResolver, TaskStore
+
+
+def test_resolver_returns_user_tasks() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    context = AssistantContext(
+        user=user,
+    )
+
+    matching = Task.create(
+        title="Tarea del usuario",
+        user_id=user.id,
+    )
+
+    unrelated = Task.create(
+        title="Tarea de otro usuario",
+        user_id="other-user",
+    )
+
+    store = TaskStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = TaskResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_returns_organization_tasks() -> None:
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    context = AssistantContext(
+        organization=organization,
+    )
+
+    matching = Task.create(
+        title="Tarea de la organización",
+        organization_id=organization.id,
+    )
+
+    unrelated = Task.create(
+        title="Tarea de otra organización",
+        organization_id="other-organization",
+    )
+
+    store = TaskStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = TaskResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_returns_project_tasks() -> None:
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    project = ProjectContext.create(
+        name="ORBIT",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        organization=organization,
+        projects=(project,),
+    )
+
+    matching = Task.create(
+        title="Tarea de ORBIT",
+        project_id=project.id,
+    )
+
+    unrelated = Task.create(
+        title="Tarea de otro proyecto",
+        project_id="other-project",
+    )
+
+    store = TaskStore()
+    store.add(matching)
+    store.add(unrelated)
+
+    resolver = TaskResolver(store)
+
+    assert resolver.resolve(context) == [matching]
+
+
+def test_resolver_combines_user_organization_and_project_tasks() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    organization = OrganizationProfile.create(
+        name="Paraná Agency",
+    )
+
+    project = ProjectContext.create(
+        name="ORBIT",
+        organization_id=organization.id,
+    )
+
+    context = AssistantContext(
+        user=user,
+        organization=organization,
+        projects=(project,),
+    )
+
+    user_task = Task.create(
+        title="Tarea personal",
+        user_id=user.id,
+    )
+
+    organization_task = Task.create(
+        title="Tarea de agencia",
+        organization_id=organization.id,
+    )
+
+    project_task = Task.create(
+        title="Tarea de ORBIT",
+        project_id=project.id,
+    )
+
+    unrelated = Task.create(
+        title="Tarea externa",
+        user_id="other-user",
+        organization_id="other-organization",
+        project_id="other-project",
+    )
+
+    store = TaskStore()
+
+    for task in (
+        user_task,
+        organization_task,
+        project_task,
+        unrelated,
+    ):
+        store.add(task)
+
+    resolver = TaskResolver(store)
+
+    assert resolver.resolve(context) == [
+        user_task,
+        organization_task,
+        project_task,
+    ]
+
+
+def test_resolver_returns_empty_for_empty_context() -> None:
+    context = AssistantContext()
+
+    store = TaskStore()
+    store.add(Task.create(title="Tarea sin contexto"))
+
+    resolver = TaskResolver(store)
+
+    assert resolver.resolve(context) == []
+
+
+def test_resolver_does_not_mutate_store() -> None:
+    user = UserProfile.create(
+        name="Diego",
+    )
+
+    context = AssistantContext(
+        user=user,
+    )
+
+    task = Task.create(
+        title="Tarea",
+        user_id=user.id,
+    )
+
+    store = TaskStore()
+    store.add(task)
+
+    resolver = TaskResolver(store)
+
+    resolved = resolver.resolve(context)
+
+    assert resolved == [task]
+    assert store.list() == [task]
+    assert store.count() == 1
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_task_store.py
+================================================================================
+
+from dataclasses import replace
+
+import pytest
+
+from tasks import Task, TaskStore
+
+
+def test_store_add_and_get_task() -> None:
+    store = TaskStore()
+    task = Task.create(title="Preparar reunión")
+
+    store.add(task)
+
+    assert store.get(task.id) == task
+
+
+def test_store_list_tasks() -> None:
+    store = TaskStore()
+
+    first = Task.create(title="Primera tarea")
+    second = Task.create(title="Segunda tarea")
+
+    store.add(first)
+    store.add(second)
+
+    tasks = store.list()
+
+    assert tasks == [first, second]
+    assert store.count() == 2
+
+
+def test_store_update_task() -> None:
+    store = TaskStore()
+
+    task = Task.create(title="Preparar reunión")
+    store.add(task)
+
+    updated = replace(task, status="completed")
+    store.update(updated)
+
+    assert store.get(task.id) == updated
+    assert store.get(task.id).status == "completed"
+
+
+def test_store_update_missing_task_raises() -> None:
+    store = TaskStore()
+
+    task = Task.create(title="Tarea inexistente")
+
+    with pytest.raises(KeyError):
+        store.update(task)
+
+
+def test_store_remove_task() -> None:
+    store = TaskStore()
+
+    task = Task.create(title="Eliminar tarea")
+    store.add(task)
+
+    removed = store.remove(task.id)
+
+    assert removed == task
+    assert store.get(task.id) is None
+    assert store.count() == 0
+
+
+def test_store_remove_missing_task_is_safe() -> None:
+    store = TaskStore()
+
+    assert store.remove("missing-task") is None
+
+
+def test_store_clear() -> None:
+    store = TaskStore()
+
+    store.add(Task.create(title="Primera"))
+    store.add(Task.create(title="Segunda"))
+
+    store.clear()
+
+    assert store.list() == []
+    assert store.count() == 0
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_task_temporal.py
+================================================================================
+
+from datetime import datetime, timedelta, timezone
+
+from tasks import (
+    Task,
+    TaskStatus,
+    due_tasks,
+    overdue_tasks,
+    transition_task,
+    upcoming_tasks,
+)
+
+
+def test_overdue_tasks_returns_past_pending_tasks() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Tarea vencida",
+        due_at=now - timedelta(hours=1),
+    )
+
+    assert overdue_tasks([task], now) == [task]
+
+
+def test_overdue_tasks_excludes_future_tasks() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Tarea futura",
+        due_at=now + timedelta(hours=1),
+    )
+
+    assert overdue_tasks([task], now) == []
+
+
+def test_due_tasks_includes_task_at_current_time() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Tarea ahora",
+        due_at=now,
+    )
+
+    assert due_tasks([task], now) == [task]
+
+
+def test_due_tasks_includes_overdue_tasks() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Tarea vencida",
+        due_at=now - timedelta(minutes=30),
+    )
+
+    assert due_tasks([task], now) == [task]
+
+
+def test_upcoming_tasks_returns_future_tasks() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Tarea próxima",
+        due_at=now + timedelta(hours=2),
+    )
+
+    assert upcoming_tasks([task], now) == [task]
+
+
+def test_tasks_without_due_date_are_excluded() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(title="Sin fecha")
+
+    assert overdue_tasks([task], now) == []
+    assert due_tasks([task], now) == []
+    assert upcoming_tasks([task], now) == []
+
+
+def test_completed_tasks_are_excluded() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Completada",
+        due_at=now - timedelta(hours=1),
+    )
+
+    completed = transition_task(task, TaskStatus.IN_PROGRESS)
+    completed = transition_task(completed, TaskStatus.COMPLETED)
+
+    assert overdue_tasks([completed], now) == []
+    assert due_tasks([completed], now) == []
+
+
+def test_cancelled_tasks_are_excluded() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    task = Task.create(
+        title="Cancelada",
+        due_at=now - timedelta(hours=1),
+    )
+
+    cancelled = transition_task(task, TaskStatus.CANCELLED)
+
+    assert overdue_tasks([cancelled], now) == []
+    assert due_tasks([cancelled], now) == []
+
+
+def test_temporal_queries_preserve_task_order() -> None:
+    now = datetime(2026, 9, 20, 20, 0, tzinfo=timezone.utc)
+
+    first = Task.create(
+        title="Primera",
+        due_at=now + timedelta(hours=1),
+    )
+
+    second = Task.create(
+        title="Segunda",
+        due_at=now + timedelta(hours=2),
+    )
+
+    third = Task.create(
+        title="Tercera",
+        due_at=now + timedelta(hours=3),
+    )
+
+    tasks = [first, second, third]
+
+    assert upcoming_tasks(tasks, now) == tasks
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_temporal_factory.py
+================================================================================
+
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import (
+    InvalidReminderSchedule,
+    Reminder,
+    ReminderStatus,
+    reminder_to_schedule,
+    transition_reminder,
+)
+
+
+TRIGGER_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_pending_reminder_becomes_temporal_schedule() -> None:
+    reminder = Reminder.create(
+        message="Revisar propuesta",
+        trigger_at=TRIGGER_AT,
+    )
+
+    schedule = reminder_to_schedule(reminder)
+
+    assert schedule.execute_at == reminder.trigger_at
+    assert schedule.target_id == reminder.id
+    assert schedule.target_type == "reminder"
+
+
+def test_reminder_message_is_preserved_as_metadata() -> None:
+    reminder = Reminder.create(
+        message="Llamar a Juan",
+        trigger_at=TRIGGER_AT,
+    )
+
+    schedule = reminder_to_schedule(reminder)
+
+    assert schedule.metadata["reminder_message"] == (
+        "Llamar a Juan"
+    )
+
+
+def test_triggered_reminder_cannot_be_scheduled() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    triggered = transition_reminder(
+        reminder,
+        ReminderStatus.TRIGGERED,
+    )
+
+    with pytest.raises(InvalidReminderSchedule):
+        reminder_to_schedule(triggered)
+
+
+def test_cancelled_reminder_cannot_be_scheduled() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    cancelled = transition_reminder(
+        reminder,
+        ReminderStatus.CANCELLED,
+    )
+
+    with pytest.raises(InvalidReminderSchedule):
+        reminder_to_schedule(cancelled)
+
+
+def test_schedule_creation_does_not_mutate_reminder() -> None:
+    reminder = Reminder.create(
+        message="Recordatorio",
+        trigger_at=TRIGGER_AT,
+    )
+
+    schedule = reminder_to_schedule(reminder)
+
+    assert reminder.status == ReminderStatus.PENDING
+    assert schedule.target_id == reminder.id
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_temporal_schedule.py
+================================================================================
+
+from dataclasses import FrozenInstanceError
+from datetime import datetime, timezone
+
+import pytest
+
+from tasks import TemporalSchedule
+
+
+EXECUTE_AT = datetime(
+    2026,
+    9,
+    21,
+    9,
+    0,
+    tzinfo=timezone.utc,
+)
+
+
+def test_temporal_schedule_creation() -> None:
+    schedule = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-123",
+        target_type="reminder",
+    )
+
+    assert schedule.id
+    assert schedule.execute_at == EXECUTE_AT
+    assert schedule.target_id == "reminder-123"
+    assert schedule.target_type == "reminder"
+
+
+def test_temporal_schedule_can_have_metadata() -> None:
+    schedule = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-123",
+        target_type="reminder",
+        metadata={
+            "source": "assistant",
+            "priority": "normal",
+        },
+    )
+
+    assert schedule.metadata == {
+        "source": "assistant",
+        "priority": "normal",
+    }
+
+
+def test_temporal_schedule_ids_are_unique() -> None:
+    first = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-1",
+        target_type="reminder",
+    )
+
+    second = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-2",
+        target_type="reminder",
+    )
+
+    assert first.id != second.id
+
+
+def test_temporal_schedule_is_immutable() -> None:
+    schedule = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-123",
+        target_type="reminder",
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        schedule.target_id = "other-target"  # type: ignore[misc]
+
+
+def test_temporal_schedule_copies_metadata() -> None:
+    metadata = {
+        "source": "assistant",
+    }
+
+    schedule = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="reminder-123",
+        target_type="reminder",
+        metadata=metadata,
+    )
+
+    metadata["source"] = "modified"
+
+    assert schedule.metadata["source"] == "assistant"
+
+
+def test_temporal_schedule_can_target_other_domains() -> None:
+    schedule = TemporalSchedule.create(
+        execute_at=EXECUTE_AT,
+        target_id="task-123",
+        target_type="task",
+    )
+
+    assert schedule.target_id == "task-123"
+    assert schedule.target_type == "task"
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_temporal_scheduler.py
+================================================================================
+
+import asyncio
+from datetime import datetime, timedelta, timezone
+
+from bootstrap.temporal_scheduler import TemporalSchedulerAdapter
+from runtime.scheduler import Scheduler
+from tasks import TemporalSchedule
+
+
+def test_adapter_registers_temporal_schedule() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+
+    schedule = TemporalSchedule.create(
+        execute_at=datetime.now(timezone.utc),
+        target_id="reminder-123",
+        target_type="reminder",
+    )
+
+    async def callback() -> None:
+        pass
+
+    adapter.schedule(
+        temporal_schedule=schedule,
+        callback=callback,
+    )
+
+    assert adapter.scheduled() == [
+        "reminder:reminder-123"
+    ]
+
+
+def test_adapter_executes_temporal_schedule() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+
+    executed: list[str] = []
+
+    schedule = TemporalSchedule.create(
+        execute_at=(
+            datetime.now(timezone.utc)
+            - timedelta(seconds=0.01)
+        ),
+        target_id="reminder-123",
+        target_type="reminder",
+    )
+
+    async def callback() -> None:
+        executed.append(schedule.target_id)
+
+    adapter.schedule(
+        temporal_schedule=schedule,
+        callback=callback,
+    )
+
+    async def run() -> None:
+        task = asyncio.create_task(
+            scheduler.start()
+        )
+
+        await asyncio.sleep(0.05)
+
+        await scheduler.stop()
+
+        await asyncio.wait_for(
+            task,
+            timeout=1.0,
+        )
+
+    asyncio.run(run())
+
+    assert executed == ["reminder-123"]
+
+
+def test_adapter_supports_generic_temporal_targets() -> None:
+    scheduler = Scheduler()
+    adapter = TemporalSchedulerAdapter(scheduler)
+
+    schedule = TemporalSchedule.create(
+        execute_at=datetime.now(timezone.utc),
+        target_id="task-123",
+        target_type="task",
+    )
+
+    async def callback() -> None:
+        pass
+
+    adapter.schedule(
+        temporal_schedule=schedule,
+        callback=callback,
+    )
+
+    assert adapter.scheduled() == [
+        "task:task-123"
+    ]
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_verifier.py
+================================================================================
+
+from planner.verification import (
+    VerificationResult,
+    Verifier,
+)
+
+
+class FakeObjective:
+    id = "objective-test"
+
+
+class FakePlan:
+    completed = True
+
+
+class FakeResult:
+    def __init__(
+        self,
+        success: bool,
+        output=None,
+        message: str = "",
+    ):
+        self.success = success
+        self.output = output or {}
+        self.message = message
+
+
+def test_successful_execution_with_completed_plan_is_verified():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+            output={
+                "status": "opened",
+                "application": "Chrome",
+            },
+        ),
+    )
+
+    assert isinstance(
+        result,
+        VerificationResult,
+    )
+    assert result.verified is True
+    assert result.status == "verified"
+    assert result.confidence == 1.0
+
+
+def test_failed_execution_is_not_verified():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=False,
+            message="No se pudo ejecutar la acción.",
+        ),
+    )
+
+    assert result.verified is False
+    assert result.status == "not_verified"
+    assert result.confidence == 1.0
+    assert result.metadata["status"] == "execution_failed"
+
+
+def test_incomplete_plan_is_not_verified():
+    verifier = Verifier()
+
+    plan = FakePlan()
+    plan.completed = False
+
+    result = verifier.verify(
+        FakeObjective(),
+        plan,
+        FakeResult(
+            success=True,
+            output={
+                "status": "opened",
+            },
+        ),
+    )
+
+    assert result.verified is False
+    assert result.status == "not_verified"
+    assert result.metadata["status"] == "plan_incomplete"
+
+
+def test_successful_execution_without_output_has_limited_confidence():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+        ),
+    )
+
+    assert result.verified is True
+    assert result.confidence == 0.70
+    assert (
+        result.metadata["status"]
+        == "verified_with_limited_evidence"
+    )
+
+
+def test_output_evidence_is_recorded():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+            output={
+                "application": "Chrome",
+                "status": "opened",
+            },
+        ),
+    )
+
+    assert result.verified is True
+
+    output_evidence = [
+        item
+        for item in result.evidence
+        if item["type"] == "output"
+    ][0]
+
+    assert output_evidence["status"] == "available"
+    assert output_evidence["keys"] == [
+        "application",
+        "status",
+    ]
+
+
+def test_verification_contains_reason():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+            output={
+                "status": "ok",
+            },
+        ),
+    )
+
+    assert result.reason
+    assert "ejecución" in result.reason.lower()
+
+
+def test_verifier_does_not_execute_anything():
+    verifier = Verifier()
+
+    executed = False
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+            output={
+                "status": "ok",
+            },
+        ),
+    )
+
+    assert executed is False
+    assert result.verified is True
+
+
+def test_verification_metadata_contains_objective():
+    verifier = Verifier()
+
+    result = verifier.verify(
+        FakeObjective(),
+        FakePlan(),
+        FakeResult(
+            success=True,
+            output={
+                "status": "ok",
+            },
+        ),
+    )
+
+    assert (
+        result.metadata["objective_id"]
+        == "objective-test"
+    )
+
+
+if __name__ == "__main__":
+    tests = [
+        test_successful_execution_with_completed_plan_is_verified,
+        test_failed_execution_is_not_verified,
+        test_incomplete_plan_is_not_verified,
+        test_successful_execution_without_output_has_limited_confidence,
+        test_output_evidence_is_recorded,
+        test_verification_contains_reason,
+        test_verifier_does_not_execute_anything,
+        test_verification_metadata_contains_objective,
+    ]
+
+    for test in tests:
+        test()
+
+    print(
+        f"VERIFIER PASSED : "
+        f"{len(tests)} FAILED : 0"
+    )
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
+================================================================================
+ARCHIVO: tests\test_verifier_evidence.py
+================================================================================
+
+from planner.verification import Verifier
+from planner.objective import Objective
+from planner.plan import ExecutionPlan, PlanStep, StepStatus
+from runtime.execution_result import ExecutionResult
+
+
+def make_objective(
+    action: str,
+    metadata: dict,
+) -> Objective:
+    return Objective(
+        id="objective-test",
+        title=action,
+        metadata=metadata,
+    )
+
+
+def make_plan(
+    action: str,
+    completed: bool = True,
+) -> ExecutionPlan:
+    return ExecutionPlan(
+        objective_id="objective-test",
+        steps=[
+            PlanStep(
+                id="step-test",
+                name=action,
+                description=action,
+                action=action,
+                status=(
+                    StepStatus.COMPLETED
+                    if completed
+                    else StepStatus.PENDING
+                ),
+            )
+        ],
+        current_step=1 if completed else 0,
+        completed=completed,
+    )
+
+
+def make_result(
+    output: dict,
+    success: bool = True,
+) -> ExecutionResult:
+    return ExecutionResult(
+        success=success,
+        output=output,
+        artifacts={},
+        metadata={},
+    )
+
+
+def check(
+    condition: bool,
+    message: str,
+) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def test_open_app_verified() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.open_app",
+            {"application": "Chrome"},
+        ),
+        plan=make_plan(
+            "system.open_app",
+        ),
+        result=make_result(
+            {
+                "application": "Chrome",
+                "status": "opened",
+            }
+        ),
+    )
+
+    check(result.verified, "Open app should be verified.")
+    check(
+        result.confidence == 1.0,
+        "Open app confidence should be 1.0.",
+    )
+
+
+def test_open_app_mismatch() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.open_app",
+            {"application": "Chrome"},
+        ),
+        plan=make_plan(
+            "system.open_app",
+        ),
+        result=make_result(
+            {
+                "application": "Spotify",
+                "status": "opened",
+            }
+        ),
+    )
+
+    check(
+        not result.verified,
+        "Wrong application must not be verified.",
+    )
+
+
+def test_close_app_verified() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.close_app",
+            {"application": "Chrome"},
+        ),
+        plan=make_plan(
+            "system.close_app",
+        ),
+        result=make_result(
+            {
+                "application": "Chrome",
+                "status": "closed",
+            }
+        ),
+    )
+
+    check(result.verified, "Close app should be verified.")
+
+
+def test_set_volume_verified() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.set_volume",
+            {"level": 50},
+        ),
+        plan=make_plan(
+            "system.set_volume",
+        ),
+        result=make_result(
+            {
+                "volume": 50,
+                "status": "set",
+            }
+        ),
+    )
+
+    check(
+        result.verified,
+        "Set volume should be verified.",
+    )
+
+
+def test_set_volume_mismatch() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.set_volume",
+            {"level": 50},
+        ),
+        plan=make_plan(
+            "system.set_volume",
+        ),
+        result=make_result(
+            {
+                "volume": 30,
+                "status": "set",
+            }
+        ),
+    )
+
+    check(
+        not result.verified,
+        "Wrong volume must not be verified.",
+    )
+
+
+def test_screen_capture_requires_evidence() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.screen_capture",
+            {},
+        ),
+        plan=make_plan(
+            "system.screen_capture",
+        ),
+        result=make_result(
+            {
+                "status": "captured",
+                "image": object(),
+            }
+        ),
+    )
+
+    check(
+        result.verified,
+        "Screen capture should be verified with image evidence.",
+    )
+
+
+def test_empty_output_is_not_verified() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.open_app",
+            {"application": "Chrome"},
+        ),
+        plan=make_plan(
+            "system.open_app",
+        ),
+        result=make_result({}),
+    )
+
+    check(
+        not result.verified,
+        "Empty output must not be verified.",
+    )
+
+
+def test_execution_failure_is_not_verified() -> None:
+    verifier = Verifier()
+
+    result = verifier.verify(
+        objective=make_objective(
+            "system.open_app",
+            {"application": "Chrome"},
+        ),
+        plan=make_plan(
+            "system.open_app",
+        ),
+        result=make_result(
+            {},
+            success=False,
+        ),
+    )
+
+    check(
+        not result.verified,
+        "Failed execution must not be verified.",
+    )
+
+
+print(
+    "VERIFIER EVIDENCE PASSED : 8 FAILED : 0"
+)
+
+
+================================================================================
+FIN DEL ARCHIVO
+================================================================================
+
