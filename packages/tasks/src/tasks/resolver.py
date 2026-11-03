@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from context import AssistantContext
+from context import AssistantContext, project_ids_for_context
 
 from tasks.models import Task
 from tasks.store import TaskStore
@@ -17,7 +17,7 @@ class TaskResolver:
 
         user = context.user
         organization = context.organization
-        project_ids = {project.id for project in context.projects}
+        project_ids = project_ids_for_context(context)
 
         resolved: list[Task] = []
 
