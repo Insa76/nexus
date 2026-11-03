@@ -1392,7 +1392,7 @@ class Engine:
             description = (
                 parameters.get("title")
                 if action == "tasks.create"
-                else parameters.get("task_id")
+                else parameters.get("task_id") or parameters.get("task_reference")
             )
             message = (
                 f"NEXUS propone {labels.get(action, 'modificar una tarea')}"
