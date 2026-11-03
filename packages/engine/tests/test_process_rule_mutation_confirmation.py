@@ -85,3 +85,45 @@ def test_process_rule_mutations_recheck_authorization(monkeypatch, tmp_path):
     assert result.success is False
     assert result.output["status"] == "unauthorized"
     assert engine.process_capability.store.count() == 0
+
+
+def test_process_update_requires_confirmation_and_uses_context_reference(monkeypatch, tmp_path):
+    engine = build_test_engine(monkeypatch, tmp_path, "processes.update", {
+        "process_reference": "Proceso base", "description": "Descripción nueva",
+    })
+    process = engine.process_cognitive_access.create(
+        context=engine.assistant_context, name="Proceso base",
+    )
+    proposal = asyncio.run(engine.execute("Actualizar proceso base"))
+    assert proposal.metadata["confirmation_required"] is True
+    pending = engine._pending_task_operations[proposal.metadata["confirmation_token"]]
+    assert pending["parameters"]["process_id"] == process.id
+    assert "process_reference" not in pending["parameters"]
+    confirmed = engine.confirm_task_operation(
+        proposal.metadata["confirmation_token"], approved=True,
+    )
+    assert confirmed.success is True
+    updated = engine.process_cognitive_access.get(
+        process.id, context=engine.assistant_context,
+    )
+    assert updated.description == "Descripción nueva"
+
+
+def test_rule_update_requires_confirmation(monkeypatch, tmp_path):
+    engine = build_test_engine(monkeypatch, tmp_path, "rules.update", {
+        "rule_reference": "Regla base", "description": "Descripción corregida",
+    })
+    rule = engine.rule_cognitive_access.create(
+        context=engine.assistant_context, name="Regla base",
+    )
+    proposal = asyncio.run(engine.execute("Actualizar regla base"))
+    assert proposal.metadata["confirmation_required"] is True
+    pending = engine._pending_task_operations[proposal.metadata["confirmation_token"]]
+    assert pending["parameters"]["rule_id"] == rule.id
+    confirmed = engine.confirm_task_operation(
+        proposal.metadata["confirmation_token"], approved=True,
+    )
+    assert confirmed.success is True
+    assert engine.rule_cognitive_access.get(
+        rule.id, context=engine.assistant_context,
+    ).description == "Descripción corregida"
