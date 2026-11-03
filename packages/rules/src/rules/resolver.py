@@ -25,6 +25,13 @@ class RuleResolver:
         resolved: list[Rule] = []
 
         for rule in rules:
+            # Los registros asociados a un proyecto solo son visibles
+            # cuando ese proyecto pertenece al alcance activo.
+            if rule.project_id is not None:
+                if rule.project_id in project_ids:
+                    resolved.append(rule)
+                continue
+
             if user is not None and rule.user_id == user.id:
                 resolved.append(rule)
                 continue
@@ -32,13 +39,6 @@ class RuleResolver:
             if (
                 organization is not None
                 and rule.organization_id == organization.id
-            ):
-                resolved.append(rule)
-                continue
-
-            if (
-                rule.project_id is not None
-                and rule.project_id in project_ids
             ):
                 resolved.append(rule)
 
