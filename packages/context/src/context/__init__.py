@@ -4,6 +4,7 @@ from context.models import (
     ProjectContext,
     UserProfile,
 )
+from context.project_scope import project_ids_for_context
 from context.resolver import ContextResolver
 from context.session import AssistantSession
 from context.store import ContextStore
@@ -24,4 +25,5 @@ __all__ = [
     "AssistantSessionManager",
     "ContextValidationError",
     "SQLiteContextRepository",
+    "project_ids_for_context",
 ]
