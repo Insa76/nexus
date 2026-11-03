@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import re
+import secrets
 from memory import WorkingMemory
 from memory.episode import Episode
 from memory.episode_memory import EpisodeMemory
@@ -89,6 +90,7 @@ class Engine:
     default_actor_id: str | None = None,
     default_actor_type: str | None = None,
     semantic_memory: SemanticMemory | None = None,
+    task_action_authorizer=None,
 ) -> None:
 
         self._runtime = runtime
@@ -107,6 +109,8 @@ class Engine:
         self._rule_cognitive_access = rule_cognitive_access
         self._default_actor_id = default_actor_id
         self._default_actor_type = default_actor_type
+        self._task_action_authorizer = task_action_authorizer
+        self._pending_task_operations: dict[str, dict[str, object]] = {}
         self._objective_factory = ObjectiveFactory()
 
         self._memory = (
@@ -266,6 +270,116 @@ class Engine:
             )
         self._assistant_context = context
         self._context_builder.set_assistant_context(context)
+
+    def confirm_task_operation(
+        self,
+        token: str,
+        *,
+        approved: bool,
+    ) -> ExecutionResult:
+        """Consume una propuesta pendiente; nunca ejecuta sin aprobación explícita."""
+        pending = self._pending_task_operations.pop(token, None)
+        if pending is None:
+            return ExecutionResult(
+                success=False,
+                message="La confirmación no existe, expiró o ya fue utilizada.",
+                output={"status": "not_found"},
+            )
+
+        if time.monotonic() > float(pending["expires_at"]):
+            return ExecutionResult(
+                success=False,
+                message="La propuesta expiró. Volvé a solicitar la operación.",
+                output={"status": "expired"},
+            )
+
+        if not approved:
+            return ExecutionResult(
+                success=True,
+                message="Operación cancelada. No se modificaron las tareas.",
+                output={"status": "cancelled"},
+            )
+
+        current_scope = (
+            getattr(self._assistant_context.user, "id", None),
+            getattr(self._assistant_context.organization, "id", None),
+            self._assistant_context.metadata.get("active_project_id"),
+        )
+        if current_scope != pending["scope"]:
+            return ExecutionResult(
+                success=False,
+                message="El contexto activo cambió. La operación fue cancelada por seguridad.",
+                output={"status": "scope_changed"},
+            )
+
+        action = str(pending["action"])
+        if (
+            self._task_action_authorizer is None
+            or not self._task_action_authorizer(action)
+        ):
+            return ExecutionResult(
+                success=False,
+                message="La operación no está autorizada por la política de seguridad de NEXUS.",
+                output={"status": "unauthorized"},
+            )
+
+        if self._cognitive_capability_router is None:
+            return ExecutionResult(
+                success=False,
+                message="La capability Tasks no está disponible.",
+                output={"status": "unavailable"},
+            )
+
+        invocation = self._cognitive_capability_router.select(
+            action=action,
+            parameters=dict(pending["parameters"]),
+        )
+        if invocation is None:
+            return ExecutionResult(
+                success=False,
+                message="La operación ya no está disponible.",
+                output={"status": "unavailable"},
+            )
+
+        try:
+            task = self._cognitive_capability_router.invoke(
+                invocation,
+                context={},
+                assistant_context=self._assistant_context,
+            )
+        except Exception as exc:
+            return ExecutionResult(
+                success=False,
+                message=f"No se pudo completar la operación: {exc}",
+                output={"status": "failed"},
+            )
+
+        if task is None:
+            return ExecutionResult(
+                success=False,
+                message="No se encontró la tarea dentro del proyecto activo.",
+                output={"status": "not_found"},
+            )
+
+        task_data = {
+            "id": task.id,
+            "title": task.title,
+            "description": task.description,
+            "status": task.status.value,
+            "priority": task.priority,
+            "user_id": task.user_id,
+            "organization_id": task.organization_id,
+            "project_id": task.project_id,
+            "due_at": task.due_at.isoformat() if task.due_at else None,
+            "created_at": task.created_at.isoformat(),
+        }
+        operation = action.removeprefix("tasks.")
+        return ExecutionResult(
+            success=True,
+            message=f"Operación confirmada: tarea {task.title}.",
+            output={"operation": action, "status": "completed", "task": task_data},
+            metadata={"action": action, "confirmed": True},
+        )
 
     @property
     def decision_engine(self) -> DecisionEngine:
@@ -718,7 +832,14 @@ class Engine:
                 parameters=intent.parameters,
             )
 
-        if cognitive_capability is not None:
+        is_task_mutation = (
+            cognitive_capability is not None
+            and cognitive_capability.capability == "tasks"
+            and cognitive_capability.operation in {"create", "update", "transition"}
+        )
+        cognitive_capability_summary = None
+
+        if cognitive_capability is not None and not is_task_mutation:
             self._memory.add(
                 "cognitive_capability",
                 {
@@ -1170,6 +1291,67 @@ class Engine:
                 },
             )
 
+            return result
+
+        if is_task_mutation:
+            token = secrets.token_urlsafe(32)
+            parameters = dict(cognitive_capability.parameters)
+            action = cognitive_capability.action
+            self._pending_task_operations[token] = {
+                "action": action,
+                "parameters": parameters,
+                "scope": (
+                    getattr(self._assistant_context.user, "id", None),
+                    getattr(self._assistant_context.organization, "id", None),
+                    self._assistant_context.metadata.get("active_project_id"),
+                ),
+                "expires_at": time.monotonic() + 300,
+            }
+            labels = {
+                "tasks.create": "crear una tarea",
+                "tasks.update": "actualizar una tarea",
+                "tasks.transition": "cambiar el estado de una tarea",
+            }
+            description = (
+                parameters.get("title")
+                if action == "tasks.create"
+                else parameters.get("task_id")
+            )
+            message = (
+                f"NEXUS propone {labels.get(action, 'modificar una tarea')}"
+                + (f": {description}." if description else ".")
+                + " Confirmá para guardar el cambio."
+            )
+            result = ExecutionResult(
+                success=True,
+                message=message,
+                output={
+                    "status": "confirmation_required",
+                    "operation": action,
+                    "proposed_parameters": parameters,
+                },
+                metadata={
+                    "action": action,
+                    "confirmation_required": True,
+                    "confirmation_token": token,
+                    "confirmation_expires_in": 300,
+                    "response": message,
+                },
+            )
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+            self._presence_events.emit_state(
+                "needs_confirmation",
+                message="NEXUS espera confirmación para modificar Tasks.",
+                data={"action": action},
+            )
             return result
 
         #
