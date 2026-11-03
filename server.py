@@ -1298,6 +1298,8 @@ def main() -> None:
                 assistant_loop.call_soon_threadsafe(
                     assistant_loop.stop
                 )
+            if engine.execution_store is not None:
+                engine.execution_store.close()
 
             assistant_thread.join(timeout=10)
 
