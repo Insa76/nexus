@@ -864,6 +864,40 @@ class NexusHandler(BaseHTTPRequestHandler):
         if self._reject_untrusted_request():
             return
 
+        if urlsplit(self.path).path == "/api/tasks/confirm":
+            payload = self._read_json_object()
+            if payload is None:
+                return
+
+            token = payload.get("token")
+            approved = payload.get("approved")
+            if not isinstance(token, str) or not token.strip() or len(token) > 256:
+                self._send_json({
+                    "success": False,
+                    "message": "Token de confirmación inválido.",
+                }, status=400)
+                return
+            if not isinstance(approved, bool):
+                self._send_json({
+                    "success": False,
+                    "message": "El campo 'approved' debe ser booleano.",
+                }, status=400)
+                return
+
+            with engine_lock:
+                result = engine.confirm_task_operation(
+                    token.strip(),
+                    approved=approved,
+                )
+
+            self._send_json({
+                "success": result.success,
+                "message": result.message,
+                "output": result.output,
+                "metadata": result.metadata,
+            }, status=200 if result.success else 409)
+            return
+
         if urlsplit(self.path).path == "/api/reminders":
             self._handle_reminder_create()
             return
