@@ -13,6 +13,12 @@ type ContextProject = {
   description?: string | null;
 };
 
+type PendingTaskConfirmation = {
+  token: string;
+  operation: string;
+  summary: string;
+};
+
 type ContextState = {
   user?: { name?: string; role?: string | null } | null;
   organization?: { name?: string; industry?: string | null } | null;
@@ -62,6 +68,8 @@ export default function Assistant() {
   const [busy, setBusy] = useState(false);
 
   const [feedback, setFeedback] = useState("");
+  const [pendingTaskConfirmation, setPendingTaskConfirmation] =
+    useState<PendingTaskConfirmation | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
   const [contextSaving, setContextSaving] = useState(false);
   const [contextMessage, setContextMessage] = useState("");
@@ -261,6 +269,28 @@ export default function Assistant() {
           );
         }
 
+        const metadata = data.metadata;
+        if (
+          metadata &&
+          typeof metadata === "object" &&
+          (metadata as Record<string, unknown>).confirmation_required === true &&
+          typeof (metadata as Record<string, unknown>).confirmation_token === "string"
+        ) {
+          const confirmation = metadata as Record<string, unknown>;
+          setPendingTaskConfirmation({
+            token: confirmation.confirmation_token as string,
+            operation: String(data.output && typeof data.output === "object"
+              ? (data.output as Record<string, unknown>).operation ?? "tasks"
+              : "tasks"),
+            summary: typeof data.message === "string"
+              ? data.message
+              : "NEXUS propone modificar una tarea.",
+          });
+          setFeedback(typeof data.message === "string" ? data.message : "Esperando confirmación.");
+          setCommand("");
+          return;
+        }
+
         const message = [
           "message",
           "response",
@@ -294,6 +324,44 @@ export default function Assistant() {
         error instanceof Error
           ? error.message
           : "No se pudo enviar la instrucción.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveTaskConfirmation(approved: boolean) {
+    if (!pendingTaskConfirmation || busy) return;
+    setBusy(true);
+    try {
+      const response = await fetch("http://127.0.0.1:8765/api/tasks/confirm", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          token: pendingTaskConfirmation.token,
+          approved,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.success !== true) {
+        throw new Error(getResponseError(payload, response.status));
+      }
+      setFeedback(
+        typeof payload.message === "string"
+          ? payload.message
+          : approved
+            ? "Tarea actualizada."
+            : "Operación cancelada.",
+      );
+      setPendingTaskConfirmation(null);
+    } catch (error) {
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se pudo procesar la confirmación.",
       );
     } finally {
       setBusy(false);
@@ -451,6 +519,33 @@ export default function Assistant() {
               ↑
             </button>
           </form>
+
+          {pendingTaskConfirmation && (
+            <div className="task-confirmation" role="group" aria-label="Confirmar modificación de tarea">
+              <div className="task-confirmation-label">CONFIRMACIÓN REQUERIDA</div>
+              <div className="task-confirmation-summary">
+                {pendingTaskConfirmation.summary}
+              </div>
+              <div className="task-confirmation-actions">
+                <button
+                  type="button"
+                  className="task-confirm-accept"
+                  disabled={busy}
+                  onClick={() => void resolveTaskConfirmation(true)}
+                >
+                  CONFIRMAR
+                </button>
+                <button
+                  type="button"
+                  className="task-confirm-cancel"
+                  disabled={busy}
+                  onClick={() => void resolveTaskConfirmation(false)}
+                >
+                  CANCELAR
+                </button>
+              </div>
+            </div>
+          )}
 
           <div
             className="assistant-feedback"
