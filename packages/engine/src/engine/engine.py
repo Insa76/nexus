@@ -1296,7 +1296,7 @@ class Engine:
         if is_task_mutation:
             token = secrets.token_urlsafe(32)
             parameters = dict(cognitive_capability.parameters)
-            action = cognitive_capability.action
+            action = f"tasks.{cognitive_capability.operation}"
             self._pending_task_operations[token] = {
                 "action": action,
                 "parameters": parameters,
