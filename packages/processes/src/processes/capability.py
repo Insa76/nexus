@@ -59,7 +59,13 @@ class ProcessCapability:
         return self.resolver.resolve(context)
 
     def get_for_context(self, process_id: str, *, context: AssistantContext) -> Process | None:
-        return next((item for item in self.relevant(context=context) if item.id == process_id), None)
+        visible = self.relevant(context=context)
+        by_id = next((item for item in visible if item.id == process_id), None)
+        if by_id is not None:
+            return by_id
+        normalized = process_id.strip().casefold()
+        matches = [item for item in visible if item.name.strip().casefold() == normalized]
+        return matches[0] if normalized and len(matches) == 1 else None
 
     def update_for_context(self, process_id: str, *, context: AssistantContext,
                            name: str | None = None, description: str | None = None) -> Process | None:
