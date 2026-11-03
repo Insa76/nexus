@@ -49,6 +49,9 @@ class ExecutionContext(BaseModel):
 
     actor_type: str | None = None
 
+    # Solicitud original asociada al plan; se conserva en checkpoints.
+    request_text: str = ""
+
     variables: dict[str, Any] = Field(
         default_factory=dict
     )
