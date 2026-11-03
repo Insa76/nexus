@@ -225,7 +225,7 @@ def build_engine(
     )
     execution_store = SQLiteExecutionStore(execution_db_path)
     # Un cierre inesperado se registra como interrumpido; nunca se reejecuta.
-    recovered_executions = execution_store.recover_interrupted()
+    execution_store.recover_interrupted()
     runtime.configure_execution_store(execution_store)
 
     #
