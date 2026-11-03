@@ -17,6 +17,8 @@ from rules.cognitive import (
     RuleCognitiveResult,
 )
 from rules.models import Rule
+from tasks.cognitive import TaskCognitiveAccess, TaskCognitiveResult
+from tasks.models import Task
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,10 +92,12 @@ class CognitiveCapabilityRouter:
         document_access: DocumentCognitiveAccess | None = None,
         process_access: ProcessCognitiveAccess | None = None,
         rule_access: RuleCognitiveAccess | None = None,
+        task_access: TaskCognitiveAccess | None = None,
     ) -> None:
         self._document_access = document_access
         self._process_access = process_access
         self._rule_access = rule_access
+        self._task_access = task_access
 
     @property
     def document_access(self) -> DocumentCognitiveAccess | None:
@@ -166,6 +170,27 @@ class CognitiveCapabilityRouter:
                 )
             )
 
+        if self._task_access is not None:
+            descriptors.extend(
+                (
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="find_relevant",
+                        action="tasks.find_relevant",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="get",
+                        action="tasks.get",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="list",
+                        action="tasks.list",
+                    ),
+                )
+            )
+
         return tuple(descriptors)
 
     def available_capabilities(self) -> tuple[str, ...]:
@@ -216,6 +241,9 @@ class CognitiveCapabilityRouter:
             DocumentCognitiveResult
             | ProcessCognitiveResult
             | RuleCognitiveResult
+            | TaskCognitiveResult
+            | Task
+            | tuple[Task, ...]
             | Process
             | tuple[Process, ...]
             | Rule
@@ -237,6 +265,15 @@ class CognitiveCapabilityRouter:
                 "status": "found" if count > 0 else "empty",
             }
 
+        if isinstance(result, TaskCognitiveResult):
+            count = len(result.tasks)
+            return {
+                "operation": "tasks.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
         if isinstance(result, ProcessCognitiveResult):
             count = len(result.processes)
 
@@ -252,6 +289,28 @@ class CognitiveCapabilityRouter:
 
             return {
                 "operation": "rules.find_relevant",
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "tasks.get":
+            count = 1 if isinstance(result, Task) else 0
+            return {
+                "operation": operation,
+                "result_count": count,
+                "has_results": count > 0,
+                "status": "found" if count > 0 else "empty",
+            }
+
+        if operation == "tasks.list":
+            if not isinstance(result, tuple) or (
+                result and not all(isinstance(item, Task) for item in result)
+            ):
+                raise TypeError(f"Expected tuple[Task, ...] result for {operation}")
+            count = len(result)
+            return {
+                "operation": operation,
                 "result_count": count,
                 "has_results": count > 0,
                 "status": "found" if count > 0 else "empty",
@@ -352,6 +411,34 @@ class CognitiveCapabilityRouter:
             offset=offset,
             limit=limit,
         )
+
+    def find_relevant_tasks(
+        self,
+        *,
+        context: object,
+    ) -> TaskCognitiveResult:
+        if self._task_access is None:
+            raise RuntimeError("Task cognitive capability is not available.")
+        return self._task_access.find_relevant(context=context)
+
+    def get_task(
+        self,
+        *,
+        task_id: str,
+        context: object,
+    ) -> Task | None:
+        if self._task_access is None:
+            raise RuntimeError("Task cognitive capability is not available.")
+        return self._task_access.get(task_id, context=context)
+
+    def list_tasks(
+        self,
+        *,
+        context: object,
+    ) -> tuple[Task, ...]:
+        if self._task_access is None:
+            raise RuntimeError("Task cognitive capability is not available.")
+        return self._task_access.list(context=context)
 
     def find_relevant_processes(
         self,
@@ -458,6 +545,9 @@ class CognitiveCapabilityRouter:
         DocumentCognitiveResult
         | ProcessCognitiveResult
         | RuleCognitiveResult
+        | TaskCognitiveResult
+        | Task
+        | tuple[Task, ...]
         | Process
         | tuple[Process, ...]
         | Rule
@@ -495,6 +585,27 @@ class CognitiveCapabilityRouter:
     offset=invocation.parameters.get("offset", 0),
     limit=invocation.parameters.get("limit"),
 )
+
+        if invocation.capability == "tasks":
+            if self._task_access is None:
+                raise RuntimeError("Task cognitive capability is not available.")
+
+            if assistant_context is None:
+                raise ValueError("tasks operations require 'assistant_context'.")
+
+            if invocation.operation == "find_relevant":
+                return self._task_access.find_relevant(context=assistant_context)
+
+            if invocation.operation == "get":
+                task_id = invocation.parameters.get("task_id")
+                if not task_id:
+                    raise ValueError("tasks.get requires 'task_id'.")
+                return self._task_access.get(task_id, context=assistant_context)
+
+            if invocation.operation == "list":
+                return self._task_access.list(context=assistant_context)
+
+            raise ValueError(f"Unsupported tasks operation: {invocation.operation}")
 
         if invocation.capability == "processes":
             if self._process_access is None:
