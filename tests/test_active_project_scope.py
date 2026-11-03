@@ -147,3 +147,44 @@ def test_legacy_context_without_active_project_metadata_keeps_all_projects():
     store.add(task_b)
 
     assert TaskResolver(store).resolve(context) == [task_a, task_b]
+
+
+
+def test_process_and_rule_project_records_do_not_leak_through_user_or_org_scope():
+    context = _workspace_context("project-a")
+    project_a, project_b = context.projects
+
+    process_other_project = Process.create(
+        "Proceso privado de B",
+        user_id=context.user.id,
+        organization_id=context.organization.id,
+        project_id=project_b.id,
+    )
+    process_active_project = Process.create(
+        "Proceso de A",
+        user_id=context.user.id,
+        organization_id=context.organization.id,
+        project_id=project_a.id,
+    )
+    rule_other_project = Rule.create(
+        "Regla privada de B",
+        user_id=context.user.id,
+        organization_id=context.organization.id,
+        project_id=project_b.id,
+    )
+    rule_active_project = Rule.create(
+        "Regla de A",
+        user_id=context.user.id,
+        organization_id=context.organization.id,
+        project_id=project_a.id,
+    )
+
+    process_store = ProcessStore()
+    process_store.add(process_other_project)
+    process_store.add(process_active_project)
+    rule_store = RuleStore()
+    rule_store.add(rule_other_project)
+    rule_store.add(rule_active_project)
+
+    assert ProcessResolver(process_store).resolve(context) == [process_active_project]
+    assert RuleResolver(rule_store).resolve(context) == [rule_active_project]
