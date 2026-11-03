@@ -1,3 +1,5 @@
+from tasks.capability import TaskCapability
+from tasks.cognitive import TaskCognitiveAccess, TaskCognitiveResult
 from tasks.lifecycle import (
     InvalidTaskTransition,
     can_transition,
@@ -34,6 +36,9 @@ __all__ = [
     "TaskStatus",
     "TaskStore",
     "TaskResolver",
+    "TaskCapability",
+    "TaskCognitiveAccess",
+    "TaskCognitiveResult",
     "InvalidTaskTransition",
     "can_transition",
     "transition_task",
