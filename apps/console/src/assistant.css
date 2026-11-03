@@ -247,3 +247,104 @@ body.assistant-window #root {
 .presence a {
   -webkit-app-region: no-drag;
 }
+
+.assistant-toolbar {
+  display: flex;
+  min-height: 22px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.assistant-context-label {
+  min-width: 0;
+  overflow: hidden;
+  color: #66899d;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-context-toggle {
+  flex: 0 0 auto;
+  padding: 5px 7px;
+  border: 1px solid rgba(104, 177, 213, 0.24);
+  border-radius: 4px;
+  color: #8fcde8;
+  background: rgba(44, 133, 174, 0.10);
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.context-editor {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 7px;
+  overflow: auto;
+}
+
+.context-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.context-fields input,
+.context-fields select {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  padding: 0 8px;
+  border: 1px solid rgba(104, 177, 213, 0.22);
+  border-radius: 5px;
+  outline: none;
+  color: #dce8f5;
+  background: rgba(2, 7, 12, 0.88);
+  font-family: inherit;
+  font-size: 9px;
+}
+
+.context-fields input:focus,
+.context-fields select:focus {
+  border-color: rgba(104, 196, 239, 0.65);
+}
+
+.context-fields input::placeholder {
+  color: #607a8b;
+}
+
+.context-fields select {
+  grid-column: 1 / -1;
+}
+
+.context-fields select option {
+  color: #dce8f5;
+  background: #07121c;
+}
+
+.context-save {
+  min-height: 30px;
+  border: 1px solid rgba(104, 177, 213, 0.32);
+  border-radius: 5px;
+  color: #a8e5ff;
+  background: rgba(44, 133, 174, 0.18);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+}
+
+.context-save:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.context-status {
+  min-height: 14px;
+  color: #80a9bf;
+  font-size: 9px;
+  line-height: 1.35;
+}

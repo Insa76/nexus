@@ -8,6 +8,10 @@ from context.resolver import ContextResolver
 from context.session import AssistantSession
 from context.store import ContextStore
 from context.session_manager import AssistantSessionManager
+from context.sqlite_repository import (
+    ContextValidationError,
+    SQLiteContextRepository,
+)
 
 __all__ = [
     "AssistantContext",
@@ -18,4 +22,6 @@ __all__ = [
     "ProjectContext",
     "UserProfile",
     "AssistantSessionManager",
+    "ContextValidationError",
+    "SQLiteContextRepository",
 ]

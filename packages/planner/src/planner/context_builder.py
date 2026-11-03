@@ -68,6 +68,20 @@ class ContextBuilder:
             context_providers
         )
 
+    def set_assistant_context(
+        self,
+        assistant_context: AssistantContext | None,
+    ) -> None:
+        """Actualiza el contexto configurado por defecto."""
+        if (
+            assistant_context is not None
+            and not isinstance(assistant_context, AssistantContext)
+        ):
+            raise TypeError(
+                "assistant_context debe ser AssistantContext o None."
+            )
+        self._assistant_context = assistant_context
+
     def build(
         self,
         memory: WorkingMemory,
