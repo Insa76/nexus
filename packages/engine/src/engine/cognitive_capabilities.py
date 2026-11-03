@@ -11,12 +11,12 @@ from processes.cognitive import (
     ProcessCognitiveAccess,
     ProcessCognitiveResult,
 )
-from processes.models import Process
+from processes.models import Process, ProcessStatus
 from rules.cognitive import (
     RuleCognitiveAccess,
     RuleCognitiveResult,
 )
-from rules.models import Rule
+from rules.models import Rule, RuleStatus
 from tasks.cognitive import TaskCognitiveAccess, TaskCognitiveResult
 from tasks.models import Task, TaskStatus
 
@@ -146,6 +146,21 @@ class CognitiveCapabilityRouter:
                         operation="list",
                         action="processes.list",
                     ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="create",
+                        action="processes.create",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="update",
+                        action="processes.update",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="processes",
+                        operation="transition",
+                        action="processes.transition",
+                    ),
                 )
             )
 
@@ -166,6 +181,21 @@ class CognitiveCapabilityRouter:
                         capability="rules",
                         operation="list",
                         action="rules.list",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="create",
+                        action="rules.create",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="update",
+                        action="rules.update",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="rules",
+                        operation="set_status",
+                        action="rules.set_status",
                     ),
                 )
             )
@@ -719,10 +749,44 @@ class CognitiveCapabilityRouter:
                     raise ValueError(
                         "processes.list requires 'assistant_context'."
                     )
+                return self._process_access.list(context=assistant_context)
 
-                return self._process_access.list(
-                    context=assistant_context,
+            if assistant_context is None:
+                raise ValueError("processes mutations require 'assistant_context'.")
+
+            if invocation.operation == "create":
+                name = invocation.parameters.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("processes.create requires a non-empty 'name'.")
+                return self._process_access.create(
+                    context=assistant_context, name=name,
+                    description=invocation.parameters.get("description"),
                 )
+
+            if invocation.operation == "update":
+                process_id = invocation.parameters.get("process_id") or invocation.parameters.get("process_reference")
+                if not isinstance(process_id, str) or not process_id.strip():
+                    raise ValueError("processes.update requires 'process_id'.")
+                return self._process_access.update(
+                    process_id, context=assistant_context,
+                    name=invocation.parameters.get("name"),
+                    description=invocation.parameters.get("description"),
+                )
+
+            if invocation.operation == "transition":
+                process_id = invocation.parameters.get("process_id") or invocation.parameters.get("process_reference")
+                try:
+                    target = ProcessStatus(invocation.parameters.get("target_status"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("target_status de proceso no válido.") from exc
+                if not isinstance(process_id, str) or not process_id.strip():
+                    raise ValueError("processes.transition requires 'process_id'.")
+                updated = self._process_access.transition(
+                    process_id, target, context=assistant_context,
+                )
+                if updated is None:
+                    raise ValueError("El proceso no existe en el proyecto activo.")
+                return updated
 
             raise ValueError(
                 f"Unsupported processes operation: "
@@ -769,10 +833,44 @@ class CognitiveCapabilityRouter:
                     raise ValueError(
                         "rules.list requires 'assistant_context'."
                     )
+                return self._rule_access.list(context=assistant_context)
 
-                return self._rule_access.list(
-                    context=assistant_context,
+            if assistant_context is None:
+                raise ValueError("rules mutations require 'assistant_context'.")
+
+            if invocation.operation == "create":
+                name = invocation.parameters.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise ValueError("rules.create requires a non-empty 'name'.")
+                return self._rule_access.create(
+                    context=assistant_context, name=name,
+                    description=invocation.parameters.get("description"),
                 )
+
+            if invocation.operation == "update":
+                rule_id = invocation.parameters.get("rule_id") or invocation.parameters.get("rule_reference")
+                if not isinstance(rule_id, str) or not rule_id.strip():
+                    raise ValueError("rules.update requires 'rule_id'.")
+                return self._rule_access.update(
+                    rule_id, context=assistant_context,
+                    name=invocation.parameters.get("name"),
+                    description=invocation.parameters.get("description"),
+                )
+
+            if invocation.operation == "set_status":
+                rule_id = invocation.parameters.get("rule_id") or invocation.parameters.get("rule_reference")
+                try:
+                    target = RuleStatus(invocation.parameters.get("target_status"))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("target_status de regla no válido.") from exc
+                if not isinstance(rule_id, str) or not rule_id.strip():
+                    raise ValueError("rules.set_status requires 'rule_id'.")
+                updated = self._rule_access.set_status(
+                    rule_id, target, context=assistant_context,
+                )
+                if updated is None:
+                    raise ValueError("La regla no existe en el proyecto activo.")
+                return updated
 
         raise ValueError(
             f"Unsupported cognitive capability: "
