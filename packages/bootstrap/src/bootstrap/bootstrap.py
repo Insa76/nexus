@@ -370,12 +370,18 @@ def build_engine(
     # Security: permisos de ejecución.
     #
 
-    task_mutation_actions = (
+    cognitive_mutation_actions = (
         "tasks.create",
         "tasks.update",
         "tasks.transition",
+        "processes.create",
+        "processes.update",
+        "processes.transition",
+        "rules.create",
+        "rules.update",
+        "rules.set_status",
     )
-    action_names = [*registry.list(), *task_mutation_actions]
+    action_names = [*registry.list(), *cognitive_mutation_actions]
 
     permissions = frozenset(
         Permission(
