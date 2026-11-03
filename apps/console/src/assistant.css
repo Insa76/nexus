@@ -1,3 +1,4 @@
+
 html:has(body.assistant-window),
 body.assistant-window {
   width: 100%;
@@ -63,7 +64,12 @@ body.assistant-window #root {
   width: 29px;
   height: 29px;
   border: 1px solid rgba(155, 225, 255, 0.95);
-  background: radial-gradient(circle at 35% 30%, #b4eaff, #247eb1 55%, #071725);
+  background: radial-gradient(
+    circle at 35% 30%,
+    #b4eaff,
+    #247eb1 55%,
+    #071725
+  );
   box-shadow:
     0 0 13px rgba(74, 190, 247, 0.65),
     inset 0 0 10px rgba(166, 232, 255, 0.3);
@@ -215,22 +221,66 @@ body.assistant-window #root {
   background: transparent;
   font-size: 8px;
   cursor: pointer;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+.assistant-mic:hover {
+  border-color: rgba(104, 196, 239, 0.7);
+  color: #c4efff;
+}
+
+.assistant-mic:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.assistant-mic.is-listening {
+  border-color: rgba(255, 113, 113, 0.7);
+  color: #ffaaaa;
+  background: rgba(180, 48, 48, 0.14);
+  animation: nexus-mic-pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes nexus-pulse {
-  0%, 100% { transform: scale(0.92); opacity: 0.55; }
-  50% { transform: scale(1.08); opacity: 1; }
+  0%, 100% {
+    transform: scale(0.92);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
 }
 
 @keyframes nexus-breathe {
-  0%, 100% { transform: scale(0.94); }
-  50% { transform: scale(1.07); }
+  0%, 100% {
+    transform: scale(0.94);
+  }
+
+  50% {
+    transform: scale(1.07);
+  }
+}
+
+@keyframes nexus-mic-pulse {
+  0%, 100% {
+    opacity: 0.7;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .orb-halo,
   .orb-core,
-  .feedback-dot {
+  .feedback-dot,
+  .assistant-mic.is-listening {
     animation: none;
   }
 }

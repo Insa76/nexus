@@ -306,6 +306,31 @@ class Engine:
         return self._cognitive_capability_router
 
     @property
+    def assistant_context(self) -> AssistantContext:
+        """
+        Devuelve el contexto operativo actualmente activo.
+        """
+        return self._assistant_context
+
+    def set_assistant_context(
+        self,
+        context: AssistantContext,
+    ) -> None:
+        """
+        Actualiza el contexto cognitivo activo sin reconstruir
+        el Engine ni modificar la identidad de seguridad.
+
+        La capa superior debe serializar este cambio con las
+        ejecuciones del motor.
+        """
+        if not isinstance(context, AssistantContext):
+            raise TypeError(
+                "context debe ser una instancia de AssistantContext."
+            )
+
+        self._assistant_context = context
+
+    @property
     def process_capability(self) -> ProcessCapability | None:
         return self._process_capability
 
@@ -558,12 +583,11 @@ class Engine:
 
         stage_started_at = time.perf_counter()
 
-        memory_context = (
-    self._context_builder.build(
-        self._memory,
-        semantic_query=text,
-    )
-)
+        memory_context = self._context_builder.build(
+            self._memory,
+            semantic_query=text,
+            assistant_context=self._assistant_context,
+        )
 
         timings["cognitive_context"] = (
             time.perf_counter()

@@ -168,38 +168,20 @@ def build_engine(
     con el arranque actual de NEXUS.
     """
 
-    security_context = (
-        assistant_session.context
-        if assistant_session is not None
-        else assistant_context
-    )
-
-    security_user = getattr(
-        security_context,
-        "user",
-        None,
-    )
-
-    security_actor_id = getattr(
-        security_user,
-        "id",
-        None,
-    )
+        # La identidad de seguridad de esta instalación local
+    # es independiente del perfil cognitivo del asistente.
+    #
+    # El contexto puede describir al usuario, organización
+    # y proyectos, pero no concede permisos por sí mismo.
+    # Las acciones siguen autorizándose mediante el actor
+    # local registrado en SQLite.
 
     local_console_actor = Actor.system(
         "local-console",
         name="NEXUS Local Console",
     )
 
-    if (
-        isinstance(security_actor_id, str)
-        and security_actor_id.strip()
-    ):
-        security_actor = Actor.user(
-            security_actor_id.strip()
-        )
-    else:
-        security_actor = local_console_actor
+    security_actor = local_console_actor
 
     #
     # Working Memory

@@ -28,7 +28,7 @@ class AssistantServicesLifecycle:
 
         try:
             self._scheduler_task = asyncio.create_task(
-                self.services.scheduler.start()
+                self.services.scheduler.start(keep_alive=True)
             )
         except Exception:
             self.running = False

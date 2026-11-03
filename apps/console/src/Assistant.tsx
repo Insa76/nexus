@@ -3,8 +3,34 @@ import { useEffect, useRef, useState } from "react";
 
 import "./assistant.css";
 
+type VoiceEvent = {
+  type:
+    | "status"
+    | "partial"
+    | "final"
+    | "error"
+    | "stopped";
+
+  state?: string;
+  text?: string;
+  message?: string;
+};
+
+type VoiceActionResult = {
+  success: boolean;
+  message?: string;
+};
+
 type DesktopBridge = {
   setExpanded: (expanded: boolean) => void;
+
+  startVoice: () => Promise<VoiceActionResult>;
+
+  stopVoice: () => Promise<VoiceActionResult>;
+
+  onVoiceEvent: (
+    callback: (event: VoiceEvent) => void
+  ) => () => void;
 };
 
 declare global {
@@ -50,6 +76,10 @@ export default function Assistant() {
 
   const [feedback, setFeedback] = useState("");
 
+  const [voiceActive, setVoiceActive] = useState(false);
+
+  const [voiceDraft, setVoiceDraft] = useState("");
+
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -60,8 +90,85 @@ export default function Assistant() {
     };
   }, []);
 
+  useEffect(() => {
+    const unsubscribe =
+      window.nexusDesktop?.onVoiceEvent((event) => {
+        if (event.type === "status") {
+          if (event.state === "listening") {
+            setFeedback("NEXUS está escuchando...");
+          } else if (event.message) {
+            setFeedback(event.message);
+          }
+
+          return;
+        }
+
+        if (event.type === "partial") {
+          setVoiceDraft(event.text ?? "");
+          return;
+        }
+
+        if (event.type === "final") {
+          setVoiceActive(false);
+          setVoiceDraft("");
+
+          const transcript = event.text?.trim() ?? "";
+
+          if (transcript) {
+            setCommand((current) => {
+              const separator = current.trim()
+                ? " "
+                : "";
+
+              return `${current}${separator}${transcript}`;
+            });
+
+            setFeedback(
+              "Transcripción lista. Revisá la instrucción y enviala."
+            );
+          } else {
+            setFeedback(
+              "No se reconoció ninguna instrucción. Podés volver a intentarlo."
+            );
+          }
+
+          return;
+        }
+
+        if (event.type === "error") {
+          setVoiceActive(false);
+          setVoiceDraft("");
+
+          setFeedback(
+            event.message ??
+              "No se pudo iniciar el reconocimiento de voz."
+          );
+
+          return;
+        }
+
+        if (event.type === "stopped") {
+          setVoiceActive(false);
+        }
+      });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      void window.nexusDesktop?.stopVoice();
+    };
+  }, []);
+
   function togglePanel() {
     const next = !expanded;
+
+    if (!next && voiceActive) {
+      void stopVoice();
+    }
 
     setExpanded(next);
     setFeedback("");
@@ -76,6 +183,83 @@ export default function Assistant() {
     }
   }
 
+  async function startVoice() {
+    const desktop = window.nexusDesktop;
+
+    if (!desktop) {
+      setFeedback(
+        "La entrada de voz local está disponible en la ventana de escritorio de NEXUS."
+      );
+      return;
+    }
+
+    setVoiceDraft("");
+    setVoiceActive(true);
+
+    setFeedback(
+      "Preparando reconocimiento de voz local..."
+    );
+
+    try {
+      const result = await desktop.startVoice();
+
+      if (!result.success) {
+        throw new Error(
+          result.message ??
+            "No se pudo iniciar el reconocimiento de voz."
+        );
+      }
+    } catch (error) {
+      setVoiceActive(false);
+
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se pudo iniciar el reconocimiento de voz."
+      );
+    }
+  }
+
+  async function stopVoice() {
+    const desktop = window.nexusDesktop;
+
+    if (!desktop) {
+      setVoiceActive(false);
+      return;
+    }
+
+    setFeedback(
+      "Finalizando la captura y preparando la transcripción..."
+    );
+
+    try {
+      const result = await desktop.stopVoice();
+
+      if (!result.success) {
+        throw new Error(
+          result.message ??
+            "No se pudo detener la captura de voz."
+        );
+      }
+    } catch (error) {
+      setVoiceActive(false);
+
+      setFeedback(
+        error instanceof Error
+          ? error.message
+          : "No se pudo detener la captura de voz."
+      );
+    }
+  }
+
+  function toggleVoice() {
+    if (voiceActive) {
+      void stopVoice();
+    } else {
+      void startVoice();
+    }
+  }
+
   async function submitCommand(
     event: React.FormEvent<HTMLFormElement>,
   ) {
@@ -83,12 +267,15 @@ export default function Assistant() {
 
     const text = command.trim();
 
-    if (!text || busy) {
+    if (!text || busy || voiceActive) {
       return;
     }
 
     setBusy(true);
-    setFeedback("NEXUS está procesando la instrucción…");
+
+    setFeedback(
+      "NEXUS está procesando la instrucción..."
+    );
 
     try {
       const response = await fetch(
@@ -108,7 +295,10 @@ export default function Assistant() {
 
       if (!response.ok) {
         throw new Error(
-          getResponseError(payload, response.status),
+          getResponseError(
+            payload,
+            response.status,
+          ),
         );
       }
 
@@ -120,7 +310,10 @@ export default function Assistant() {
 
         if (data.success === false) {
           throw new Error(
-            getResponseError(payload, response.status),
+            getResponseError(
+              payload,
+              response.status,
+            ),
           );
         }
 
@@ -147,7 +340,7 @@ export default function Assistant() {
         setFeedback(payload);
       } else {
         setFeedback(
-          "Instrucción enviada. No se recibió contenido de respuesta.",
+          "Instrucción enviada. No se recibió contenido de respuesta."
         );
       }
 
@@ -156,7 +349,7 @@ export default function Assistant() {
       setFeedback(
         error instanceof Error
           ? error.message
-          : "No se pudo enviar la instrucción.",
+          : "No se pudo enviar la instrucción."
       );
     } finally {
       setBusy(false);
@@ -185,7 +378,9 @@ export default function Assistant() {
           <header className="assistant-header">
             <span className="assistant-brand">
               <span className="mini-orb" />
+
               NEXUS
+
               <small>PRESENCE</small>
             </span>
 
@@ -210,7 +405,7 @@ export default function Assistant() {
               onChange={(event) =>
                 setCommand(event.target.value)
               }
-              placeholder="Escribí una instrucción…"
+              placeholder="Escribí o dictá una instrucción..."
               aria-label="Instrucción para NEXUS"
               disabled={busy}
             />
@@ -218,7 +413,11 @@ export default function Assistant() {
             <button
               className="assistant-send"
               type="submit"
-              disabled={busy || !command.trim()}
+              disabled={
+                busy ||
+                voiceActive ||
+                !command.trim()
+              }
               aria-label="Enviar instrucción"
               title="Enviar"
             >
@@ -230,31 +429,46 @@ export default function Assistant() {
             className="assistant-feedback"
             aria-live="polite"
           >
-            {busy && <span className="feedback-dot" />}
+            {busy && (
+              <span className="feedback-dot" />
+            )}
 
             <pre>
-              {feedback ||
-                "Disponible para recibir instrucciones."}
+              {voiceActive && voiceDraft
+                ? `Escuchando: ${voiceDraft}`
+                : feedback ||
+                  "Disponible para recibir instrucciones."}
             </pre>
           </div>
 
           <footer className="assistant-footer">
             <span>
-              {busy ? "PROCESANDO" : "RUNTIME LOCAL"}
+              {busy
+                ? "PROCESANDO"
+                : voiceActive
+                  ? "ESCUCHANDO LOCALMENTE"
+                  : "RUNTIME LOCAL"}
             </span>
 
             <button
               type="button"
-              className="assistant-mic"
-              onClick={() =>
-                setFeedback(
-                  "La entrada por voz se integrará en la siguiente etapa.",
-                )
+              className={`assistant-mic ${
+                voiceActive ? "is-listening" : ""
+              }`}
+              onClick={toggleVoice}
+              disabled={busy}
+              title={
+                voiceActive
+                  ? "Detener captura de voz"
+                  : "Dar una instrucción hablada"
               }
-              title="Entrada por voz: próxima etapa"
-              aria-label="Entrada por voz"
+              aria-label={
+                voiceActive
+                  ? "Detener captura de voz"
+                  : "Iniciar captura de voz"
+              }
             >
-              MIC
+              {voiceActive ? "STOP" : "MIC"}
             </button>
           </footer>
         </section>
