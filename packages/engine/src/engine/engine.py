@@ -373,7 +373,6 @@ class Engine:
             "due_at": task.due_at.isoformat() if task.due_at else None,
             "created_at": task.created_at.isoformat(),
         }
-        operation = action.removeprefix("tasks.")
         return ExecutionResult(
             success=True,
             message=f"Operación confirmada: tarea {task.title}.",
@@ -1366,6 +1365,12 @@ class Engine:
             return result
 
         if is_task_mutation:
+            now = time.monotonic()
+            self._pending_task_operations = {
+                key: value
+                for key, value in self._pending_task_operations.items()
+                if float(value["expires_at"]) > now
+            }
             token = secrets.token_urlsafe(32)
             parameters = dict(cognitive_capability.parameters)
             action = f"tasks.{cognitive_capability.operation}"
