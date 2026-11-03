@@ -12,6 +12,10 @@ from pathlib import Path
 from typing import Any
 
 from bootstrap.bootstrap import build_assistant_runtime
+from context import (
+    ContextValidationError,
+    SQLiteContextRepository,
+)
 from tasks import Reminder, ReminderStatus
 from tasks.reminder_lifecycle import InvalidReminderTransition
 from presence.presence_service import PresenceService
@@ -41,8 +45,13 @@ print("=" * 60)
 print("                 NEXUS DEV CONSOLE")
 print("=" * 60)
 
+context_repository = SQLiteContextRepository()
+initial_assistant_context = context_repository.load_context()
+
 engine, assistant_services, assistant_lifecycle = (
-    build_assistant_runtime()
+    build_assistant_runtime(
+        assistant_context=initial_assistant_context,
+    )
 )
 presence = PresenceService(engine.memory)
 
@@ -182,7 +191,7 @@ class NexusHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header(
             "Access-Control-Allow-Methods",
-            "GET, POST, DELETE, OPTIONS",
+            "GET, POST, PUT, DELETE, OPTIONS",
         )
 
     def _reject_untrusted_request(self) -> bool:
@@ -233,6 +242,61 @@ class NexusHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         self.wfile.write(payload)
+
+    def _read_json_object(self) -> dict[str, Any] | None:
+        """Lee y valida un objeto JSON respetando el límite HTTP."""
+        try:
+            content_length = int(
+                self.headers.get("Content-Length", "0")
+            )
+        except (TypeError, ValueError):
+            self._send_json(
+                {"success": False, "message": "Content-Length inválido."},
+                status=400,
+            )
+            return None
+
+        if content_length <= 0:
+            self._send_json(
+                {"success": False, "message": "El cuerpo JSON es obligatorio."},
+                status=400,
+            )
+            return None
+
+        if content_length > MAX_REQUEST_BODY_BYTES:
+            self._send_json(
+                {
+                    "success": False,
+                    "message": "El cuerpo supera el límite de 1 MiB.",
+                },
+                status=413,
+            )
+            return None
+
+        body = self.rfile.read(content_length)
+        try:
+            payload = json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json(
+                {
+                    "success": False,
+                    "message": "El cuerpo debe contener JSON válido.",
+                },
+                status=400,
+            )
+            return None
+
+        if not isinstance(payload, dict):
+            self._send_json(
+                {
+                    "success": False,
+                    "message": "El cuerpo debe ser un objeto JSON.",
+                },
+                status=400,
+            )
+            return None
+
+        return payload
 
     def _send_html(
         self,
@@ -421,6 +485,22 @@ class NexusHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
 
         if self._reject_untrusted_request():
+            return
+
+        # -----------------------------------------------------
+        # ACTIVE ASSISTANT CONTEXT
+        # -----------------------------------------------------
+
+        if urlsplit(self.path).path == "/api/context":
+            with engine_lock:
+                state = context_repository.get_state()
+                assistant_context_data = engine.assistant_context.to_dict()
+
+            self._send_json({
+                "success": True,
+                "context": state,
+                "assistant_context": assistant_context_data,
+            })
             return
 
         # -----------------------------------------------------
@@ -731,6 +811,49 @@ class NexusHandler(BaseHTTPRequestHandler):
             "success": True,
             "reminder": self._reminder_to_dict(reminder),
         }, status=201)
+
+    # =========================================================
+    # PUT
+    # =========================================================
+
+    def do_PUT(self) -> None:
+        if self._reject_untrusted_request():
+            return
+
+        if urlsplit(self.path).path != "/api/context":
+            self.send_error(404)
+            return
+
+        payload = self._read_json_object()
+        if payload is None:
+            return
+
+        try:
+            with engine_lock:
+                state = context_repository.save(payload)
+                engine.set_assistant_context(
+                    context_repository.load_context()
+                )
+
+            self._send_json({
+                "success": True,
+                "message": "Contexto actualizado y persistido.",
+                "context": state,
+                "assistant_context": engine.assistant_context.to_dict(),
+            })
+        except ContextValidationError as exc:
+            self._send_json(
+                {"success": False, "message": str(exc)},
+                status=400,
+            )
+        except Exception as exc:
+            self._send_json(
+                {
+                    "success": False,
+                    "message": f"No se pudo guardar el contexto: {exc}",
+                },
+                status=500,
+            )
 
     # =========================================================
     # POST
