@@ -347,6 +347,9 @@ export default function Assistant() {
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok || payload?.success !== true) {
+        if (response.status === 409) {
+          setPendingTaskConfirmation(null);
+        }
         throw new Error(getResponseError(payload, response.status));
       }
       setFeedback(
@@ -506,13 +509,13 @@ export default function Assistant() {
               }
               placeholder="Escribí una instrucción…"
               aria-label="Instrucción para NEXUS"
-              disabled={busy}
+              disabled={busy || pendingTaskConfirmation !== null}
             />
 
             <button
               className="assistant-send"
               type="submit"
-              disabled={busy || !command.trim()}
+              disabled={busy || pendingTaskConfirmation !== null || !command.trim()}
               aria-label="Enviar instrucción"
               title="Enviar"
             >
