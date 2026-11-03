@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from context import project_ids_for_context
 from documents.access import DocumentsAccess
 from documents.context_relevance import (
     DocumentContextMatch,
@@ -373,8 +374,8 @@ class DocumentContextResolver:
         )
 
         project_ids = tuple(
-            project.id
-            for project in context.projects
+            project_id
+            for project_id in project_ids_for_context(context)
         )
 
         if (
