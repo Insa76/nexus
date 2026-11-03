@@ -101,7 +101,21 @@ class TaskCapability:
         return self.store.update(transition_task(task, target))
 
     def get(self, task_id: str, *, context: AssistantContext) -> Task | None:
-        return next((task for task in self.resolver.resolve(context) if task.id == task_id), None)
+        visible_tasks = self.resolver.resolve(context)
+        by_id = next((task for task in visible_tasks if task.id == task_id), None)
+        if by_id is not None:
+            return by_id
+
+        # El modelo puede identificar la tarea por su título visible cuando
+        # el usuario no conoce el UUID. Solo se acepta una coincidencia exacta.
+        normalized = task_id.strip().casefold()
+        if not normalized:
+            return None
+        matches = [
+            task for task in visible_tasks
+            if task.title.strip().casefold() == normalized
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     def list(self, *, context: AssistantContext) -> tuple[Task, ...]:
         return tuple(self.resolver.resolve(context))
