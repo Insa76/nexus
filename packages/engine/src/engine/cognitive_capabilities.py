@@ -643,9 +643,12 @@ class CognitiveCapabilityRouter:
                 )
 
             if invocation.operation == "update":
-                task_id = invocation.parameters.get("task_id")
+                task_id = (
+                    invocation.parameters.get("task_id")
+                    or invocation.parameters.get("task_reference")
+                )
                 if not isinstance(task_id, str) or not task_id.strip():
-                    raise ValueError("tasks.update requires 'task_id'.")
+                    raise ValueError("tasks.update requires 'task_id' or 'task_reference'.")
                 return self._task_access.update(
                     task_id,
                     context=assistant_context,
@@ -655,7 +658,10 @@ class CognitiveCapabilityRouter:
                 )
 
             if invocation.operation == "transition":
-                task_id = invocation.parameters.get("task_id")
+                task_id = (
+                    invocation.parameters.get("task_id")
+                    or invocation.parameters.get("task_reference")
+                )
                 target = invocation.parameters.get("target_status")
                 if not isinstance(task_id, str) or not task_id.strip():
                     raise ValueError("tasks.transition requires 'task_id'.")
