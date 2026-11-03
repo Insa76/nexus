@@ -25,6 +25,13 @@ class ProcessResolver:
         resolved: list[Process] = []
 
         for process in processes:
+            # Los registros asociados a un proyecto solo son visibles
+            # cuando ese proyecto pertenece al alcance activo.
+            if process.project_id is not None:
+                if process.project_id in project_ids:
+                    resolved.append(process)
+                continue
+
             if user is not None and process.user_id == user.id:
                 resolved.append(process)
                 continue
@@ -32,13 +39,6 @@ class ProcessResolver:
             if (
                 organization is not None
                 and process.organization_id == organization.id
-            ):
-                resolved.append(process)
-                continue
-
-            if (
-                process.project_id is not None
-                and process.project_id in project_ids
             ):
                 resolved.append(process)
 
