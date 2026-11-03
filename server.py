@@ -831,15 +831,15 @@ class NexusHandler(BaseHTTPRequestHandler):
         try:
             with engine_lock:
                 state = context_repository.save(payload)
-                engine.set_assistant_context(
-                    context_repository.load_context()
-                )
+                updated_context = context_repository.load_context()
+                engine.set_assistant_context(updated_context)
+                assistant_context_data = updated_context.to_dict()
 
             self._send_json({
                 "success": True,
                 "message": "Contexto actualizado y persistido.",
                 "context": state,
-                "assistant_context": engine.assistant_context.to_dict(),
+                "assistant_context": assistant_context_data,
             })
         except ContextValidationError as exc:
             self._send_json(
