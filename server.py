@@ -491,7 +491,35 @@ class NexusHandler(BaseHTTPRequestHandler):
         # ACTIVE ASSISTANT CONTEXT
         # -----------------------------------------------------
 
-        if urlsplit(self.path).path == "/api/context":
+        request_path = urlsplit(self.path).path
+
+        # -----------------------------------------------------
+        # DURABLE RUNTIME EXECUTION HISTORY
+        # -----------------------------------------------------
+        if request_path == "/api/executions":
+            store = engine.execution_store
+            self._send_json({
+                "success": True,
+                "executions": store.list(limit=50) if store is not None else [],
+                "total": store.count() if store is not None else 0,
+            })
+            return
+
+        execution_prefix = "/api/executions/"
+        if request_path.startswith(execution_prefix):
+            execution_id = unquote(request_path[len(execution_prefix):]).strip()
+            if not execution_id or "/" in execution_id:
+                self._send_json({"success": False, "message": "ID de ejecución inválido."}, status=400)
+                return
+            store = engine.execution_store
+            record = store.get(execution_id) if store is not None else None
+            if record is None:
+                self._send_json({"success": False, "message": "Ejecución no encontrada."}, status=404)
+                return
+            self._send_json({"success": True, "execution": record})
+            return
+
+        if request_path == "/api/context":
             with engine_lock:
                 state = context_repository.get_state()
                 assistant_context_data = engine.assistant_context.to_dict()
@@ -556,6 +584,7 @@ class NexusHandler(BaseHTTPRequestHandler):
                 {
                     "status": "online",
                     "memory": engine.memory.count(),
+                    "executions": engine.execution_store.count() if engine.execution_store is not None else 0,
                 }
             )
 
