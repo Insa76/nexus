@@ -1374,19 +1374,8 @@ class Engine:
                 for key, value in self._pending_task_operations.items()
                 if float(value["expires_at"]) > now
             }
-            token = secrets.token_urlsafe(32)
             parameters = dict(cognitive_capability.parameters)
             action = f"tasks.{cognitive_capability.operation}"
-            self._pending_task_operations[token] = {
-                "action": action,
-                "parameters": parameters,
-                "scope": (
-                    getattr(self._assistant_context.user, "id", None),
-                    getattr(self._assistant_context.organization, "id", None),
-                    self._assistant_context.metadata.get("active_project_id"),
-                ),
-                "expires_at": time.monotonic() + 300,
-            }
             labels = {
                 "tasks.create": "crear una tarea",
                 "tasks.update": "actualizar una tarea",
@@ -1442,6 +1431,17 @@ class Engine:
                             output={"status": "invalid_transition"},
                         )
 
+            token = secrets.token_urlsafe(32)
+            self._pending_task_operations[token] = {
+                "action": action,
+                "parameters": parameters,
+                "scope": (
+                    getattr(self._assistant_context.user, "id", None),
+                    getattr(self._assistant_context.organization, "id", None),
+                    self._assistant_context.metadata.get("active_project_id"),
+                ),
+                "expires_at": time.monotonic() + 300,
+            }
             description = (
                 parameters.get("title")
                 if action == "tasks.create"
@@ -1449,7 +1449,21 @@ class Engine:
                 else None
             )
             if action == "tasks.create":
-                change_details = f"Prioridad: {parameters.get('priority', 'normal')}."
+                title = parameters.get("title")
+                priority = parameters.get("priority", "normal")
+                if not isinstance(title, str) or not title.strip() or len(title.strip()) > 200:
+                    return ExecutionResult(
+                        success=False,
+                        message="La tarea necesita un título válido de hasta 200 caracteres.",
+                        output={"status": "invalid_parameters"},
+                    )
+                if priority not in {"low", "normal", "high", "urgent"}:
+                    return ExecutionResult(
+                        success=False,
+                        message="La prioridad debe ser low, normal, high o urgent.",
+                        output={"status": "invalid_parameters"},
+                    )
+                change_details = f"Prioridad: {priority}."
             elif action == "tasks.update":
                 fields = [
                     field for field in ("title", "description", "priority")
