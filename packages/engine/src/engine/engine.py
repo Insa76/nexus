@@ -301,7 +301,7 @@ class Engine:
         if not approved:
             return ExecutionResult(
                 success=True,
-                message="Operación cancelada. No se modificaron las tareas.",
+                message="Operación cancelada. No se modificaron los datos.",
                 output={"status": "cancelled"},
             )
 
@@ -331,7 +331,7 @@ class Engine:
         if self._cognitive_capability_router is None:
             return ExecutionResult(
                 success=False,
-                message="La capability Tasks no está disponible.",
+                message="La capability cognitiva solicitada no está disponible.",
                 output={"status": "unavailable"},
             )
 
@@ -1673,7 +1673,7 @@ class Engine:
             )
             self._presence_events.emit_state(
                 "needs_confirmation",
-                message="NEXUS espera confirmación para modificar Tasks.",
+                message="NEXUS espera confirmación para guardar el cambio.",
                 data={"action": action},
             )
             return result
