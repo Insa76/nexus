@@ -56,6 +56,8 @@ class Runtime:
 
         self.executor: Executor | None = None
 
+        self.execution_store = None
+
     def configure_actions(
         self,
         registry: ActionRegistry,
@@ -78,6 +80,10 @@ class Runtime:
         """
 
         self.tool_registry = registry
+
+    def configure_execution_store(self, store) -> None:
+        """Configura el almacén durable de checkpoints de ejecución."""
+        self.execution_store = store
 
     def configure_executor(
         self,
