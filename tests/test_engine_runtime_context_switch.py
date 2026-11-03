@@ -16,6 +16,7 @@ def test_engine_can_switch_context_without_rebuilding():
 
     engine.set_assistant_context(context)
 
+    assert engine._default_actor_id == "local-console"
     assert engine.assistant_context is context
     assert engine._context_builder._assistant_context is context
 
