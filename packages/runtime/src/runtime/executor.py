@@ -163,6 +163,8 @@ class Executor:
             #
 
             context.current_step = step_index
+            context.plan.steps[step_index].status = StepStatus.RUNNING
+            context.objective.status = ObjectiveStatus.RUNNING
 
             # El checkpoint previo identifica el paso que estaba por comenzar.
             # Si el proceso cae durante la acción, nunca se reejecuta en automático.
