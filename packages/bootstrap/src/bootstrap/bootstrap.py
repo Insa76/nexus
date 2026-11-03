@@ -11,6 +11,7 @@ from memory.semantic_memory import SemanticMemory
 
 from runtime.runtime import Runtime
 from runtime.executor import Executor
+from runtime.execution_store import SQLiteExecutionStore
 
 
 from actions.registry import ActionRegistry
@@ -217,6 +218,15 @@ def build_engine(
     runtime = Runtime(
         kernel=kernel
     )
+
+    execution_db_path = os.environ.get(
+        "NEXUS_EXECUTIONS_DB_PATH",
+        str(Path.home() / ".nexus" / "executions.sqlite3"),
+    )
+    execution_store = SQLiteExecutionStore(execution_db_path)
+    # Un cierre inesperado se registra como interrumpido; nunca se reejecuta.
+    recovered_executions = execution_store.recover_interrupted()
+    runtime.configure_execution_store(execution_store)
 
     #
     # Provider Manager
