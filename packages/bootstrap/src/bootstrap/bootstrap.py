@@ -538,7 +538,11 @@ def build_engine(
     # Processes Capability
     #
 
-    process_store = ProcessStore()
+    process_db_path = os.environ.get(
+        "NEXUS_PROCESSES_DB_PATH",
+        str(Path.home() / ".nexus" / "processes.sqlite3"),
+    )
+    process_store = ProcessStore(db_path=process_db_path)
 
     process_resolver = ProcessResolver(
         process_store,
@@ -557,7 +561,11 @@ def build_engine(
     # Rules Capability
     #
 
-    rule_store = RuleStore()
+    rule_db_path = os.environ.get(
+        "NEXUS_RULES_DB_PATH",
+        str(Path.home() / ".nexus" / "rules.sqlite3"),
+    )
+    rule_store = RuleStore(db_path=rule_db_path)
 
     rule_resolver = RuleResolver(
         rule_store
