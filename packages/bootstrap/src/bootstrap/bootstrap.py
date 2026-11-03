@@ -131,6 +131,11 @@ from rules.resolver import RuleResolver
 
 from rules.store import RuleStore
 
+from tasks.capability import TaskCapability
+from tasks.cognitive import TaskCognitiveAccess
+from tasks.resolver import TaskResolver
+from tasks.store import TaskStore
+
 
 from bootstrap.assistant_services import (
     AssistantServices,
@@ -562,6 +567,18 @@ def build_engine(
     )
 
     #
+    # Tasks Capability
+    #
+
+    task_store = TaskStore()
+    task_resolver = TaskResolver(task_store)
+    task_capability = TaskCapability(
+        store=task_store,
+        resolver=task_resolver,
+    )
+    task_cognitive_access = TaskCognitiveAccess(task_capability)
+
+    #
     # Cognitive Capability Router
     #
 
@@ -569,6 +586,7 @@ def build_engine(
         document_access=document_cognitive_access,
         process_access=process_cognitive_access,
         rule_access=rule_cognitive_access,
+        task_access=task_cognitive_access,
     )
 
     #
