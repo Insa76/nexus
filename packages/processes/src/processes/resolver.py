@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from context import AssistantContext
+from context import AssistantContext, project_ids_for_context
 
 from processes.models import Process
 from processes.store import ProcessStore
@@ -20,10 +20,7 @@ class ProcessResolver:
 
         user = context.user
         organization = context.organization
-        project_ids = {
-            project.id
-            for project in context.projects
-        }
+        project_ids = project_ids_for_context(context)
 
         resolved: list[Process] = []
 
