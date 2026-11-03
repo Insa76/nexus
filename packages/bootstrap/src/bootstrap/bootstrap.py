@@ -370,7 +370,12 @@ def build_engine(
     # Security: permisos de ejecución.
     #
 
-    action_names = registry.list()
+    task_mutation_actions = (
+        "tasks.create",
+        "tasks.update",
+        "tasks.transition",
+    )
+    action_names = [*registry.list(), *task_mutation_actions]
 
     permissions = frozenset(
         Permission(
@@ -619,6 +624,9 @@ def build_engine(
         rule_cognitive_access=rule_cognitive_access,
         default_actor_id=security_actor.id,
         default_actor_type=security_actor.actor_type.value,
+        task_action_authorizer=lambda action_name: (
+            action_authorization.is_allowed(local_console_actor, action_name)
+        ),
     )
 
 
