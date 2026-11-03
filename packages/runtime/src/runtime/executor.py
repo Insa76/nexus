@@ -51,6 +51,11 @@ class Executor:
 
             return result
 
+        # Persistir el inicio antes de ejecutar cualquier acción con efectos.
+        execution_store = getattr(self.runtime, "execution_store", None)
+        if execution_store is not None:
+            execution_store.begin(context)
+
         #
         # Ejecución del grafo.
         #
@@ -159,6 +164,11 @@ class Executor:
 
             context.current_step = step_index
 
+            # El checkpoint previo identifica el paso que estaba por comenzar.
+            # Si el proceso cae durante la acción, nunca se reejecuta en automático.
+            if execution_store is not None:
+                execution_store.checkpoint(context)
+
             #
             # ActionManager ejecuta el step.
             #
@@ -166,6 +176,9 @@ class Executor:
             await self.runtime.action_manager.execute(
                 context
             )
+
+            if execution_store is not None:
+                execution_store.checkpoint(context)
 
             #
             # Si la ejecución produjo un error,
@@ -265,6 +278,13 @@ class Executor:
         result.execution_time = (
             time.perf_counter() - start
         )
+
+        if execution_store is not None:
+            execution_store.finish(
+                context,
+                success=result.success,
+                error=result.message if not result.success else None,
+            )
 
         return result
 
