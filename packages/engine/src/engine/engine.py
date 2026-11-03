@@ -1389,15 +1389,60 @@ class Engine:
                 "tasks.update": "actualizar una tarea",
                 "tasks.transition": "cambiar el estado de una tarea",
             }
+            task_preview = None
+            if action != "tasks.create":
+                task_reference = (
+                    parameters.get("task_id")
+                    or parameters.get("task_reference")
+                )
+                if not isinstance(task_reference, str) or not task_reference.strip():
+                    return ExecutionResult(
+                        success=False,
+                        message="Indicá qué tarea querés modificar.",
+                        output={"status": "invalid_parameters"},
+                    )
+                task_preview = self._cognitive_capability_router.get_task(
+                    task_id=task_reference,
+                    context=self._assistant_context,
+                )
+                if task_preview is None:
+                    return ExecutionResult(
+                        success=False,
+                        message="No encontré esa tarea en el proyecto activo.",
+                        output={"status": "not_found"},
+                    )
+                if action == "tasks.update" and not any(
+                    parameters.get(field) is not None
+                    for field in ("title", "description", "priority")
+                ):
+                    return ExecutionResult(
+                        success=False,
+                        message="Indicá qué dato de la tarea querés actualizar.",
+                        output={"status": "invalid_parameters"},
+                    )
+
             description = (
                 parameters.get("title")
                 if action == "tasks.create"
-                else parameters.get("task_id") or parameters.get("task_reference")
+                else task_preview.title if task_preview is not None
+                else None
             )
+            if action == "tasks.create":
+                change_details = f"Prioridad: {parameters.get('priority', 'normal')}."
+            elif action == "tasks.update":
+                fields = [
+                    field for field in ("title", "description", "priority")
+                    if parameters.get(field) is not None
+                ]
+                change_details = "Campos a modificar: " + ", ".join(fields) + "."
+            else:
+                change_details = (
+                    f"Nuevo estado: {parameters.get('target_status', 'sin especificar')}."
+                )
             message = (
                 f"NEXUS propone {labels.get(action, 'modificar una tarea')}"
                 + (f": {description}." if description else ".")
-                + " Confirmá para guardar el cambio."
+                + f" {change_details} Confirmá para guardar el cambio."
             )
             result = ExecutionResult(
                 success=True,
