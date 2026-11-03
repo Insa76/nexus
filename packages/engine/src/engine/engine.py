@@ -265,6 +265,7 @@ class Engine:
                 "context debe ser una instancia de AssistantContext."
             )
         self._assistant_context = context
+        self._context_builder.set_assistant_context(context)
 
     @property
     def decision_engine(self) -> DecisionEngine:
