@@ -80,3 +80,34 @@ def test_completed_execution_is_listed_with_step_progress(tmp_path: Path) -> Non
     assert records[0]["status"] == "completed"
     assert records[0]["completed_steps"] == 1
     store.close()
+
+
+class CompletingActionManager:
+    async def execute(self, context: ExecutionContext) -> None:
+        step = context.current_plan_step()
+        assert step is not None
+        step.status = StepStatus.COMPLETED
+        context.results["opened"] = True
+
+
+async def test_executor_persists_completed_runtime_execution(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from runtime.executor import Executor
+
+    store = SQLiteExecutionStore(tmp_path / "executions.sqlite3")
+    runtime = SimpleNamespace(
+        action_manager=CompletingActionManager(),
+        execution_store=store,
+    )
+    context = make_context()
+
+    result = await Executor(runtime).execute(context)
+
+    record = store.get("objective-1")
+    assert result.success is True
+    assert record is not None
+    assert record["status"] == "completed"
+    assert record["snapshot"]["results"]["opened"] is True
+    assert record["snapshot"]["plan"]["steps"][0]["status"] == "completed"
+    store.close()
