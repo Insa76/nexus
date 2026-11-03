@@ -532,13 +532,11 @@ class CognitiveCapabilityRouter:
         self,
         *,
         process_id: str,
+        context: object,
     ) -> Process | None:
         if self._process_access is None:
-            raise RuntimeError(
-                "Process cognitive capability is not available."
-            )
-
-        return self._process_access.get(process_id)
+            raise RuntimeError("Process cognitive capability is not available.")
+        return self._process_access.get(process_id, context=context)
 
     def list_processes(self) -> tuple[Process, ...]:
         if self._process_access is None:
@@ -566,13 +564,11 @@ class CognitiveCapabilityRouter:
         self,
         *,
         rule_id: str,
+        context: object,
     ) -> Rule | None:
         if self._rule_access is None:
-            raise RuntimeError(
-                "Rule cognitive capability is not available."
-            )
-
-        return self._rule_access.get(rule_id)
+            raise RuntimeError("Rule cognitive capability is not available.")
+        return self._rule_access.get(rule_id, context=context)
 
     def list_rules(self) -> tuple[Rule, ...]:
         if self._rule_access is None:
