@@ -284,7 +284,7 @@ export default function Assistant() {
               : "tasks"),
             summary: typeof data.message === "string"
               ? data.message
-              : "NEXUS propone modificar una tarea.",
+              : "NEXUS propone modificar un recurso.",
           });
           setFeedback(typeof data.message === "string" ? data.message : "Esperando confirmación.");
           setCommand("");
@@ -334,7 +334,7 @@ export default function Assistant() {
     if (!pendingTaskConfirmation || busy) return;
     setBusy(true);
     try {
-      const response = await fetch("http://127.0.0.1:8765/api/tasks/confirm", {
+      const response = await fetch("http://127.0.0.1:8765/api/capabilities/confirm", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -356,7 +356,7 @@ export default function Assistant() {
         typeof payload.message === "string"
           ? payload.message
           : approved
-            ? "Tarea actualizada."
+            ? "Operación actualizada."
             : "Operación cancelada.",
       );
       setPendingTaskConfirmation(null);
