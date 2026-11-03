@@ -103,7 +103,7 @@ def test_document_resolver_limits_project_documents_to_active_project():
         organization_id=context.organization.id,
         project_id=project_a.id,
     )
-    services.access.create_document(
+    document_b = services.access.create_document(
         name="Documento B",
         mime_type="text/plain",
         source="b.txt",
@@ -118,6 +118,7 @@ def test_document_resolver_limits_project_documents_to_active_project():
 
     assert result.documents == (document_a,)
     assert result.selection.project_ids == (project_a.id,)
+    assert document_b not in tuple(match.document for match in result.matches)
 
 
 def test_explicitly_unselected_project_hides_project_scoped_resources():
