@@ -1013,6 +1013,78 @@ class Engine:
             return result
 
 
+        # Las consultas cognitivas de Tasks ya fueron resueltas por su capability.
+        if (
+            cognitive_capability is not None
+            and cognitive_capability.capability == "tasks"
+            and cognitive_capability.operation in {"find_relevant", "get", "list"}
+        ):
+            if cognitive_capability.operation == "get":
+                task_items = (
+                    [cognitive_capability_result]
+                    if cognitive_capability_result is not None else []
+                )
+            elif cognitive_capability.operation == "find_relevant":
+                task_items = list(
+                    getattr(cognitive_capability_result, "tasks", ())
+                )
+            else:
+                task_items = list(cognitive_capability_result or ())
+
+            serialized_tasks = [
+                {
+                    "id": task.id,
+                    "title": task.title,
+                    "description": task.description,
+                    "status": task.status.value,
+                    "priority": task.priority,
+                    "due_at": task.due_at.isoformat() if task.due_at else None,
+                }
+                for task in task_items
+            ]
+            count = len(serialized_tasks)
+            if cognitive_capability.operation == "get":
+                message = (
+                    f"Tarea encontrada: {serialized_tasks[0]['title']}."
+                    if count else "No encontré esa tarea en el proyecto activo."
+                )
+            else:
+                message = (
+                    f"Encontré {count} tarea(s) en el contexto activo."
+                    if count else "No hay tareas en el contexto activo."
+                )
+            result = ExecutionResult(
+                success=True,
+                message=message,
+                output={
+                    "operation": f"tasks.{cognitive_capability.operation}",
+                    "status": "found" if count else "empty",
+                    "tasks": serialized_tasks,
+                    "total": count,
+                },
+                metadata={
+                    "action": intent.action,
+                    "original_text": text,
+                    "cognitive_summary": cognitive_capability_summary,
+                    "response": message,
+                },
+            )
+            self._memory.add(
+                "execution_result",
+                {
+                    "success": result.success,
+                    "message": result.message,
+                    "output": result.output,
+                    "metadata": result.metadata,
+                },
+            )
+            self._presence_events.emit_state(
+                "completed",
+                message=message,
+                data={"action": intent.action, "result_count": count},
+            )
+            return result
+
         # Las consultas cognitivas de Rules y Processes ya fueron
         # resueltas por sus capabilities. No deben volver a Runtime.
         if (
