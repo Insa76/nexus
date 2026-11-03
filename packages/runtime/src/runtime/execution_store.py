@@ -14,8 +14,6 @@ from planner.execution_context import ExecutionContext
 class SQLiteExecutionStore:
     """Persist execution checkpoints without replaying side effects."""
 
-    TERMINAL_STATUSES = {"completed", "failed", "cancelled", "interrupted"}
-
     def __init__(self, db_path: str | Path | None = None) -> None:
         if db_path is None:
             db_path = Path.home() / ".nexus" / "executions.sqlite3"
@@ -82,7 +80,7 @@ class SQLiteExecutionStore:
         if callable(model_dump):
             try:
                 return SQLiteExecutionStore._json_safe(model_dump(mode="json"))
-            except (TypeError, ValueError):
+            except Exception:
                 try:
                     return SQLiteExecutionStore._json_safe(model_dump())
                 except Exception:
