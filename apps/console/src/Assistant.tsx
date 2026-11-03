@@ -19,6 +19,16 @@ type PendingTaskConfirmation = {
   summary: string;
 };
 
+type ExecutionSummary = {
+  id: string;
+  request_text: string;
+  status: string;
+  started_at: string;
+  error?: string | null;
+  step_count: number;
+  completed_steps: number;
+};
+
 type ContextState = {
   user?: { name?: string; role?: string | null } | null;
   organization?: { name?: string; industry?: string | null } | null;
@@ -71,6 +81,10 @@ export default function Assistant() {
   const [pendingTaskConfirmation, setPendingTaskConfirmation] =
     useState<PendingTaskConfirmation | null>(null);
   const [contextOpen, setContextOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [executionHistory, setExecutionHistory] = useState<ExecutionSummary[]>([]);
+  const [selectedExecution, setSelectedExecution] = useState<Record<string, unknown> | null>(null);
   const [contextSaving, setContextSaving] = useState(false);
   const [contextMessage, setContextMessage] = useState("");
   const [profileName, setProfileName] = useState("");
@@ -211,6 +225,43 @@ export default function Assistant() {
       );
     } finally {
       setContextSaving(false);
+    }
+  }
+
+  async function loadExecutionHistory() {
+    setHistoryLoading(true);
+    setSelectedExecution(null);
+    try {
+      const response = await fetch("http://127.0.0.1:8765/api/executions", {
+        headers: { Accept: "application/json" },
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.success !== true) {
+        throw new Error(getResponseError(payload, response.status));
+      }
+      setExecutionHistory(Array.isArray(payload.executions) ? payload.executions : []);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "No se pudo cargar el historial.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function openExecution(executionId: string) {
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`http://127.0.0.1:8765/api/executions/${encodeURIComponent(executionId)}`, {
+        headers: { Accept: "application/json" },
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.success !== true) {
+        throw new Error(getResponseError(payload, response.status));
+      }
+      setSelectedExecution(payload.execution as Record<string, unknown>);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "No se pudo abrir la ejecución.");
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -414,6 +465,7 @@ export default function Assistant() {
                 ? [organizationName, projectName].filter(Boolean).join(" · ")
                 : "Contexto sin configurar"}
             </span>
+            <div className="assistant-toolbar-actions">
             <button
               type="button"
               className="assistant-context-toggle"
@@ -424,6 +476,18 @@ export default function Assistant() {
             >
               {contextOpen ? "VOLVER" : "CONTEXTO"}
             </button>
+            <button
+              type="button"
+              className="assistant-context-toggle"
+              onClick={() => {
+                setHistoryOpen((value) => !value);
+                setContextOpen(false);
+                if (!historyOpen) void loadExecutionHistory();
+              }}
+            >
+              {historyOpen ? "CERRAR" : "HISTORIAL"}
+            </button>
+            </div>
           </div>
 
           {contextOpen ? (
@@ -495,6 +559,31 @@ export default function Assistant() {
                 {contextMessage}
               </div>
             </form>
+          ) : historyOpen ? (
+            <div className="execution-history">
+              {selectedExecution ? (
+                <>
+                  <button className="history-back" type="button" onClick={() => setSelectedExecution(null)}>← VOLVER AL HISTORIAL</button>
+                  <div className="history-detail-title">{String(selectedExecution.request_text ?? "Ejecución")}</div>
+                  <div className="history-detail-status">Estado: {String(selectedExecution.status ?? "desconocido")}</div>
+                  <pre>{JSON.stringify(selectedExecution.snapshot ?? {}, null, 2)}</pre>
+                  {typeof selectedExecution.error === "string" && <p>{selectedExecution.error}</p>}
+                </>
+              ) : historyLoading ? (
+                <div className="history-empty">Cargando historial…</div>
+              ) : executionHistory.length === 0 ? (
+                <div className="history-empty">Todavía no hay ejecuciones de acciones registradas.</div>
+              ) : (
+                <div className="history-list">
+                  {executionHistory.map((item) => (
+                    <button className="history-item" type="button" key={item.id} onClick={() => void openExecution(item.id)}>
+                      <span className="history-item-request">{item.request_text}</span>
+                      <span className="history-item-meta">{item.status.toUpperCase()} · {item.completed_steps}/{item.step_count} pasos</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           ) : (
           <>
           <form
