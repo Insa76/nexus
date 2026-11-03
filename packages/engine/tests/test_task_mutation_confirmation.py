@@ -114,3 +114,61 @@ def test_task_mutation_requires_security_authorization(monkeypatch, tmp_path):
     assert result.success is False
     assert result.output["status"] == "unauthorized"
     assert TaskStore(db_path=db_path).list() == []
+
+
+
+def test_invalid_task_proposal_does_not_issue_or_store_confirmation(monkeypatch, tmp_path):
+    engine = _build_test_engine(monkeypatch, tmp_path)
+    engine._intent_provider = FixedIntentProvider(
+        "tasks.create",
+        {"title": "   ", "priority": "normal"},
+    )
+
+    result = asyncio.run(engine.execute("Crear tarea sin título"))
+
+    assert result.success is False
+    assert result.output["status"] == "invalid_parameters"
+    assert result.metadata.get("confirmation_token") is None
+    assert engine._pending_task_operations == {}
+
+
+def test_confirmation_token_is_single_use(monkeypatch, tmp_path):
+    engine = _build_test_engine(monkeypatch, tmp_path)
+
+    proposal = asyncio.run(engine.execute("Crear tarea"))
+    token = proposal.metadata["confirmation_token"]
+
+    first = engine.confirm_task_operation(token, approved=True)
+    second = engine.confirm_task_operation(token, approved=True)
+
+    assert first.success is True
+    assert second.success is False
+    assert second.output["status"] == "not_found"
+    assert len(TaskStore(db_path=tmp_path / "tasks.sqlite3").list()) == 1
+
+
+def test_update_proposal_binds_the_resolved_task_id(monkeypatch, tmp_path):
+    engine = _build_test_engine(monkeypatch, tmp_path)
+    context = engine.assistant_context
+    access = engine.cognitive_capability_router._task_access
+    task = access.create(context=context, title="Original task")
+    engine._intent_provider = FixedIntentProvider(
+        "tasks.update",
+        {"task_reference": "Original task", "priority": "urgent"},
+    )
+
+    proposal = asyncio.run(engine.execute("Cambiar prioridad de Original task"))
+    pending = engine._pending_task_operations[proposal.metadata["confirmation_token"]]
+
+    assert pending["parameters"]["task_id"] == task.id
+    assert "task_reference" not in pending["parameters"]
+
+    confirmed = engine.confirm_task_operation(
+        proposal.metadata["confirmation_token"],
+        approved=True,
+    )
+
+    assert confirmed.success is True
+    restored = TaskStore(db_path=tmp_path / "tasks.sqlite3").get(task.id)
+    assert restored is not None
+    assert restored.priority == "urgent"
