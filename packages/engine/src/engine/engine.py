@@ -6,6 +6,8 @@ import secrets
 
 from tasks.lifecycle import can_transition
 from tasks.models import TaskStatus
+from processes.models import ProcessStatus
+from rules.models import RuleStatus
 from memory import WorkingMemory
 from memory.episode import Episode
 from memory.episode_memory import EpisodeMemory
@@ -1015,6 +1017,17 @@ class Engine:
             return result
 
 
+        is_process_rule_mutation = (
+            cognitive_capability is not None
+            and cognitive_capability.capability in {"processes", "rules"}
+            and (
+                (cognitive_capability.capability == "processes"
+                 and cognitive_capability.operation in {"create", "update", "transition"})
+                or (cognitive_capability.capability == "rules"
+                    and cognitive_capability.operation in {"create", "update", "set_status"})
+            )
+        )
+
         # Las consultas cognitivas de Tasks ya fueron resueltas por su capability.
         if (
             cognitive_capability is not None
@@ -1365,6 +1378,103 @@ class Engine:
                 },
             )
 
+            return result
+
+        if is_process_rule_mutation:
+            now = time.monotonic()
+            self._pending_task_operations = {
+                key: value for key, value in self._pending_task_operations.items()
+                if float(value["expires_at"]) > now
+            }
+            parameters = dict(cognitive_capability.parameters)
+            capability = cognitive_capability.capability
+            operation = cognitive_capability.operation
+            action = f"{capability}.{operation}"
+            is_process = capability == "processes"
+            labels = {
+                "processes.create": "crear un proceso",
+                "processes.update": "actualizar un proceso",
+                "processes.transition": "cambiar el estado de un proceso",
+                "rules.create": "crear una regla",
+                "rules.update": "actualizar una regla",
+                "rules.set_status": "cambiar el estado de una regla",
+            }
+            entity_name = "proceso" if is_process else "regla"
+            name = parameters.get("name")
+            description = parameters.get("description")
+            if operation == "create":
+                if not isinstance(name, str) or not name.strip() or len(name.strip()) > 200:
+                    return ExecutionResult(False, f"El nombre del {entity_name} debe contener entre 1 y 200 caracteres.", {"status": "invalid_parameters"})
+                if description is not None and (not isinstance(description, str) or len(description) > 4000):
+                    return ExecutionResult(False, "La descripción debe ser texto de hasta 4000 caracteres.", {"status": "invalid_parameters"})
+                parameters["name"] = name.strip()
+                display_name = name.strip()
+                change_details = "Se creará dentro del contexto activo."
+            else:
+                reference_key = "process_id" if is_process else "rule_id"
+                reference = parameters.get(reference_key) or parameters.get("process_reference" if is_process else "rule_reference")
+                if not isinstance(reference, str) or not reference.strip():
+                    return ExecutionResult(False, f"Indicá qué {entity_name} querés modificar.", {"status": "invalid_parameters"})
+                preview = (
+                    self._cognitive_capability_router.get_process(process_id=reference, context=self._assistant_context)
+                    if is_process else
+                    self._cognitive_capability_router.get_rule(rule_id=reference, context=self._assistant_context)
+                )
+                if preview is None:
+                    return ExecutionResult(False, f"No encontré ese {entity_name} en el proyecto activo.", {"status": "not_found"})
+                parameters[reference_key] = preview.id
+                parameters.pop("process_reference" if is_process else "rule_reference", None)
+                display_name = preview.name
+                if operation == "update":
+                    fields = [field for field in ("name", "description") if parameters.get(field) is not None]
+                    if not fields:
+                        return ExecutionResult(False, f"Indicá qué dato del {entity_name} querés actualizar.", {"status": "invalid_parameters"})
+                    if name is not None and (not isinstance(name, str) or not name.strip() or len(name.strip()) > 200):
+                        return ExecutionResult(False, "El nombre debe contener entre 1 y 200 caracteres.", {"status": "invalid_parameters"})
+                    if description is not None and (not isinstance(description, str) or len(description) > 4000):
+                        return ExecutionResult(False, "La descripción debe ser texto de hasta 4000 caracteres.", {"status": "invalid_parameters"})
+                    if name is not None:
+                        parameters["name"] = name.strip()
+                    change_details = "Campos a modificar: " + ", ".join(fields) + "."
+                else:
+                    try:
+                        target = ProcessStatus(parameters.get("target_status")) if is_process else RuleStatus(parameters.get("target_status"))
+                    except (TypeError, ValueError):
+                        allowed = "in_progress, completed o cancelled" if is_process else "active o inactive"
+                        return ExecutionResult(False, f"Indicá un estado válido ({allowed}).", {"status": "invalid_parameters"})
+                    if is_process:
+                        allowed_transitions = {
+                            ProcessStatus.PENDING: {ProcessStatus.IN_PROGRESS, ProcessStatus.CANCELLED},
+                            ProcessStatus.IN_PROGRESS: {ProcessStatus.COMPLETED, ProcessStatus.CANCELLED},
+                            ProcessStatus.COMPLETED: set(),
+                            ProcessStatus.CANCELLED: set(),
+                        }
+                        if target not in allowed_transitions[preview.status]:
+                            return ExecutionResult(False, f"No se puede cambiar el proceso de {preview.status.value} a {target.value}.", {"status": "invalid_transition"})
+                    parameters["target_status"] = target.value
+                    change_details = f"Nuevo estado: {target.value}."
+            if len(self._pending_task_operations) >= 100:
+                return ExecutionResult(False, "Hay demasiadas operaciones pendientes. Resolvé alguna antes de continuar.", {"status": "pending_limit"})
+            token = secrets.token_urlsafe(32)
+            self._pending_task_operations[token] = {
+                "action": action,
+                "parameters": parameters,
+                "scope": (
+                    getattr(self._assistant_context.user, "id", None),
+                    getattr(self._assistant_context.organization, "id", None),
+                    self._assistant_context.metadata.get("active_project_id"),
+                ),
+                "expires_at": time.monotonic() + 300,
+            }
+            message = f"NEXUS propone {labels[action]}: {display_name}. {change_details} Confirmá para guardar el cambio."
+            result = ExecutionResult(
+                success=True,
+                message=message,
+                output={"status": "confirmation_required", "operation": action, "proposed_parameters": parameters},
+                metadata={"action": action, "confirmation_required": True, "confirmation_token": token, "confirmation_expires_in": 300, "response": message},
+            )
+            self._memory.add("execution_result", {"success": result.success, "message": result.message, "output": result.output, "metadata": result.metadata})
+            self._presence_events.emit_state("needs_confirmation", message=f"NEXUS espera confirmación para modificar {capability.title()}.", data={"action": action})
             return result
 
         if is_task_mutation:
