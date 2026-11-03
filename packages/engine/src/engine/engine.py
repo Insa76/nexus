@@ -3,6 +3,9 @@ from __future__ import annotations
 import time
 import re
 import secrets
+
+from tasks.lifecycle import can_transition
+from tasks.models import TaskStatus
 from memory import WorkingMemory
 from memory.episode import Episode
 from memory.episode_memory import EpisodeMemory
@@ -1420,6 +1423,24 @@ class Engine:
                         message="Indicá qué dato de la tarea querés actualizar.",
                         output={"status": "invalid_parameters"},
                     )
+                if action == "tasks.transition":
+                    try:
+                        target_status = TaskStatus(parameters.get("target_status"))
+                    except (ValueError, TypeError):
+                        return ExecutionResult(
+                            success=False,
+                            message="Indicá un estado válido: in_progress, completed o cancelled.",
+                            output={"status": "invalid_parameters"},
+                        )
+                    if not can_transition(task_preview.status, target_status):
+                        return ExecutionResult(
+                            success=False,
+                            message=(
+                                f"No se puede cambiar la tarea de "
+                                f"{task_preview.status.value} a {target_status.value}."
+                            ),
+                            output={"status": "invalid_transition"},
+                        )
 
             description = (
                 parameters.get("title")
