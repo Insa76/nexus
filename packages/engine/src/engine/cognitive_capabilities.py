@@ -372,6 +372,24 @@ class CognitiveCapabilityRouter:
                 "task_id": result.id,
             }
 
+        if operation in {"processes.create", "processes.update", "processes.transition"}:
+            if not isinstance(result, Process):
+                raise TypeError(f"Expected Process result for {operation}")
+            return {
+                "operation": operation, "result_count": 1,
+                "has_results": True, "status": "completed",
+                "process_id": result.id,
+            }
+
+        if operation in {"rules.create", "rules.update", "rules.set_status"}:
+            if not isinstance(result, Rule):
+                raise TypeError(f"Expected Rule result for {operation}")
+            return {
+                "operation": operation, "result_count": 1,
+                "has_results": True, "status": "completed",
+                "rule_id": result.id,
+            }
+
         if operation == "processes.get":
             count = 1 if isinstance(result, Process) else 0
 
