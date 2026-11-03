@@ -347,41 +347,43 @@ class Engine:
             )
 
         try:
-            task = self._cognitive_capability_router.invoke(
-                invocation,
-                context={},
-                assistant_context=self._assistant_context,
+            resource = self._cognitive_capability_router.invoke(
+                invocation, context={}, assistant_context=self._assistant_context,
             )
         except Exception as exc:
             return ExecutionResult(
-                success=False,
-                message=f"No se pudo completar la operación: {exc}",
+                success=False, message=f"No se pudo completar la operación: {exc}",
                 output={"status": "failed"},
             )
 
-        if task is None:
+        if resource is None:
             return ExecutionResult(
-                success=False,
-                message="No se encontró la tarea dentro del proyecto activo.",
+                success=False, message="El recurso ya no existe dentro del proyecto activo.",
                 output={"status": "not_found"},
             )
 
-        task_data = {
-            "id": task.id,
-            "title": task.title,
-            "description": task.description,
-            "status": task.status.value,
-            "priority": task.priority,
-            "user_id": task.user_id,
-            "organization_id": task.organization_id,
-            "project_id": task.project_id,
-            "due_at": task.due_at.isoformat() if task.due_at else None,
-            "created_at": task.created_at.isoformat(),
+        resource_data = {
+            "id": resource.id,
+            "name": getattr(resource, "name", getattr(resource, "title", None)),
+            "description": resource.description,
+            "status": resource.status.value,
+            "user_id": resource.user_id,
+            "organization_id": resource.organization_id,
+            "project_id": resource.project_id,
+            "created_at": resource.created_at.isoformat(),
         }
+        if hasattr(resource, "priority"):
+            resource_data["priority"] = resource.priority
+        if hasattr(resource, "due_at"):
+            resource_data["due_at"] = resource.due_at.isoformat() if resource.due_at else None
+
+        resource_kind = action.split(".", 1)[0]
+        resource_label = {"tasks": "tarea", "processes": "proceso", "rules": "regla"}.get(resource_kind, "recurso")
+        resource_name = resource_data["name"]
         return ExecutionResult(
             success=True,
-            message=f"Operación confirmada: tarea {task.title}.",
-            output={"operation": action, "status": "completed", "task": task_data},
+            message=f"Operación confirmada: {resource_label} {resource_name}.",
+            output={"operation": action, "status": "completed", resource_kind[:-1] if resource_kind.endswith("s") else resource_kind: resource_data},
             metadata={"action": action, "confirmed": True},
         )
 
@@ -838,8 +840,14 @@ class Engine:
 
         is_task_mutation = (
             cognitive_capability is not None
-            and cognitive_capability.capability == "tasks"
-            and cognitive_capability.operation in {"create", "update", "transition"}
+            and (
+                (cognitive_capability.capability == "tasks"
+                 and cognitive_capability.operation in {"create", "update", "transition"})
+                or (cognitive_capability.capability == "processes"
+                    and cognitive_capability.operation in {"create", "update", "transition"})
+                or (cognitive_capability.capability == "rules"
+                    and cognitive_capability.operation in {"create", "update", "set_status"})
+            )
         )
         cognitive_capability_summary = None
 
