@@ -342,6 +342,7 @@ class DocumentContextResolver:
         matches = tuple(
             match
             for document in unique_match_documents
+            if document.project_id is None or document.project_id in selection.project_ids
             if (
                 match := self._relevance_resolver.resolve(
                     document=document,
