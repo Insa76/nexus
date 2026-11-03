@@ -95,8 +95,8 @@ class SQLiteExecutionStore:
     @classmethod
     def _snapshot(cls, context: ExecutionContext) -> str:
         data = {
-            "objective": context.objective.model_dump(mode="json"),
-            "plan": context.plan.model_dump(mode="json"),
+            "objective": context.objective.model_dump(),
+            "plan": context.plan.model_dump(),
             "request_text": context.request_text,
             "actor_id": context.actor_id,
             "actor_type": context.actor_type,
