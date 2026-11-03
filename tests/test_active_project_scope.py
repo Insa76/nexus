@@ -25,11 +25,15 @@ def _workspace_context(active_project_id: str | None) -> AssistantContext:
         "Proyecto B",
         organization.id,
     )
+    resolved_active_project_id = {
+        "project-a": project_a.id,
+        "project-b": project_b.id,
+    }.get(active_project_id)
     return AssistantContext(
         user=user,
         organization=organization,
         projects=(project_a, project_b),
-        metadata={"active_project_id": active_project_id},
+        metadata={"active_project_id": resolved_active_project_id},
     )
 
 
