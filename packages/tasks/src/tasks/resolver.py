@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from context import AssistantContext, project_ids_for_context, project_ids_for_context
+from context import AssistantContext, project_ids_for_context
 
 from tasks.models import Task
 from tasks.store import TaskStore
