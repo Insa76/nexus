@@ -378,12 +378,13 @@ class Engine:
             resource_data["due_at"] = resource.due_at.isoformat() if resource.due_at else None
 
         resource_kind = action.split(".", 1)[0]
+        singular_key = {"tasks": "task", "processes": "process", "rules": "rule"}.get(resource_kind, "resource")
         resource_label = {"tasks": "tarea", "processes": "proceso", "rules": "regla"}.get(resource_kind, "recurso")
         resource_name = resource_data["name"]
         return ExecutionResult(
             success=True,
             message=f"Operación confirmada: {resource_label} {resource_name}.",
-            output={"operation": action, "status": "completed", resource_kind[:-1] if resource_kind.endswith("s") else resource_kind: resource_data},
+            output={"operation": action, "status": "completed", singular_key: resource_data},
             metadata={"action": action, "confirmed": True},
         )
 
