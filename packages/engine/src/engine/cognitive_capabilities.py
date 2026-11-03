@@ -18,7 +18,7 @@ from rules.cognitive import (
 )
 from rules.models import Rule
 from tasks.cognitive import TaskCognitiveAccess, TaskCognitiveResult
-from tasks.models import Task
+from tasks.models import Task, TaskStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +188,21 @@ class CognitiveCapabilityRouter:
                         operation="list",
                         action="tasks.list",
                     ),
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="create",
+                        action="tasks.create",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="update",
+                        action="tasks.update",
+                    ),
+                    CognitiveCapabilityDescriptor(
+                        capability="tasks",
+                        operation="transition",
+                        action="tasks.transition",
+                    ),
                 )
             )
 
@@ -314,6 +329,17 @@ class CognitiveCapabilityRouter:
                 "result_count": count,
                 "has_results": count > 0,
                 "status": "found" if count > 0 else "empty",
+            }
+
+        if operation in {"tasks.create", "tasks.update", "tasks.transition"}:
+            if not isinstance(result, Task):
+                raise TypeError(f"Expected Task result for {operation}")
+            return {
+                "operation": operation,
+                "result_count": 1,
+                "has_results": True,
+                "status": "completed",
+                "task_id": result.id,
             }
 
         if operation == "processes.get":
@@ -604,6 +630,47 @@ class CognitiveCapabilityRouter:
 
             if invocation.operation == "list":
                 return self._task_access.list(context=assistant_context)
+
+            if invocation.operation == "create":
+                title = invocation.parameters.get("title")
+                if not isinstance(title, str) or not title.strip():
+                    raise ValueError("tasks.create requires a non-empty 'title'.")
+                return self._task_access.create(
+                    context=assistant_context,
+                    title=title,
+                    description=invocation.parameters.get("description"),
+                    priority=invocation.parameters.get("priority", "normal"),
+                )
+
+            if invocation.operation == "update":
+                task_id = invocation.parameters.get("task_id")
+                if not isinstance(task_id, str) or not task_id.strip():
+                    raise ValueError("tasks.update requires 'task_id'.")
+                return self._task_access.update(
+                    task_id,
+                    context=assistant_context,
+                    title=invocation.parameters.get("title"),
+                    description=invocation.parameters.get("description"),
+                    priority=invocation.parameters.get("priority"),
+                )
+
+            if invocation.operation == "transition":
+                task_id = invocation.parameters.get("task_id")
+                target = invocation.parameters.get("target_status")
+                if not isinstance(task_id, str) or not task_id.strip():
+                    raise ValueError("tasks.transition requires 'task_id'.")
+                try:
+                    target_status = TaskStatus(target)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        "target_status must be pending, in_progress, completed or cancelled."
+                    ) from exc
+                updated = self._task_access.transition(
+                    task_id, target_status, context=assistant_context,
+                )
+                if updated is None:
+                    raise ValueError("La tarea no existe en el proyecto activo.")
+                return updated
 
             raise ValueError(f"Unsupported tasks operation: {invocation.operation}")
 
