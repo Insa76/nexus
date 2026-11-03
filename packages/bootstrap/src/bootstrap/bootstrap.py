@@ -177,10 +177,11 @@ def build_engine(
     # permisos. La instalación local conserva su actor autorizado.
     # Esto evita que un ID de perfil recién creado cambie la identidad
     # de seguridad usada por ActionAuthorization.
-    security_actor = Actor.system(
+    local_console_actor = Actor.system(
         "local-console",
         name="NEXUS Local Console",
     )
+    security_actor = local_console_actor
 
     #
     # Working Memory
