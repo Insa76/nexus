@@ -4,79 +4,45 @@ from dataclasses import dataclass
 from typing import Any
 
 from processes.capability import ProcessCapability
-from processes.models import Process
+from processes.models import Process, ProcessStatus
 
 
 @dataclass(frozen=True, slots=True)
 class ProcessCognitiveResult:
-    """
-    Resultado de una operación cognitiva sobre Processes.
-
-    Expone información que el Cognitive Core puede utilizar
-    sin conocer stores ni detalles internos del subsistema.
-    """
-
     processes: tuple[Process, ...]
     metadata: dict[str, Any]
 
 
 class ProcessCognitiveAccess:
-    """
-    Punto de acceso cognitivo a Processes.
+    """Traduce operaciones cognitivas al subsistema Processes."""
 
-    Traduce una necesidad cognitiva del Assistant
-    en una operación sobre ProcessCapability.
-    """
-
-    def __init__(
-        self,
-        capability: ProcessCapability,
-    ) -> None:
+    def __init__(self, capability: ProcessCapability) -> None:
         self._capability = capability
 
-    def find_relevant(
-        self,
-        *,
-        context: object,
-    ) -> ProcessCognitiveResult:
-        processes = self._capability.relevant(
-            context=context,
-        )
-
+    def find_relevant(self, *, context: object) -> ProcessCognitiveResult:
+        processes = self._capability.relevant(context=context)
         return ProcessCognitiveResult(
             processes=tuple(processes),
-            metadata={
-                "operation": "processes.find_relevant",
-                "count": len(processes),
-            },
+            metadata={"operation": "processes.find_relevant", "count": len(processes)},
         )
 
-    def get(
-        self,
-        process_id: str,
-        *,
-        context: object,
-    ) -> Process | None:
-        processes = self._capability.relevant(
-            context=context,
+    def get(self, process_id: str, *, context: object) -> Process | None:
+        return self._capability.get_for_context(process_id, context=context)
+
+    def list(self, *, context: object) -> tuple[Process, ...]:
+        return tuple(self._capability.relevant(context=context))
+
+    def create(self, *, context: object, name: str, description: str | None = None) -> Process:
+        return self._capability.create_for_context(name=name, description=description, context=context)
+
+    def update(self, process_id: str, *, context: object,
+               name: str | None = None, description: str | None = None) -> Process | None:
+        return self._capability.update_for_context(
+            process_id, context=context, name=name, description=description,
         )
 
-        return next(
-            (
-                process
-                for process in processes
-                if process.id == process_id
-            ),
-            None,
-        )
-
-    def list(
-        self,
-        *,
-        context: object,
-    ) -> tuple[Process, ...]:
-        return tuple(
-            self._capability.relevant(
-                context=context,
-            )
+    def transition(self, process_id: str, target_status: ProcessStatus,
+                   *, context: object) -> Process | None:
+        return self._capability.transition_for_context(
+            process_id, target_status, context=context,
         )
