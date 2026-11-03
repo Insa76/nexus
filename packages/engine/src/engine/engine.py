@@ -1382,7 +1382,38 @@ class Engine:
                 "tasks.transition": "cambiar el estado de una tarea",
             }
             task_preview = None
-            if action != "tasks.create":
+            if action == "tasks.create":
+                title = parameters.get("title")
+                priority = parameters.get("priority", "normal")
+                task_description = parameters.get("description")
+                if (
+                    not isinstance(title, str)
+                    or not title.strip()
+                    or len(title.strip()) > 200
+                ):
+                    return ExecutionResult(
+                        success=False,
+                        message="La tarea necesita un título válido de hasta 200 caracteres.",
+                        output={"status": "invalid_parameters"},
+                    )
+                if priority not in {"low", "normal", "high", "urgent"}:
+                    return ExecutionResult(
+                        success=False,
+                        message="La prioridad debe ser low, normal, high o urgent.",
+                        output={"status": "invalid_parameters"},
+                    )
+                if task_description is not None and (
+                    not isinstance(task_description, str)
+                    or len(task_description) > 4000
+                ):
+                    return ExecutionResult(
+                        success=False,
+                        message="La descripción debe ser texto de hasta 4000 caracteres.",
+                        output={"status": "invalid_parameters"},
+                    )
+                change_details = f"Prioridad: {priority}."
+                description = title.strip()
+            else:
                 task_reference = (
                     parameters.get("task_id")
                     or parameters.get("task_reference")
@@ -1403,16 +1434,57 @@ class Engine:
                         message="No encontré esa tarea en el proyecto activo.",
                         output={"status": "not_found"},
                     )
-                if action == "tasks.update" and not any(
-                    parameters.get(field) is not None
-                    for field in ("title", "description", "priority")
-                ):
-                    return ExecutionResult(
-                        success=False,
-                        message="Indicá qué dato de la tarea querés actualizar.",
-                        output={"status": "invalid_parameters"},
+                # Fijar el ID real al crear la propuesta evita que una
+                # referencia por título se resuelva de forma distinta al confirmar.
+                parameters["task_id"] = task_preview.id
+                parameters.pop("task_reference", None)
+                description = task_preview.title
+
+                if action == "tasks.update":
+                    fields = [
+                        field for field in ("title", "description", "priority")
+                        if parameters.get(field) is not None
+                    ]
+                    if not fields:
+                        return ExecutionResult(
+                            success=False,
+                            message="Indicá qué dato de la tarea querés actualizar.",
+                            output={"status": "invalid_parameters"},
+                        )
+                    new_title = parameters.get("title")
+                    new_description = parameters.get("description")
+                    new_priority = parameters.get("priority")
+                    if new_title is not None and (
+                        not isinstance(new_title, str)
+                        or not new_title.strip()
+                        or len(new_title.strip()) > 200
+                    ):
+                        return ExecutionResult(
+                            success=False,
+                            message="El título debe contener entre 1 y 200 caracteres.",
+                            output={"status": "invalid_parameters"},
+                        )
+                    if new_description is not None and (
+                        not isinstance(new_description, str)
+                        or len(new_description) > 4000
+                    ):
+                        return ExecutionResult(
+                            success=False,
+                            message="La descripción debe ser texto de hasta 4000 caracteres.",
+                            output={"status": "invalid_parameters"},
+                        )
+                    if new_priority is not None and new_priority not in {
+                        "low", "normal", "high", "urgent"
+                    }:
+                        return ExecutionResult(
+                            success=False,
+                            message="La prioridad debe ser low, normal, high o urgent.",
+                            output={"status": "invalid_parameters"},
+                        )
+                    change_details = (
+                        "Campos a modificar: " + ", ".join(fields) + "."
                     )
-                if action == "tasks.transition":
+                else:
                     try:
                         target_status = TaskStatus(parameters.get("target_status"))
                     except (ValueError, TypeError):
@@ -1430,6 +1502,14 @@ class Engine:
                             ),
                             output={"status": "invalid_transition"},
                         )
+                    change_details = f"Nuevo estado: {target_status.value}."
+
+            if len(self._pending_task_operations) >= 100:
+                return ExecutionResult(
+                    success=False,
+                    message="Hay demasiadas operaciones pendientes. Resolvé alguna antes de continuar.",
+                    output={"status": "pending_limit"},
+                )
 
             token = secrets.token_urlsafe(32)
             self._pending_task_operations[token] = {
@@ -1442,38 +1522,6 @@ class Engine:
                 ),
                 "expires_at": time.monotonic() + 300,
             }
-            description = (
-                parameters.get("title")
-                if action == "tasks.create"
-                else task_preview.title if task_preview is not None
-                else None
-            )
-            if action == "tasks.create":
-                title = parameters.get("title")
-                priority = parameters.get("priority", "normal")
-                if not isinstance(title, str) or not title.strip() or len(title.strip()) > 200:
-                    return ExecutionResult(
-                        success=False,
-                        message="La tarea necesita un título válido de hasta 200 caracteres.",
-                        output={"status": "invalid_parameters"},
-                    )
-                if priority not in {"low", "normal", "high", "urgent"}:
-                    return ExecutionResult(
-                        success=False,
-                        message="La prioridad debe ser low, normal, high o urgent.",
-                        output={"status": "invalid_parameters"},
-                    )
-                change_details = f"Prioridad: {priority}."
-            elif action == "tasks.update":
-                fields = [
-                    field for field in ("title", "description", "priority")
-                    if parameters.get(field) is not None
-                ]
-                change_details = "Campos a modificar: " + ", ".join(fields) + "."
-            else:
-                change_details = (
-                    f"Nuevo estado: {parameters.get('target_status', 'sin especificar')}."
-                )
             message = (
                 f"NEXUS propone {labels.get(action, 'modificar una tarea')}"
                 + (f": {description}." if description else ".")
