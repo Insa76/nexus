@@ -571,7 +571,11 @@ def build_engine(
     # Tasks Capability
     #
 
-    task_store = TaskStore()
+    task_db_path = os.environ.get(
+        "NEXUS_TASKS_DB_PATH",
+        str(Path.home() / ".nexus" / "tasks.sqlite3"),
+    )
+    task_store = TaskStore(db_path=task_db_path)
     task_resolver = TaskResolver(task_store)
     task_capability = TaskCapability(
         store=task_store,
