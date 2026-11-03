@@ -864,7 +864,7 @@ class NexusHandler(BaseHTTPRequestHandler):
         if self._reject_untrusted_request():
             return
 
-        if urlsplit(self.path).path == "/api/tasks/confirm":
+        if urlsplit(self.path).path in {"/api/tasks/confirm", "/api/capabilities/confirm"}:
             payload = self._read_json_object()
             if payload is None:
                 return
