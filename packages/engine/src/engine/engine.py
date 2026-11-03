@@ -246,6 +246,27 @@ class Engine:
         return self._semantic_retriever
 
     @property
+    def assistant_context(self) -> AssistantContext:
+        """Devuelve el contexto operativo actualmente activo."""
+        return self._assistant_context
+
+    def set_assistant_context(
+        self,
+        context: AssistantContext,
+    ) -> None:
+        """
+        Cambia el contexto cognitivo activo sin reconstruir el Engine.
+
+        La capa HTTP debe serializar esta operación con engine_lock.
+        La identidad de seguridad del runtime no se modifica aquí.
+        """
+        if not isinstance(context, AssistantContext):
+            raise TypeError(
+                "context debe ser una instancia de AssistantContext."
+            )
+        self._assistant_context = context
+
+    @property
     def decision_engine(self) -> DecisionEngine:
         """
         Expone el motor de decisión.
@@ -558,12 +579,11 @@ class Engine:
 
         stage_started_at = time.perf_counter()
 
-        memory_context = (
-    self._context_builder.build(
-        self._memory,
-        semantic_query=text,
-    )
-)
+        memory_context = self._context_builder.build(
+            self._memory,
+            semantic_query=text,
+            assistant_context=self._assistant_context,
+        )
 
         timings["cognitive_context"] = (
             time.perf_counter()
