@@ -400,10 +400,7 @@ export default function Assistant() {
                 </select>
                 <input
                   value={projectName}
-                  onChange={(event) => {
-                    setProjectName(event.target.value);
-                    setSelectedProjectId("");
-                  }}
+                  onChange={(event) => setProjectName(event.target.value)}
                   placeholder="Proyecto activo"
                   aria-label="Nombre del proyecto"
                   maxLength={160}
