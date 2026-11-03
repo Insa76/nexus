@@ -255,6 +255,11 @@ class Engine:
         return self._semantic_retriever
 
     @property
+    def execution_store(self):
+        """Almacén local de checkpoints de ejecución del Runtime."""
+        return getattr(self._runtime, "execution_store", None)
+
+    @property
     def assistant_context(self) -> AssistantContext:
         """Devuelve el contexto operativo actualmente activo."""
         return self._assistant_context
@@ -1748,6 +1753,7 @@ class Engine:
             plan=plan,
             actor_id=actor_id,
             actor_type=actor_type,
+            request_text=text,
         )
 
         timings["execution_context"] = (
