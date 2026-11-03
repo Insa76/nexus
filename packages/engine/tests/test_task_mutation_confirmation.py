@@ -98,3 +98,19 @@ def test_task_proposal_is_invalidated_when_active_context_changes(monkeypatch, t
     assert result.success is False
     assert result.output["status"] == "scope_changed"
     assert TaskStore(db_path=db_path).list() == []
+
+
+def test_task_mutation_requires_security_authorization(monkeypatch, tmp_path):
+    engine = _build_test_engine(monkeypatch, tmp_path)
+    engine._task_action_authorizer = lambda action: False
+    db_path = tmp_path / "tasks.sqlite3"
+
+    proposal = asyncio.run(engine.execute("Crear tarea"))
+    result = engine.confirm_task_operation(
+        proposal.metadata["confirmation_token"],
+        approved=True,
+    )
+
+    assert result.success is False
+    assert result.output["status"] == "unauthorized"
+    assert TaskStore(db_path=db_path).list() == []
